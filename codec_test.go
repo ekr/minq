@@ -23,6 +23,10 @@ func (t TestStructOverrideLengths) U16__length() uintptr {
 	return 1
 }
 
+func (t TestStructOverrideLengths) B__length() uintptr {
+	return 3
+}
+
 func EncDecEnc(t *testing.T, s interface{}, s2 interface{}, expectedLen uintptr){
 	res, err := encode(s)
 	assertNotError(t, err, "Could not encode")
@@ -45,7 +49,6 @@ func TestCodecDefaultEncode(t *testing.T) {
 	var s2 TestStructDefaultLengths
 
 	EncDecEnc(t, s, &s2, 6)
-	fmt.Println("S1=", s, " S2=", s2)
 }
 
 func TestCodecOverrideEncode(t *testing.T) {
@@ -53,5 +56,23 @@ func TestCodecOverrideEncode(t *testing.T) {
 	var s2 TestStructOverrideLengths
 
 	EncDecEnc(t, s, &s2, 5)
-	fmt.Println("S1=", s, " S2=", s2)
+}
+
+func TestCodecOverrideDecodeLength(t *testing.T) {
+	s := TestStructOverrideLengths { 1, 2, []byte{'a','b','c'} }
+	var s2 TestStructOverrideLengths
+
+	res, err := encode(s)
+	assertNotError(t, err, "Could not encode")
+
+	modified := append(res, 'd')
+	err = decode(&s2, modified)
+	assertNotError(t, err, "Could not decode")
+
+	fmt.Println(s2)
+	
+	res2, err := encode(s2)
+	assertNotError(t, err, "Could not re-encode")
+
+	assertByteEquals(t, res, res2)
 }
