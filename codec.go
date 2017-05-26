@@ -7,7 +7,7 @@ import (
 )
 
 const (
-	CodecDefaultSize = 255
+	CodecDefaultSize = ^uintptr(0)
 )
 
 func uintEncode(buf *bytes.Buffer, v reflect.Value, encodingSize uintptr) error {
