@@ -3,7 +3,6 @@ package chip
 import (
 	"encoding/hex"
 	"fmt"
-	"reflect"
 	"testing"
 )
 
@@ -38,7 +37,7 @@ func codecEDE(t *testing.T, s interface{}, s2 interface{}, expectedLen uintptr){
 	err = decode(s2, res)
 	assertNotError(t, err, "Could not decode")
 
-	res2, err := encode(reflect.ValueOf(s2).Elem().Interface())
+	res2, err := encode(s2)
 	assertNotError(t, err, "Could not re-encode")
 	fmt.Println("Result2 = ", hex.EncodeToString(res2))	
 	assertByteEquals(t, res, res2)
@@ -48,21 +47,21 @@ func TestCodecDefaultEncode(t *testing.T) {
 	s := TestStructDefaultLengths { 1, 2, []byte{'a','b','c'} }
 	var s2 TestStructDefaultLengths
 
-	codecEDE(t, s, &s2, 6)
+	codecEDE(t, &s, &s2, 6)
 }
 
 func TestCodecOverrideEncode(t *testing.T) {
 	s := TestStructOverrideLengths { 1, 2, []byte{'a','b','c'} }
 	var s2 TestStructOverrideLengths
 
-	codecEDE(t, s, &s2, 5)
+	codecEDE(t, &s, &s2, 5)
 }
 
 func TestCodecOverrideDecodeLength(t *testing.T) {
 	s := TestStructOverrideLengths { 1, 2, []byte{'a','b','c'} }
 	var s2 TestStructOverrideLengths
 
-	res, err := encode(s)
+	res, err := encode(&s)
 	assertNotError(t, err, "Could not encode")
 
 	modified := append(res, 'd')
@@ -71,7 +70,7 @@ func TestCodecOverrideDecodeLength(t *testing.T) {
 
 	fmt.Println(s2)
 	
-	res2, err := encode(s2)
+	res2, err := encode(&s2)
 	assertNotError(t, err, "Could not re-encode")
 
 	assertByteEquals(t, res, res2)

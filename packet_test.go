@@ -8,7 +8,7 @@ import (
 
 func packetEDE(t *testing.T, p Packet) {
 	var p2 Packet
-	res, err := encode(p)
+	res, err := encode(&p)
 	assertNotError(t, err, "Could not encode")
 
 	fmt.Println("Result = ", hex.EncodeToString(res))
@@ -16,7 +16,7 @@ func packetEDE(t *testing.T, p Packet) {
 	err = decode(&p2, res)
 	assertNotError(t, err, "Could not decode")
 
-	res2, err := encode(p2)
+	res2, err := encode(&p2)
 	assertNotError(t, err, "Could not re-encode")
 	fmt.Println("Result2 = ", hex.EncodeToString(res2))	
 	assertByteEquals(t, res, res2)

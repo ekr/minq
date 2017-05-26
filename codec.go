@@ -38,7 +38,7 @@ func arrayEncode(buf *bytes.Buffer, v reflect.Value) error {
 func encode(i interface{}) (ret []byte, err error) {
 	var buf bytes.Buffer
 	var res error
-	reflected := reflect.ValueOf(i)
+	reflected := reflect.ValueOf(i).Elem()
 	fields := reflected.NumField()
 
 	for j := 0; j < fields; j += 1 {
@@ -52,7 +52,7 @@ func encode(i interface{}) (ret []byte, err error) {
 			encodingSize := uintptr(CodecDefaultSize)
 			lFunc, getLength := reflected.Type().MethodByName(tipe.Name + "__length")
 			if getLength {
-				length_result := lFunc.Func.Call([]reflect.Value{reflect.ValueOf(i)})
+				length_result := lFunc.Func.Call([]reflect.Value{reflect.ValueOf(i).Elem()})
 				encodingSize = uintptr(length_result[0].Uint())
 			}
 			res = uintEncode(&buf, field, encodingSize)
