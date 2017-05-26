@@ -47,6 +47,18 @@ const (
 	PacketFlagK = 0x20
 )
 
+const (
+	PacketTypeVersionNegotiation = 1
+	PacketTypeClientInitial = 2
+	PacketTypeServerStatelessRetry = 3
+	PacketTypeServerCleartext = 4
+	PacketTypeClientCleartext = 5
+	PacketType0RTTProtected = 6
+	PacketType1RTTProtectedPhase0 = 7
+	PacketType1RTTProtectedPhase1 = 8 
+	PacketTypePublicReset = 9
+)
+
 type connectionId uint64
 type version uint32
 
@@ -93,6 +105,11 @@ func PacketVersion__length(p *Packet) uintptr {
 	}
 	return CodecDefaultSize
 }
+
+func (p *Packet) setLongHeaderType(typ byte) {
+	p.Type = PacketFlagLongHeader | typ
+}
+
 
 
 

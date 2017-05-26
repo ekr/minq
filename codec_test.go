@@ -27,10 +27,10 @@ func (t TestStructOverrideLengths) B__length() uintptr {
 	return 3
 }
 
-func EncDecEnc(t *testing.T, s interface{}, s2 interface{}, expectedLen uintptr){
+func codecEDE(t *testing.T, s interface{}, s2 interface{}, expectedLen uintptr){
 	res, err := encode(s)
 	assertNotError(t, err, "Could not encode")
-	
+
 	fmt.Println("Result = ", hex.EncodeToString(res))
 	// TODO(ekr@rtfm.com). What is the type of len().
 	assertEquals(t, uintptr(expectedLen), uintptr(len(res)))
@@ -48,14 +48,14 @@ func TestCodecDefaultEncode(t *testing.T) {
 	s := TestStructDefaultLengths { 1, 2, []byte{'a','b','c'} }
 	var s2 TestStructDefaultLengths
 
-	EncDecEnc(t, s, &s2, 6)
+	codecEDE(t, s, &s2, 6)
 }
 
 func TestCodecOverrideEncode(t *testing.T) {
 	s := TestStructOverrideLengths { 1, 2, []byte{'a','b','c'} }
 	var s2 TestStructOverrideLengths
 
-	EncDecEnc(t, s, &s2, 5)
+	codecEDE(t, s, &s2, 5)
 }
 
 func TestCodecOverrideDecodeLength(t *testing.T) {
