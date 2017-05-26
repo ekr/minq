@@ -6,9 +6,13 @@ import (
 	"reflect"
 )
 
+const (
+	CodecDefaultSize = 255
+)
+
 func uintEncode(buf *bytes.Buffer, v reflect.Value, encodingSize uintptr) error {
 	size := v.Type().Size()
-	if encodingSize > 0 {
+	if encodingSize != CodecDefaultSize {
 		if encodingSize > size {
 			return fmt.Errorf("Requested a length longer than the native type")
 		}
@@ -16,7 +20,6 @@ func uintEncode(buf *bytes.Buffer, v reflect.Value, encodingSize uintptr) error 
 	}
 
 	val := v.Uint()
-
 	// Now encode the low-order bytes of the value.
 	for b := size; b > 0; b -= 1 {
 		buf.WriteByte(byte(val >> ((b - 1) * 8)))
@@ -41,18 +44,18 @@ func encode(i interface{}) (ret []byte, err error) {
 	for j := 0; j < fields; j += 1 {
 		field := reflected.Field(j)
 		tipe := reflected.Type().Field(j)
-		encoding_size := uintptr(0)
 		
 		switch (field.Kind()) {
 		case reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
 			// Call the length overrider to tell us if we shoud be using a shorter
 			// encoding.
+			encodingSize := uintptr(CodecDefaultSize)
 			lFunc, getLength := reflected.Type().MethodByName(tipe.Name + "__length")
 			if getLength {
 				length_result := lFunc.Func.Call([]reflect.Value{reflect.ValueOf(i)})
-				encoding_size = uintptr(length_result[0].Uint())
+				encodingSize = uintptr(length_result[0].Uint())
 			}
-			res = uintEncode(&buf, field, encoding_size)
+			res = uintEncode(&buf, field, encodingSize)
 		case reflect.Array, reflect.Slice:
 			res = arrayEncode(&buf, field)
 		default:
@@ -69,7 +72,7 @@ func encode(i interface{}) (ret []byte, err error) {
 
 func uintDecode(buf *bytes.Reader, v reflect.Value, encodingSize uintptr) error {
 	size := v.Type().Size()
-	if encodingSize > 0 {
+	if encodingSize != CodecDefaultSize {
 		if encodingSize > size {
 			return fmt.Errorf("Requested a length longer than the native type")
 		}
@@ -95,7 +98,7 @@ func uintDecode(buf *bytes.Reader, v reflect.Value, encodingSize uintptr) error 
 }
 
 func arrayDecode(buf *bytes.Reader, v reflect.Value, encodingSize uintptr) error {
-	if encodingSize == 0 {
+	if encodingSize == CodecDefaultSize {
 		encodingSize = uintptr(buf.Len())
 	}
 
@@ -128,7 +131,7 @@ func decode(i interface{}, data []byte) (err error) {
 
 		// Call the length overrider to tell us if we should be using a shorter
 		// encoding.
-		encodingSize := uintptr(0)
+		encodingSize := uintptr(CodecDefaultSize)
 		lFunc, getLength := reflected.Type().MethodByName(tipe.Name + "__length")
 		if getLength {
 			length_result := lFunc.Func.Call([]reflect.Value{reflect.ValueOf(i).Elem()})
