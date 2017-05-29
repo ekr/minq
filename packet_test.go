@@ -50,7 +50,7 @@ func (c *ConnectionStateMock) expandPacketNumber(pn uint64) uint64 {
 }
 
 
-func TestEncodeDecodePacket(t *testing.T) {
+func TestEDEPacket(t *testing.T) {
 	var c ConnectionStateMock
 	
 	p := Packet {
