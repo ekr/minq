@@ -70,11 +70,11 @@ func encode(i interface{}) (ret []byte, err error) {
 	return buf.Bytes(), nil
 }
 
-func uintDecode(buf *bytes.Reader, v reflect.Value, encodingSize uintptr) error {
+func uintDecode(buf *bytes.Reader, v reflect.Value, encodingSize uintptr) (uintptr, error) {
 	size := v.Type().Size()
 	if encodingSize != CodecDefaultSize {
 		if encodingSize > size {
-			return fmt.Errorf("Requested a length longer than the native type")
+			return 0, fmt.Errorf("Requested a length longer than the native type")
 		}
 		size = encodingSize
 	}
@@ -82,10 +82,10 @@ func uintDecode(buf *bytes.Reader, v reflect.Value, encodingSize uintptr) error 
 	val := make([]byte, size)
 	rv, err := buf.Read(val)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	if rv != int(size) {
-		return fmt.Errorf("Not enough bytes in buffer")
+		return 0, fmt.Errorf("Not enough bytes in buffer")
 	}
 
 	tmp := uint64(0)
@@ -94,10 +94,10 @@ func uintDecode(buf *bytes.Reader, v reflect.Value, encodingSize uintptr) error 
 	}
 	v.SetUint(tmp)
 
-	return nil
+	return size, nil
 }
 
-func arrayDecode(buf *bytes.Reader, v reflect.Value, encodingSize uintptr) error {
+func arrayDecode(buf *bytes.Reader, v reflect.Value, encodingSize uintptr) (uintptr, error) {
 	if encodingSize == CodecDefaultSize {
 		encodingSize = uintptr(buf.Len())
 	}
@@ -105,26 +105,28 @@ func arrayDecode(buf *bytes.Reader, v reflect.Value, encodingSize uintptr) error
 	val := make([]byte, encodingSize)
 	rv, err := buf.Read(val)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	if rv != int(encodingSize) {
-		return fmt.Errorf("Not enough bytes in buffer")
+		return 0, fmt.Errorf("Not enough bytes in buffer")
 	}
 
 	v.SetBytes(val)
-	return nil
+	return encodingSize, nil
 }
 
 
 // Decode all the fields of a struct from a bytestring. Takes
 // a pointer to the struct to fill in
-func decode(i interface{}, data []byte) (err error) {
+func decode(i interface{}, data []byte) (uintptr, error) {
 	buf := bytes.NewReader(data)
 	var res error
 	reflected := reflect.ValueOf(i).Elem()
 	fields := reflected.NumField()
-
+	bytesread := uintptr(0)
+	
 	for j := 0; j < fields; j += 1 {
+		br := uintptr(0)
 		field := reflected.Field(j)
 		tipe := reflected.Type().Field(j)
 
@@ -140,17 +142,18 @@ func decode(i interface{}, data []byte) (err error) {
 
 		switch (field.Kind()) {
 		case reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-			res = uintDecode(buf, field, encodingSize)
+			br, res = uintDecode(buf, field, encodingSize)
 		case reflect.Array, reflect.Slice:
-			res = arrayDecode(buf, field, encodingSize)
+			br, res = arrayDecode(buf, field, encodingSize)
 		default:
-			return fmt.Errorf("Unknown type")
+			return 0, fmt.Errorf("Unknown type")
 		}
 		if res != nil {
-			return res
+			return bytesread, res
 		}
+		bytesread += br
 	}
 
 	
-	return nil
+	return bytesread, nil
 }

@@ -34,7 +34,7 @@ func codecEDE(t *testing.T, s interface{}, s2 interface{}, expectedLen uintptr){
 	// TODO(ekr@rtfm.com). What is the type of len().
 	assertEquals(t, uintptr(expectedLen), uintptr(len(res)))
 	
-	err = decode(s2, res)
+	_, err = decode(s2, res)
 	assertNotError(t, err, "Could not decode")
 
 	res2, err := encode(s2)
@@ -65,7 +65,7 @@ func TestCodecOverrideDecodeLength(t *testing.T) {
 	assertNotError(t, err, "Could not encode")
 
 	modified := append(res, 'd')
-	err = decode(&s2, modified)
+	_, err = decode(&s2, modified)
 	assertNotError(t, err, "Could not decode")
 
 	fmt.Println(s2)

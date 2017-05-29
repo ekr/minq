@@ -6,14 +6,14 @@ import (
 	"testing"
 )
 
-func packetEDE(t *testing.T, p Packet) {
-	var p2 Packet
-	res, err := encode(&p)
+func packetEDE(t *testing.T, p *PacketHeader) {
+	var p2 PacketHeader
+	res, err := encode(p)
 	assertNotError(t, err, "Could not encode")
 
 	fmt.Println("Result = ", hex.EncodeToString(res))
 
-	err = decode(&p2, res)
+	_, err = decode(&p2, res)
 	assertNotError(t, err, "Could not decode")
 
 	res2, err := encode(&p2)
@@ -23,15 +23,14 @@ func packetEDE(t *testing.T, p Packet) {
 }
 
 func TestLongHeader(t *testing.T) {
-	p1 := Packet{
+	p1 := PacketHeader{
 		0,
 		0x0123456789abcdef,
 		0xdeadbeef,
 		0xff000001,
-		[]byte{'a', 'b', 'c'},
 	}
 
 	p1.setLongHeaderType(PacketTypeClientInitial)
 
-	packetEDE(t, p1)
+	packetEDE(t, &p1)
 }

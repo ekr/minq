@@ -62,32 +62,37 @@ const (
 type connectionId uint64
 type version uint32
 
-type Packet struct {
+// The PDU definition for the header.
+// These types are capitalized so that |codec| can use the,
+type PacketHeader struct {
 	Type byte
 	ConnectionID uint64
-	PacketNumber uint32
+	PacketNumber uint64 // Never more than 32 bits on the wire.
 	Version version
-	Payload []byte
 }
 
+type Packet struct {
+	PacketHeader
+	payload []byte
+}
 
 // Functions to support encoding and decoding.
 func isSet(b byte, flag byte) bool {
 	return (b & flag) != 0
 }
 
-func isLongHeader(p *Packet) bool {
+func isLongHeader(p *PacketHeader) bool {
 	return isSet(p.Type, PacketFlagLongHeader)
 }
 
-func PacketConnectionID__length(p *Packet) uintptr {
+func PacketConnectionID__length(p *PacketHeader) uintptr {
 	if isLongHeader(p) || isSet(p.Type, PacketFlagC) {
 		return 8
 	}
 	return CodecDefaultSize
 }
 
-func PacketPacketNumber__length(p *Packet) uintptr {
+func PacketPacketNumber__length(p *PacketHeader) uintptr {
 	if isLongHeader(p) {
 		return 0
 	}
@@ -96,19 +101,51 @@ func PacketPacketNumber__length(p *Packet) uintptr {
 	case 1, 2, 3:
 		return 1 << p.Type
 	default:
-		return CodecDefaultSize
+		return 4
 	}
 }			
-func PacketVersion__length(p *Packet) uintptr {
+func PacketVersion__length(p *PacketHeader) uintptr {
 	if isLongHeader(p) {
 		return 4
 	}
 	return CodecDefaultSize
 }
 
-func (p *Packet) setLongHeaderType(typ byte) {
+func (p *PacketHeader) setLongHeaderType(typ byte) {
 	p.Type = PacketFlagLongHeader | typ
 }
+
+func encodePacket(c ConnectionState, aead *Aead, p *Packet) ([]byte, error) {
+	hdr, err := encode(&p.PacketHeader)
+	if err != nil {
+		return nil, err
+	}
+
+	b, err := (*aead).protect(p.PacketHeader.PacketNumber, hdr, p.Payload)
+	if (err != nil) {
+		return nil, err
+	}
+
+	return b, nil
+}
+
+func decodePacket(c ConnectionState, aead *Aead, b []byte) (*Packet, error) {
+	// Parse the header
+	var hdr PacketHeader
+	br, err := decode(&hdr, b)
+	if err != nil {
+		return nil, err
+	}
+
+	pt, err := (*aead).unprotect(c.expandPacketNumber(hdr.PacketNumber),
+		b[0:br], b[br:])
+	if err != nil {
+		return nil, err
+	}
+
+	return &Packet{ hdr, pt}, nil
+}
+
 
 
 
