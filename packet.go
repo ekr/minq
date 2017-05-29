@@ -1,7 +1,6 @@
 package chip
 
-import (
-)
+import ()
 
 // Encode a QUIC packet.
 /*
@@ -43,20 +42,20 @@ Short Header
 
 const (
 	PacketFlagLongHeader = 0x80
-	PacketFlagC = 0x40
-	PacketFlagK = 0x20
+	PacketFlagC          = 0x40
+	PacketFlagK          = 0x20
 )
 
 const (
-	PacketTypeVersionNegotiation = 1
-	PacketTypeClientInitial = 2
+	PacketTypeVersionNegotiation   = 1
+	PacketTypeClientInitial        = 2
 	PacketTypeServerStatelessRetry = 3
-	PacketTypeServerCleartext = 4
-	PacketTypeClientCleartext = 5
-	PacketType0RTTProtected = 6
-	PacketType1RTTProtectedPhase0 = 7
-	PacketType1RTTProtectedPhase1 = 8 
-	PacketTypePublicReset = 9
+	PacketTypeServerCleartext      = 4
+	PacketTypeClientCleartext      = 5
+	PacketType0RTTProtected        = 6
+	PacketType1RTTProtectedPhase0  = 7
+	PacketType1RTTProtectedPhase1  = 8
+	PacketTypePublicReset          = 9
 )
 
 type connectionId uint64
@@ -65,10 +64,10 @@ type version uint32
 // The PDU definition for the header.
 // These types are capitalized so that |codec| can use the,
 type PacketHeader struct {
-	Type byte
+	Type         byte
 	ConnectionID uint64
 	PacketNumber uint64 // Never more than 32 bits on the wire.
-	Version version
+	Version      version
 }
 
 type Packet struct {
@@ -97,13 +96,13 @@ func PacketPacketNumber__length(p *PacketHeader) uintptr {
 		return 0
 	}
 
-	switch (p.Type) {
+	switch p.Type {
 	case 1, 2, 3:
 		return 1 << p.Type
 	default:
 		return 4
 	}
-}			
+}
 func PacketVersion__length(p *PacketHeader) uintptr {
 	if isLongHeader(p) {
 		return 4
@@ -122,7 +121,7 @@ func encodePacket(c ConnectionState, aead *Aead, p *Packet) ([]byte, error) {
 	}
 
 	b, err := (*aead).protect(p.PacketHeader.PacketNumber, hdr, p.payload)
-	if (err != nil) {
+	if err != nil {
 		return nil, err
 	}
 
@@ -143,10 +142,5 @@ func decodePacket(c ConnectionState, aead *Aead, b []byte) (*Packet, error) {
 		return nil, err
 	}
 
-	return &Packet{ hdr, pt}, nil
+	return &Packet{hdr, pt}, nil
 }
-
-
-
-
-

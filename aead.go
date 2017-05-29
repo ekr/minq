@@ -11,7 +11,6 @@ type Aead interface {
 	unprotect(pn uint64, header []byte, ciphertext []byte) (plaintext []byte, err error)
 }
 
-
 // Definition for AEAD using 64-bit FNV-1a
 type AeadFNV struct {
 }
@@ -36,10 +35,9 @@ func (a *AeadFNV) unprotect(pn uint64, header []byte, ciphertext []byte) (plaint
 	h.Write(pt)
 
 	at2 := encodeArgs(h.Sum64())
-	
+
 	if !bytes.Equal(at, at2) {
 		return nil, fmt.Errorf("Invalid authentication tag")
 	}
 	return pt, nil
 }
-

@@ -33,7 +33,7 @@ func arrayEncode(buf *bytes.Buffer, v reflect.Value) error {
 
 	return nil
 }
-	
+
 // Encode all the fields of a struct to a bytestring.
 func encode(i interface{}) (ret []byte, err error) {
 	var buf bytes.Buffer
@@ -44,8 +44,8 @@ func encode(i interface{}) (ret []byte, err error) {
 	for j := 0; j < fields; j += 1 {
 		field := reflected.Field(j)
 		tipe := reflected.Type().Field(j)
-		
-		switch (field.Kind()) {
+
+		switch field.Kind() {
 		case reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
 			// Call the length overrider to tell us if we shoud be using a shorter
 			// encoding.
@@ -97,14 +97,14 @@ func uintDecode(buf *bytes.Reader, v reflect.Value, encodingSize uintptr) (uintp
 	return size, nil
 }
 
-func encodeArgs(args ...interface{}) ([]byte) {
+func encodeArgs(args ...interface{}) []byte {
 	var buf bytes.Buffer
 	var res error
 
 	for _, arg := range args {
 		reflected := reflect.ValueOf(arg)
 		// TODO(ekr@rtfm.com): Factor out this switch.
-		switch(reflected.Kind()) {
+		switch reflected.Kind() {
 		case reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
 			res = uintEncode(&buf, reflected, CodecDefaultSize)
 		case reflect.Array, reflect.Slice:
@@ -138,7 +138,6 @@ func arrayDecode(buf *bytes.Reader, v reflect.Value, encodingSize uintptr) (uint
 	return encodingSize, nil
 }
 
-
 // Decode all the fields of a struct from a bytestring. Takes
 // a pointer to the struct to fill in
 func decode(i interface{}, data []byte) (uintptr, error) {
@@ -147,12 +146,11 @@ func decode(i interface{}, data []byte) (uintptr, error) {
 	reflected := reflect.ValueOf(i).Elem()
 	fields := reflected.NumField()
 	bytesread := uintptr(0)
-	
+
 	for j := 0; j < fields; j += 1 {
 		br := uintptr(0)
 		field := reflected.Field(j)
 		tipe := reflected.Type().Field(j)
-
 
 		// Call the length overrider to tell us if we should be using a shorter
 		// encoding.
@@ -163,7 +161,7 @@ func decode(i interface{}, data []byte) (uintptr, error) {
 			encodingSize = uintptr(length_result[0].Uint())
 		}
 
-		switch (field.Kind()) {
+		switch field.Kind() {
 		case reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
 			br, res = uintDecode(buf, field, encodingSize)
 		case reflect.Array, reflect.Slice:
@@ -177,7 +175,5 @@ func decode(i interface{}, data []byte) (uintptr, error) {
 		bytesread += br
 	}
 
-	
 	return bytesread, nil
 }
-

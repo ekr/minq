@@ -19,7 +19,7 @@ func packetHeaderEDE(t *testing.T, p *PacketHeader) {
 
 	res2, err := encode(&p2)
 	assertNotError(t, err, "Could not re-encode")
-	fmt.Println("Result2 = ", hex.EncodeToString(res2))	
+	fmt.Println("Result2 = ", hex.EncodeToString(res2))
 	assertByteEquals(t, res, res2)
 }
 
@@ -36,7 +36,6 @@ func TestLongHeader(t *testing.T) {
 	packetHeaderEDE(t, &p1)
 }
 
-
 // Whole packet tests.
 
 // Mock for connection state
@@ -48,6 +47,4 @@ func (c *ConnectionStateMock) expandPacketNumber(pn uint64) uint64 {
 	return pn
 }
 
-
 // Mock for AEAD
-
