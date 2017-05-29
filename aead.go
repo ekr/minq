@@ -18,9 +18,10 @@ type AeadFNV struct {
 
 func (a *AeadFNV) protect(pn uint64, header []byte, plaintext []byte) (ciphertext []byte, err error) {
 	h := fnv.New64a()
+	h.Write(encodeArgs(pn))
 	h.Write(header)
 	h.Write(plaintext)
-	return encodeArgs(plaintext, h.Sum64())
+	return encodeArgs(plaintext, h.Sum64()), nil
 }
 
 func (a *AeadFNV) unprotect(pn uint64, header []byte, ciphertext []byte) (plaintext []byte, err error) {
@@ -30,10 +31,11 @@ func (a *AeadFNV) unprotect(pn uint64, header []byte, ciphertext []byte) (plaint
 	pt := ciphertext[:len(ciphertext)-8]
 	at := ciphertext[len(ciphertext)-8:]
 	h := fnv.New64a()
+	h.Write(encodeArgs(pn))
 	h.Write(header)
 	h.Write(pt)
 
-	at2, _ := encodeArgs(h.Sum64)
+	at2 := encodeArgs(h.Sum64())
 	
 	if !bytes.Equal(at, at2) {
 		return nil, fmt.Errorf("Invalid authentication tag")

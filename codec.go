@@ -97,10 +97,10 @@ func uintDecode(buf *bytes.Reader, v reflect.Value, encodingSize uintptr) (uintp
 	return size, nil
 }
 
-func encodeArgs(args ...interface{}) ([]byte, error) {
+func encodeArgs(args ...interface{}) ([]byte) {
 	var buf bytes.Buffer
 	var res error
-	
+
 	for _, arg := range args {
 		reflected := reflect.ValueOf(arg)
 		// TODO(ekr@rtfm.com): Factor out this switch.
@@ -110,14 +110,14 @@ func encodeArgs(args ...interface{}) ([]byte, error) {
 		case reflect.Array, reflect.Slice:
 			res = arrayEncode(&buf, reflected)
 		default:
-			return nil, fmt.Errorf("Unknown type")
+			panic(fmt.Sprintf("Unknown type"))
 		}
 		if res != nil {
-			return nil, res
+			panic(fmt.Sprintf("Encoding error"))
 		}
 	}
 
-	return buf.Bytes(), nil
+	return buf.Bytes()
 }
 
 func arrayDecode(buf *bytes.Reader, v reflect.Value, encodingSize uintptr) (uintptr, error) {
