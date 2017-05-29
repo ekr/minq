@@ -121,7 +121,7 @@ func encodePacket(c ConnectionState, aead *Aead, p *Packet) ([]byte, error) {
 		return nil, err
 	}
 
-	b, err := (*aead).protect(p.PacketHeader.PacketNumber, hdr, p.Payload)
+	b, err := (*aead).protect(p.PacketHeader.PacketNumber, hdr, p.payload)
 	if (err != nil) {
 		return nil, err
 	}

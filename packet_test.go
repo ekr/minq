@@ -6,7 +6,8 @@ import (
 	"testing"
 )
 
-func packetEDE(t *testing.T, p *PacketHeader) {
+// Packet header tests.
+func packetHeaderEDE(t *testing.T, p *PacketHeader) {
 	var p2 PacketHeader
 	res, err := encode(p)
 	assertNotError(t, err, "Could not encode")
@@ -32,5 +33,21 @@ func TestLongHeader(t *testing.T) {
 
 	p1.setLongHeaderType(PacketTypeClientInitial)
 
-	packetEDE(t, &p1)
+	packetHeaderEDE(t, &p1)
 }
+
+
+// Whole packet tests.
+
+// Mock for connection state
+type ConnectionStateMock struct {
+	aead AeadFNV
+}
+
+func (c *ConnectionStateMock) expandPacketNumber(pn uint64) uint64 {
+	return pn
+}
+
+
+// Mock for AEAD
+

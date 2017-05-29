@@ -97,6 +97,29 @@ func uintDecode(buf *bytes.Reader, v reflect.Value, encodingSize uintptr) (uintp
 	return size, nil
 }
 
+func encodeArgs(args ...interface{}) ([]byte, error) {
+	var buf bytes.Buffer
+	var res error
+	
+	for _, arg := range args {
+		reflected := reflect.ValueOf(arg)
+		// TODO(ekr@rtfm.com): Factor out this switch.
+		switch(reflected.Kind()) {
+		case reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+			res = uintEncode(&buf, reflected, CodecDefaultSize)
+		case reflect.Array, reflect.Slice:
+			res = arrayEncode(&buf, reflected)
+		default:
+			return nil, fmt.Errorf("Unknown type")
+		}
+		if res != nil {
+			return nil, res
+		}
+	}
+
+	return buf.Bytes(), nil
+}
+
 func arrayDecode(buf *bytes.Reader, v reflect.Value, encodingSize uintptr) (uintptr, error) {
 	if encodingSize == CodecDefaultSize {
 		encodingSize = uintptr(buf.Len())
@@ -157,3 +180,4 @@ func decode(i interface{}, data []byte) (uintptr, error) {
 	
 	return bytesread, nil
 }
+
