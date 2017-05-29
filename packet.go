@@ -114,21 +114,21 @@ func (p *PacketHeader) setLongHeaderType(typ byte) {
 	p.Type = PacketFlagLongHeader | typ
 }
 
-func encodePacket(c ConnectionState, aead *Aead, p *Packet) ([]byte, error) {
+func encodePacket(c ConnectionState, aead Aead, p *Packet) ([]byte, error) {
 	hdr, err := encode(&p.PacketHeader)
 	if err != nil {
 		return nil, err
 	}
 
-	b, err := (*aead).protect(p.PacketHeader.PacketNumber, hdr, p.payload)
+	b, err := aead.protect(p.PacketHeader.PacketNumber, hdr, p.payload)
 	if err != nil {
 		return nil, err
 	}
 
-	return b, nil
+	return encodeArgs(hdr, b), nil
 }
 
-func decodePacket(c ConnectionState, aead *Aead, b []byte) (*Packet, error) {
+func decodePacket(c ConnectionState, aead Aead, b []byte) (*Packet, error) {
 	// Parse the header
 	var hdr PacketHeader
 	br, err := decode(&hdr, b)
@@ -136,8 +136,8 @@ func decodePacket(c ConnectionState, aead *Aead, b []byte) (*Packet, error) {
 		return nil, err
 	}
 
-	pt, err := (*aead).unprotect(c.expandPacketNumber(hdr.PacketNumber),
-		b[0:br], b[br:])
+	hdr.PacketNumber = c.expandPacketNumber(hdr.PacketNumber)
+	pt, err := aead.unprotect(hdr.PacketNumber, b[0:br], b[br:])
 	if err != nil {
 		return nil, err
 	}

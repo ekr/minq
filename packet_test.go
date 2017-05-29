@@ -6,6 +6,13 @@ import (
 	"testing"
 )
 
+var kTestPacketHeader = PacketHeader{
+	0,
+	0x0123456789abcdef,
+	0xdeadbeef,
+	0xff000001,
+}
+
 // Packet header tests.
 func packetHeaderEDE(t *testing.T, p *PacketHeader) {
 	var p2 PacketHeader
@@ -24,16 +31,11 @@ func packetHeaderEDE(t *testing.T, p *PacketHeader) {
 }
 
 func TestLongHeader(t *testing.T) {
-	p1 := PacketHeader{
-		0,
-		0x0123456789abcdef,
-		0xdeadbeef,
-		0xff000001,
-	}
+	p := kTestPacketHeader
+	
+	p.setLongHeaderType(PacketTypeClientInitial)
 
-	p1.setLongHeaderType(PacketTypeClientInitial)
-
-	packetHeaderEDE(t, &p1)
+	packetHeaderEDE(t, &p)
 }
 
 // Whole packet tests.
@@ -47,4 +49,23 @@ func (c *ConnectionStateMock) expandPacketNumber(pn uint64) uint64 {
 	return pn
 }
 
-// Mock for AEAD
+
+func TestEncodeDecodePacket(t *testing.T) {
+	var c ConnectionStateMock
+	
+	p := Packet {
+		kTestPacketHeader,
+		[]byte{'a','b','c','d','e','f','g'},
+	}
+
+	encoded, err := encodePacket(&c, &c.aead, &p)
+	assertNotError(t, err, "Could not encode packet")
+
+	p2, err := decodePacket(&c, &c.aead, encoded)
+	assertNotError(t, err, "Could not decode packet")	
+
+	encoded2, err := encodePacket(&c, &c.aead, p2)
+	assertNotError(t, err, "Could not re-encode packet")
+
+	assertByteEquals(t, encoded, encoded2)
+}
