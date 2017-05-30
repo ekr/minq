@@ -6,8 +6,10 @@ import (
 	"testing"
 )
 
+type Uint8Indirect uint8
+
 type TestStructDefaultLengths struct {
-	U8  uint8
+	U8  Uint8Indirect
 	U16 uint16
 	B   []byte
 }

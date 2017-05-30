@@ -45,9 +45,12 @@ type ConnectionStateMock struct {
 	aead AeadFNV
 }
 
+func (c *ConnectionStateMock) established() bool { return false }
+func (c *ConnectionStateMock) zeroRttAllowed() bool { return false }
 func (c *ConnectionStateMock) expandPacketNumber(pn uint64) uint64 {
 	return pn
 }
+
 
 
 func TestEDEPacket(t *testing.T) {
