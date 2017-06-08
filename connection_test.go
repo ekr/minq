@@ -53,27 +53,33 @@ type testTransport struct {
 }
 
 func (t *testTransport) Send(p []byte) error {
-	w.Send(&TestPacket{p})
+	t.w.Send(&testPacket{p})
 	return nil
 }
 
 func (t *testTransport) Recv() ([]byte, error) {
-	p := r.Recv()
+	p := t.r.Recv()
 	if p == nil {
-		return WouldBlock
+		return nil, WouldBlock
 	}
-	return p.b
+	return p.b, nil
 }
 
 
-func newTransportPair(autoFlush bool) (a, b *testTransportPipe) {
-	a = newTestTransportPipe(autoFlush)
-	b = newTestTransportPipe(autoFlush)
+func newTestTransportPair(autoFlush bool) (a, b *testTransport) {
+	a2b := newTestTransportPipe(autoFlush)
+	b2a := newTestTransportPipe(autoFlush)
+
+	a = &testTransport{b2a, a2b}
+	b = &testTransport{a2b, b2a}
+	
 	return
 }
 
 
 func TestSendCH(t *testing.T) {
+	cTrans, _ := newTestTransportPair(true)
 	
-
+	client := NewConnection(cTrans, kRoleClient, TlsConfig{})
+	assertNotNil(t, client, "Couldn't make client")
 }
