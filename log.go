@@ -16,6 +16,7 @@ const logConfigVar = "CHIP_LOG"
 // Pre-defined log types
 const (
 	logTypeCodec = "codec"
+	logTypeConnBuffer = "connbuffer"
 )
 
 var (

@@ -19,17 +19,24 @@ type ConnectionState interface {
 	expandPacketNumber(pn uint64) uint64
 }
 
-
 type Connection struct {
 	role uint8
 	state uint8
 	transport Transport
 	tls *TlsConn
 	nextSendPacket uint64
+	queuedFrames []*Frame
 }
 
 func NewConnection(trans Transport, role uint8, tls TlsConfig) *Connection{
-	return &Connection{role, kStateInit, trans, NewTlsConn(tls, role), uint64(0)}
+	return &Connection{
+		role,
+		kStateInit,
+		trans,
+		NewTlsConn(tls, role),
+		uint64(0),
+		[]*Frame{},
+	}
 }
 
 func (c *Connection) established() bool {
