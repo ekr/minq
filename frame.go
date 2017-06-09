@@ -53,6 +53,7 @@ func (f *frame) length() (int, error) {
 
 // Padding
 type paddingFrame struct {
+	Typ frameType
 }
 
 func (f paddingFrame) getType() frameType {
@@ -60,7 +61,7 @@ func (f paddingFrame) getType() frameType {
 }
 
 func newPaddingFrame(stream uint32) frame {
-	return frame{stream, &paddingFrame{}, nil}
+	return frame{stream, &paddingFrame{0}, nil}
 }
 
 // Stream
