@@ -189,7 +189,7 @@ func (c *Connection) sendQueued(pt uint8) (int, error) {
 		return 0, err
 	}
 
-	logf(logTypeTrace, "Sending packet len=%v", hex.EncodeToString(protected))
+	logf(logTypeTrace, "Sending packet len=%d, len=%v", len(protected), hex.EncodeToString(protected))
 
 	return sent, nil
 }
