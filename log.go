@@ -17,6 +17,8 @@ const logConfigVar = "CHIP_LOG"
 const (
 	logTypeCodec = "codec"
 	logTypeConnBuffer = "connbuffer"
+	logTypeTls = "tls"
+	logTypeTrace = "trace"
 )
 
 var (

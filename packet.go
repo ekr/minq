@@ -65,9 +65,9 @@ type version uint32
 // These types are capitalized so that |codec| can use the,
 type PacketHeader struct {
 	Type         byte
-	ConnectionID uint64
+	ConnectionID connectionId
 	PacketNumber uint64 // Never more than 32 bits on the wire.
-	Version      version
+	Version      VersionNumber
 }
 
 type Packet struct {
@@ -144,3 +144,5 @@ func decodePacket(c ConnectionState, aead Aead, b []byte) (*Packet, error) {
 
 	return &Packet{hdr, pt}, nil
 }
+
+

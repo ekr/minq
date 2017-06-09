@@ -1,6 +1,7 @@
 package chip
 
 import (
+	"fmt"
 	"github.com/bifurcation/mint"
 )
 
@@ -9,7 +10,7 @@ type TlsConfig struct {
 
 func (c TlsConfig) toMint() *mint.Config {
 	// TODO(ekr@rtfm.com): Provide a real config
-	return &mint.Config{ServerName: "example.com"}
+	return &mint.Config{ServerName: "example.com", NonBlocking: true}
 }
 
 type TlsConn struct {
@@ -17,7 +18,7 @@ type TlsConn struct {
 	tls *mint.Conn
 }
 
-func NewTlsConn(conf TlsConfig, role uint8) *TlsConn {
+func newTlsConn(conf TlsConfig, role uint8) *TlsConn {
 	isClient := true
 	if role == kRoleServer {
 		isClient = false
@@ -31,3 +32,13 @@ func NewTlsConn(conf TlsConfig, role uint8) *TlsConn {
 	}
 }
 
+func (c *TlsConn) handshake() ([]byte, error) {
+	assert(c.conn.OutputLen() == 0)
+	alert := c.tls.Handshake()
+	if alert != mint.AlertNoAlert && alert != mint.AlertWouldBlock {
+		return nil, fmt.Errorf("TLS sent an alert")
+	}
+	logf(logTypeTls, "TLS wrote %d bytes", c.conn.OutputLen())
+	
+	return nil, nil
+}

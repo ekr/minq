@@ -34,6 +34,10 @@ func (p *connBuffer) Close() error {
 	return nil
 }
 
+func (p *connBuffer) OutputLen() int {
+	return p.w.Len()
+}
+
 func (p *connBuffer) LocalAddr() net.Addr                { return nil }
 func (p *connBuffer) RemoteAddr() net.Addr               { return nil }
 func (p *connBuffer) SetDeadline(t time.Time) error      { return nil }

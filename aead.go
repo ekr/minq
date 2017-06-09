@@ -7,12 +7,17 @@ import (
 )
 
 type Aead interface {
+	expansion() int
 	protect(pn uint64, header []byte, plaintext []byte) (ciphertext []byte, err error)
 	unprotect(pn uint64, header []byte, ciphertext []byte) (plaintext []byte, err error)
 }
 
 // Definition for AEAD using 64-bit FNV-1a
 type AeadFNV struct {
+}
+
+func (a *AeadFNV) expansion() int {
+	return 8
 }
 
 func (a *AeadFNV) protect(pn uint64, header []byte, plaintext []byte) (ciphertext []byte, err error) {

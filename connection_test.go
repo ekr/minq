@@ -82,4 +82,8 @@ func TestSendCH(t *testing.T) {
 	
 	client := NewConnection(cTrans, kRoleClient, TlsConfig{})
 	assertNotNil(t, client, "Couldn't make client")
+	
+	err := client.sendClientInitial()
+	assertNotError(t, err, "Couldn't send client initial packet")
+
 }

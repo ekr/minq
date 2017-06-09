@@ -39,37 +39,37 @@ func unhex(h string) []byte {
 	return b
 }
 
-func assert(t *testing.T, test bool, msg string) {
+func assertX(t *testing.T, test bool, msg string) {
 	if !test {
 		t.Fatalf(msg)
 	}
 }
 
 func assertError(t *testing.T, err error, msg string) {
-	assert(t, err != nil, msg)
+	assertX(t, err != nil, msg)
 }
 
 func assertNotError(t *testing.T, err error, msg string) {
 	if err != nil {
 		msg += ": " + err.Error()
 	}
-	assert(t, err == nil, msg)
+	assertX(t, err == nil, msg)
 }
 
 func assertNotNil(t *testing.T, x interface{}, msg string) {
-	assert(t, x != nil, msg)
+	assertX(t, x != nil, msg)
 }
 
 func assertEquals(t *testing.T, a, b interface{}) {
-	assert(t, a == b, fmt.Sprintf("%+v != %+v", a, b))
+	assertX(t, a == b, fmt.Sprintf("%+v != %+v", a, b))
 }
 
 func assertByteEquals(t *testing.T, a, b []byte) {
-	assert(t, bytes.Equal(a, b), fmt.Sprintf("%+v != %+v", hex.EncodeToString(a), hex.EncodeToString(b)))
+	assertX(t, bytes.Equal(a, b), fmt.Sprintf("%+v != %+v", hex.EncodeToString(a), hex.EncodeToString(b)))
 }
 
 func assertNotByteEquals(t *testing.T, a, b []byte) {
-	assert(t, !bytes.Equal(a, b), fmt.Sprintf("%+v == %+v", hex.EncodeToString(a), hex.EncodeToString(b)))
+	assertX(t, !bytes.Equal(a, b), fmt.Sprintf("%+v == %+v", hex.EncodeToString(a), hex.EncodeToString(b)))
 }
 
 /* END STOLEN FROM MINT. */
