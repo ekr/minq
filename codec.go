@@ -29,7 +29,9 @@ func uintEncode(buf *bytes.Buffer, v reflect.Value, encodingSize uintptr) error 
 }
 
 func arrayEncode(buf *bytes.Buffer, v reflect.Value) error {
-	buf.Write(v.Bytes())
+	b := v.Bytes()
+	logf(logTypeCodec, "Encoding array length=%d", len(b))
+	buf.Write(b)
 
 	return nil
 }

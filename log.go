@@ -15,8 +15,11 @@ const logConfigVar = "CHIP_LOG"
 
 // Pre-defined log types
 const (
+	logTypeAead = "aead"
 	logTypeCodec = "codec"
 	logTypeConnBuffer = "connbuffer"
+	logTypeFrame = "frame"
+	logTypeHandshake = "handshake"
 	logTypeTls = "tls"
 	logTypeTrace = "trace"
 )

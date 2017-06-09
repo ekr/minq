@@ -86,4 +86,6 @@ func TestSendCH(t *testing.T) {
 	err := client.sendClientInitial()
 	assertNotError(t, err, "Couldn't send client initial packet")
 
+	_, err = client.sendQueued(PacketTypeClientInitial)
+	assertNotError(t, err, "Couldn't flush queue")
 }

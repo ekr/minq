@@ -39,7 +39,7 @@ func (f *frame) encode() error {
 		return nil
 	}
 	var err error
-	f.encoded, err = encode(&(f.f))
+	f.encoded, err = encode(f.f)
 	return err
 }
 
@@ -60,16 +60,16 @@ func (f paddingFrame) getType() frameType {
 }
 
 func newPaddingFrame(stream uint32) frame {
-	return frame{stream, paddingFrame{}, nil}
+	return frame{stream, &paddingFrame{}, nil}
 }
 
 // Stream
 type streamFrame struct {
-	typ frameType
-	dataLength uint16
-	streamId uint32
-	offset uint64
-	data []byte
+	Typ frameType
+	DataLength uint16
+	StreamId uint32
+	Offset uint64
+	Data []byte
 }
 
 func (f streamFrame) getType() frameType {
@@ -77,7 +77,7 @@ func (f streamFrame) getType() frameType {
 }
 
 func (f streamFrame) dataLength__length() uintptr {
-	if f.typ & 0x20 == 0 {
+	if f.Typ & 0x20 == 0 {
 		return 0
 	}
 	return 2
@@ -85,22 +85,23 @@ func (f streamFrame) dataLength__length() uintptr {
 
 func (f streamFrame) streamId__length() uintptr {
 	lengths := []uintptr{1, 2, 3, 4}
-	val := (f.typ >> 2) & 0x03
+	val := (f.Typ >> 2) & 0x03
 	return lengths[val]
 }
 
 
 func (f streamFrame) offset__length() uintptr {
 	lengths := []uintptr{0, 2, 4, 8}
-	val := (f.typ) & 0x03
+	val := (f.Typ) & 0x03
 	return lengths[val]
 }
 
 func newStreamFrame(stream uint32, offset uint64, data []byte) frame {
+	logf(logTypeFrame, "Creating stream frame with data length=%d", len(data))
 	assert(len(data) <= 65535)
 	return frame{
 		stream,
-		streamFrame{
+		&streamFrame{
 			// TODO(ekr@tfm.com): One might want to allow non
 			// D bit, but not for now.
 			kFrameTypeStream | kFrameTypeFlagD,

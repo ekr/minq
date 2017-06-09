@@ -40,5 +40,5 @@ func (c *TlsConn) handshake() ([]byte, error) {
 	}
 	logf(logTypeTls, "TLS wrote %d bytes", c.conn.OutputLen())
 	
-	return nil, nil
+	return c.conn.getOutput(), nil
 }

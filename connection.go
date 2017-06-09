@@ -2,6 +2,7 @@ package chip
 
 import (
 	"encoding/hex"
+	"fmt"
 )
 
 const (
@@ -89,14 +90,16 @@ func (c *Connection) start() error {
 }
 
 func (c *Connection) sendClientInitial() error {
+	logf(logTypeHandshake, "Sending client initial packet")
 	ch, err := c.tls.handshake()
 	if err != nil {
 		return err
 	}
 	f := newStreamFrame(0, 0, ch)
-
+	fmt.Println("EKR: Stream frame=%v", f)
 	// Encode this so we know how much room it is going to take up.
 	l, err := f.length()
+	logf(logTypeHandshake, "Length of client hello stream frame=%d", l)	
 	if err != nil {
 		return err
 	}
@@ -110,6 +113,7 @@ func (c *Connection) sendClientInitial() error {
 	 * absence of extensions to the IP header, padding to exactly these
 	 * values will result in an IP packet that is 1280 octets. */
 	topad := kMinimumClientInitialLength - (kInitialIntegrityCheckLength + l + kInitialIntegrityCheckLength)
+	logf(logTypeHandshake, "Padding with %d padding frames", topad)
 
 	// Enqueue the frame for transmission.
 	c.enqueueFrame(f)
@@ -159,12 +163,13 @@ func (c *Connection) sendQueued(pt uint8) (int, error) {
 
 	// Encode the header so we know how long it is.
 	// TODO(ekr@rtfm.com): this is gross.
-	hdr, err := encode(p.PacketHeader)
+	hdr, err := encode(&p.PacketHeader)
 	if err != nil {
 		return 0, err
 	}
 	left -= len(hdr)
 
+	sent := 0
 	
 	for _, f := range c.queuedFrames {
 		l, err := f.length()
@@ -176,6 +181,7 @@ func (c *Connection) sendQueued(pt uint8) (int, error) {
 		}
 
 		p.payload = append(p.payload, f.encoded...)
+		sent++
 	}
 
 	protected, err := aead.protect(p.PacketNumber, hdr, p.payload)
@@ -185,5 +191,5 @@ func (c *Connection) sendQueued(pt uint8) (int, error) {
 
 	logf(logTypeTrace, "Sending packet len=%v", hex.EncodeToString(protected))
 
-	return 0, nil
+	return sent, nil
 }

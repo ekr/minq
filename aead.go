@@ -21,11 +21,14 @@ func (a *AeadFNV) expansion() int {
 }
 
 func (a *AeadFNV) protect(pn uint64, header []byte, plaintext []byte) (ciphertext []byte, err error) {
+	logf(logTypeAead, "FNV protecting hdr len=%d, plaintext len=%d", len(header), len(plaintext))
 	h := fnv.New64a()
 	h.Write(encodeArgs(pn))
 	h.Write(header)
 	h.Write(plaintext)
-	return encodeArgs(plaintext, h.Sum64()), nil
+	res := encodeArgs(plaintext, h.Sum64())
+	logf(logTypeAead, "FNV output length=%d", len(res))
+	return res, nil
 }
 
 func (a *AeadFNV) unprotect(pn uint64, header []byte, ciphertext []byte) (plaintext []byte, err error) {

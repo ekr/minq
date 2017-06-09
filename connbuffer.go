@@ -34,9 +34,6 @@ func (p *connBuffer) Close() error {
 	return nil
 }
 
-func (p *connBuffer) OutputLen() int {
-	return p.w.Len()
-}
 
 func (p *connBuffer) LocalAddr() net.Addr                { return nil }
 func (p *connBuffer) RemoteAddr() net.Addr               { return nil }
@@ -49,4 +46,14 @@ func newConnBuffer() *connBuffer {
 		bytes.NewBuffer(nil),
 		bytes.NewBuffer(nil),
 	}
+}
+
+func (p *connBuffer) getOutput() []byte {
+	b := p.w.Bytes()
+	p.w.Reset()
+	return b
+}
+
+func (p *connBuffer) OutputLen() int {
+	return p.w.Len()
 }
