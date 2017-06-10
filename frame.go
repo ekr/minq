@@ -19,8 +19,8 @@ const (
 )
 
 const (
-	kFrameTypeFlagF = frameType(0x4) 	
-	kFrameTypeFlagD= frameType(0x2)
+	kFrameTypeFlagF = frameType(0x40) 	
+	kFrameTypeFlagD= frameType(0x20)
 )
 
 type innerFrame interface {
@@ -77,24 +77,33 @@ func (f streamFrame) getType() frameType {
 	return kFrameTypeStream
 }
 
-func (f streamFrame) dataLength__length() uintptr {
-	if f.Typ & 0x20 == 0 {
+func (f streamFrame) DataLength__length() uintptr {
+	logf(logTypeFrame, "DataLength__length() called")
+	if (f.Typ & kFrameTypeFlagD) == 0 {
 		return 0
 	}
+	logf(logTypeFrame, "DataLength__length() returning 2")	
 	return 2
 }
 
-func (f streamFrame) streamId__length() uintptr {
+func (f streamFrame) StreamId__length() uintptr {
 	lengths := []uintptr{1, 2, 3, 4}
 	val := (f.Typ >> 2) & 0x03
 	return lengths[val]
 }
 
 
-func (f streamFrame) offset__length() uintptr {
+func (f streamFrame) Offset__length() uintptr {
 	lengths := []uintptr{0, 2, 4, 8}
 	val := (f.Typ) & 0x03
 	return lengths[val]
+}
+
+func (f streamFrame) Data__length() uintptr {
+	if (f.DataLength__length() == 0) {
+		return CodecDefaultSize
+	}
+	return uintptr(f.DataLength)
 }
 
 func newStreamFrame(stream uint32, offset uint64, data []byte) frame {

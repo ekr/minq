@@ -1,6 +1,7 @@
 package chip
 
 import (
+	"fmt"
 	"testing"
 )
 
@@ -25,19 +26,21 @@ func newTestTransportPipe(autoFlush bool) *testTransportPipe {
 
 func (t *testTransportPipe) Send(p *testPacket) {
 	if !t.autoFlush {
+		fmt.Println("Appending to in buffer")
 		t.in = append(t.in, p)
 	} else {
+		fmt.Println("Appending to out buffer")		
 		t.out = append(t.in, p)
 	}
 }
 
 func (t *testTransportPipe) Recv() *testPacket {
-	if len(t.in) == 0 {
+	if len(t.out) == 0 {
 		return nil
 	}
 
-	p := t.in[0]
-	t.in = t.in[1:]
+	p := t.out[0]
+	t.out = t.out[1:]
 	
 	return p
 }
@@ -77,7 +80,7 @@ func newTestTransportPair(autoFlush bool) (a, b *testTransport) {
 }
 
 
-func TestSendCH(t *testing.T) {
+func TestSendCI(t *testing.T) {
 	cTrans, _ := newTestTransportPair(true)
 	
 	client := NewConnection(cTrans, kRoleClient, TlsConfig{})
@@ -86,6 +89,26 @@ func TestSendCH(t *testing.T) {
 	err := client.sendClientInitial()
 	assertNotError(t, err, "Couldn't send client initial packet")
 
-	_, err = client.sendQueued(PacketTypeClientInitial)
+	_, err = client.sendPacket(PacketTypeClientInitial)
 	assertNotError(t, err, "Couldn't flush queue")
 }
+
+func TestSendReceiveCI(t *testing.T) {
+	cTrans, sTrans := newTestTransportPair(true)
+	
+	client := NewConnection(cTrans, kRoleClient, TlsConfig{})
+	assertNotNil(t, client, "Couldn't make client")
+
+	server := NewConnection(sTrans, kRoleServer, TlsConfig{})
+	assertNotNil(t, server, "Couldn't make server")
+	
+	err := client.sendClientInitial()
+	assertNotError(t, err, "Couldn't send client initial packet")
+
+	_, err = client.sendPacket(PacketTypeClientInitial)
+	assertNotError(t, err, "Couldn't flush queue")
+
+	err = server.input()
+	assertNotError(t, err, "Error processing CI")
+}
+

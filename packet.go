@@ -84,6 +84,14 @@ func isLongHeader(p *PacketHeader) bool {
 	return isSet(p.Type, PacketFlagLongHeader)
 }
 
+func (p *PacketHeader) getHeaderType() byte {
+	if (isLongHeader(p)) {
+		return p.Type & 0x7f
+	}
+	panic("Can't parse short header yet")
+	return 0
+}
+
 func PacketConnectionID__length(p *PacketHeader) uintptr {
 	if isLongHeader(p) || isSet(p.Type, PacketFlagC) {
 		return 8

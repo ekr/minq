@@ -10,12 +10,13 @@ const (
 	kRoleServer = 2
 )
 
+type connState uint8
 const (
-	kStateInit = 1
-	kStateWaitClientInitial = 2
-	kStateWaitServerFirstFlight = 3
-	kStateWaitClientSecondFlight = 4
-	kEstablished = 5
+	kStateInit = connState(1)
+	kStateWaitClientInitial = connState(2)
+	kStateWaitServerFirstFlight = connState(3)
+	kStateWaitClientSecondFlight = connState(4)
+	kEstablished = connState(5)
 )
 
 const (
@@ -39,13 +40,14 @@ type ConnectionState interface {
 
 type Connection struct {
 	role uint8
-	state uint8
+	state connState
 	version VersionNumber
 	clientConnId connectionId
 	serverConnId connectionId
 	transport Transport
 	tls *TlsConn
 	writeClear Aead
+	readClear Aead
 	writeProtected Aead
 	readProtected Aead
 	nextSendPacket uint64
@@ -54,15 +56,20 @@ type Connection struct {
 }
 
 func NewConnection(trans Transport, role uint8, tls TlsConfig) *Connection{
+	initState := kStateInit
+	if role == kRoleServer {
+		initState = kStateWaitClientInitial
+	}
 	return &Connection{
 		role,
-		kStateInit,
+		initState,
 		kQuicVersion,
 		0, // TODO(ekr@rtfm.com): generate
 		0, // TODO(ekr@rtfm.com): generate
 		trans,
 		newTlsConn(tls, role),
 		&AeadFNV{},
+		&AeadFNV{},		
 		nil,
 		nil,
 		uint64(0),
@@ -91,7 +98,7 @@ func (c *Connection) start() error {
 
 func (c *Connection) sendClientInitial() error {
 	logf(logTypeHandshake, "Sending client initial packet")
-	ch, err := c.tls.handshake()
+	ch, err := c.tls.handshake(nil)
 	if err != nil {
 		return err
 	}
@@ -130,9 +137,19 @@ func (c *Connection) enqueueFrame(f frame) error {
 	return nil
 }
 
-func (c *Connection) sendQueued(pt uint8) (int, error) {
-	left := c.mtu
+func (c *Connection) sendQueued() (int, error) {
+	// TODO(ekr@rtfm.com): Really write this.
+	_, err := c.sendPacket(PacketTypeClientInitial)
+	if err != nil {
+		return 0, err
+	}
 
+	return 1, nil	
+}
+
+func (c *Connection) sendPacket(pt uint8) (int, error) {
+	left := c.mtu
+	
 	var connId connectionId
 	var aead Aead
 	aead = c.writeProtected
@@ -152,7 +169,7 @@ func (c *Connection) sendQueued(pt uint8) (int, error) {
 	// For now, just do the long header.
 	p := Packet{
 		PacketHeader{
-			pt,
+			pt | PacketFlagLongHeader,
 			connId,
 			c.nextSendPacket,
 			c.version,
@@ -192,6 +209,110 @@ func (c *Connection) sendQueued(pt uint8) (int, error) {
 	packet := append(hdr, protected...)
 
 	logf(logTypeTrace, "Sending packet len=%d, len=%v", len(packet), hex.EncodeToString(packet))
-
+	c.transport.Send(packet)
+	
 	return sent, nil
+}
+
+func (c *Connection) input() error {
+	// TODO(ekr@rtfm.com): Do something smarter.
+	logf(logTypeConnection, "Connection.input()")
+	for {
+		p, err := c.transport.Recv()
+		if err == WouldBlock {
+			logf(logTypeConnection, "Read would have blocked")
+			return nil
+		}
+		
+		if err != nil {
+			logf(logTypeConnection, "Error reading")
+			return err
+		}
+
+		logf(logTypeTrace, "Read packet %v", hex.EncodeToString(p))
+		
+		err = c.recvPacket(p)
+		if err != nil {
+			logf(logTypeConnection, "Error processing packet", err)
+		}
+	}
+}
+
+func (c *Connection) recvPacket(p []byte) error {
+	var hdr PacketHeader
+
+	logf(logTypeTrace, "Receiving packet %v", hex.EncodeToString(p))
+	hdrlen, err := decode(&hdr, p)
+	if err != nil {
+		logf(logTypeConnection, "Could not decode packet")
+		return err
+	}
+	assert(int(hdrlen) <= len(p))
+
+	// TODO(ekr@rtfm.com): Figure out which aead we need.
+	payload, err := c.readClear.unprotect(hdr.PacketNumber, p[:hdrlen], p[hdrlen:])
+	if err != nil {
+		logf(logTypeConnection, "Could not unprotect packet")
+		return err
+	}
+
+	typ := hdr.getHeaderType()
+	if !isLongHeader(&hdr) {
+		// TODO(ekr@rtfm.com): We are using this for both types.
+		typ = PacketType1RTTProtectedPhase0
+	}
+	logf(logTypeConnection, "Packet header %v, %d", hdr, typ)
+	switch (typ) {
+	case PacketTypeClientInitial:
+		err = c.processClientInitial(&hdr, payload)
+	default:
+		logf(logTypeConnection, "Unsupported packet type %v", typ)
+		err = fmt.Errorf("Unsupported packet type %v", typ)
+	}
+	
+	return err
+}
+
+func (c *Connection) processClientInitial(hdr *PacketHeader, payload []byte) error {
+	logf(logTypeHandshake, "Handling client initial packet")
+
+	if (c.state != kStateWaitClientInitial) {
+		// TODO(ekr@rtfm.com): Distinguish from retransmission.
+		return fmt.Errorf("Received repeat Client Initial")
+	}
+	
+	// Directly parse the ClientInitial rather than inserting it into
+	// the stream processor.
+	var sf streamFrame
+
+	n, err := decode(&sf, payload)
+	if err != nil {
+		logf(logTypeConnection, "Failure decoding initial stream frame in ClientInitial")
+		return err
+	}
+
+	if sf.StreamId != 0 {
+		return fmt.Errorf("Received ClientInitial with stream id != 0")
+	}
+
+	if sf.Offset != 0 {
+		return fmt.Errorf("Received ClientInitial with offset != 0")
+	}
+
+	payload = payload[n:]
+	logf(logTypeTrace, "Expecting %d bytes of padding", len(payload))
+	for _, b := range payload {
+		if b != 0 {
+			return fmt.Errorf("ClientInitial has non-padding after ClientHello")
+		}
+	}
+
+	sflt, err := c.tls.handshake(sf.Data)
+	if err != nil {
+		return err
+	}
+
+	logf(logTypeTrace, "Output of server handshake: %v", hex.EncodeToString(sflt))
+	
+	return err
 }

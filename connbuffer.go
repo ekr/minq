@@ -48,6 +48,12 @@ func newConnBuffer() *connBuffer {
 	}
 }
 
+func (p *connBuffer) input(data []byte) error {
+	logf(logTypeConnBuffer, "input %v", len(data))
+	_, err :=  p.r.Write(data)
+	return err
+}
+
 func (p *connBuffer) getOutput() []byte {
 	b := p.w.Bytes()
 	p.w.Reset()

@@ -32,7 +32,13 @@ func newTlsConn(conf TlsConfig, role uint8) *TlsConn {
 	}
 }
 
-func (c *TlsConn) handshake() ([]byte, error) {
+func (c *TlsConn) handshake(input []byte) ([]byte, error) {
+	if input != nil {
+		err := c.conn.input(input)
+		if err != nil {
+			return nil, err
+		}
+	}
 	assert(c.conn.OutputLen() == 0)
 	alert := c.tls.Handshake()
 	if alert != mint.AlertNoAlert && alert != mint.AlertWouldBlock {
