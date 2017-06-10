@@ -53,6 +53,7 @@ type Connection struct {
 	nextSendPacket uint64
 	queuedFrames []frame
 	mtu int
+	streams []stream
 }
 
 func NewConnection(trans Transport, role uint8, tls TlsConfig) *Connection{
@@ -60,7 +61,7 @@ func NewConnection(trans Transport, role uint8, tls TlsConfig) *Connection{
 	if role == kRoleServer {
 		initState = kStateWaitClientInitial
 	}
-	return &Connection{
+	c := Connection{
 		role,
 		initState,
 		kQuicVersion,
@@ -75,7 +76,10 @@ func NewConnection(trans Transport, role uint8, tls TlsConfig) *Connection{
 		uint64(0),
 		[]frame{},
 		kInitialMTU,
+		nil,
 	}
+	c.ensureStream(0)
+	return &c
 }
 
 func (c *Connection) established() bool {
@@ -94,6 +98,14 @@ func (c *Connection) expandPacketNumber(pn uint64) uint64 {
 	
 func (c *Connection) start() error {
 	return nil
+}
+
+func (c *Connection) ensureStream(id uint32) *stream {
+	// TODO(ekr@rtfm.com): this is not really done, because we never clean up
+	for i := uint32(len(c.streams)); i <= id; i++ {
+		c.streams = append(c.streams, stream{})
+	}
+	return &c.streams[id]
 }
 
 func (c *Connection) sendClientInitial() error {
@@ -124,7 +136,7 @@ func (c *Connection) sendClientInitial() error {
 
 	// Enqueue the frame for transmission.
 	c.enqueueFrame(f)
-
+	c.streams[0].writeOffset = uint64(len(ch))
 	
 	for i :=0; i < topad; i++ {
 		c.enqueueFrame(newPaddingFrame(0))
@@ -214,6 +226,15 @@ func (c *Connection) sendPacket(pt uint8) (int, error) {
 	return sent, nil
 }
 
+func (c *Connection) sendOnStream(streamId uint32, data []byte) error {
+	stream := c.ensureStream(streamId)
+	
+	f := newStreamFrame(streamId, stream.writeOffset, data)
+	c.enqueueFrame(f)
+
+	return nil
+}
+	
 func (c *Connection) input() error {
 	// TODO(ekr@rtfm.com): Do something smarter.
 	logf(logTypeConnection, "Connection.input()")
@@ -299,6 +320,8 @@ func (c *Connection) processClientInitial(hdr *PacketHeader, payload []byte) err
 		return fmt.Errorf("Received ClientInitial with offset != 0")
 	}
 
+
+	// TODO(ekr@rtfm.com): check that the length is long enough.
 	payload = payload[n:]
 	logf(logTypeTrace, "Expecting %d bytes of padding", len(payload))
 	for _, b := range payload {
@@ -307,12 +330,13 @@ func (c *Connection) processClientInitial(hdr *PacketHeader, payload []byte) err
 		}
 	}
 
+	c.streams[0].readOffset = uint64(len(sf.Data))
 	sflt, err := c.tls.handshake(sf.Data)
 	if err != nil {
 		return err
 	}
 
 	logf(logTypeTrace, "Output of server handshake: %v", hex.EncodeToString(sflt))
-	
-	return err
+
+	return c.sendOnStream(0, sflt)
 }
