@@ -40,6 +40,7 @@ func (f *frame) encode() error {
 	}
 	var err error
 	f.encoded, err = encode(f.f)
+	logf(logTypeFrame, "Frame encoded, total length=%v", len(f.encoded))
 	return err
 }
 
@@ -114,7 +115,7 @@ func newStreamFrame(stream uint32, offset uint64, data []byte) frame {
 		&streamFrame{
 			// TODO(ekr@tfm.com): One might want to allow non
 			// D bit, but not for now.
-			kFrameTypeStream | kFrameTypeFlagD,
+			kFrameTypeStream | kFrameTypeFlagD | 0xf,
 			uint16(len(data)),
 			stream,
 			offset,

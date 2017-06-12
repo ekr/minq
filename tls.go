@@ -1,6 +1,7 @@
 package chip
 
 import (
+	"encoding/hex"
 	"fmt"
 	"github.com/bifurcation/mint"
 )
@@ -16,6 +17,7 @@ func (c TlsConfig) toMint() *mint.Config {
 type TlsConn struct {
 	conn *connBuffer
 	tls *mint.Conn
+	finished bool
 }
 
 func newTlsConn(conf TlsConfig, role uint8) *TlsConn {
@@ -29,10 +31,13 @@ func newTlsConn(conf TlsConfig, role uint8) *TlsConn {
 	return &TlsConn{
 		c,
 		mint.NewConn(c, conf.toMint(), isClient),
+		false,
 	}
 }
 
 func (c *TlsConn) handshake(input []byte) ([]byte, error) {
+	logf(logTypeTls, "TLS handshake input len=%v", len(input))
+	logf(logTypeTrace, "TLS handshake input = %v", hex.EncodeToString(input))
 	if input != nil {
 		err := c.conn.input(input)
 		if err != nil {
@@ -41,10 +46,18 @@ func (c *TlsConn) handshake(input []byte) ([]byte, error) {
 	}
 	assert(c.conn.OutputLen() == 0)
 	alert := c.tls.Handshake()
-	if alert != mint.AlertNoAlert && alert != mint.AlertWouldBlock {
-		return nil, fmt.Errorf("TLS sent an alert")
+
+	switch alert {
+	case mint.AlertNoAlert:
+		logf(logTypeTls, "TLS handshake complete")
+		c.finished = true
+	case mint.AlertWouldBlock:
+		logf(logTypeTls, "TLS would have blocked")
+	default:
+		return nil, fmt.Errorf("TLS sent an alert %v", alert)
 	}
 	logf(logTypeTls, "TLS wrote %d bytes", c.conn.OutputLen())
-	
+
 	return c.conn.getOutput(), nil
 }
+

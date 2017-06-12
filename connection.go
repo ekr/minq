@@ -16,7 +16,7 @@ const (
 	kStateWaitClientInitial = connState(2)
 	kStateWaitServerFirstFlight = connState(3)
 	kStateWaitClientSecondFlight = connState(4)
-	kEstablished = connState(5)
+	kStateEstablished = connState(5)
 )
 
 const (
@@ -83,7 +83,7 @@ func NewConnection(trans Transport, role uint8, tls TlsConfig) *Connection{
 }
 
 func (c *Connection) established() bool {
-	return c.state == kEstablished
+	return c.state == kStateEstablished
 }
 
 func (c *Connection) zeroRttAllowed() bool {
@@ -98,6 +98,22 @@ func (c *Connection) expandPacketNumber(pn uint64) uint64 {
 	
 func (c *Connection) start() error {
 	return nil
+}
+
+func (c *Connection) label() string {
+	if c.role == kRoleClient {
+		return "client"
+	}
+	return "server"
+}
+
+func (c *Connection) setState(state connState) {
+	if c.state == state {
+		return
+	}
+	
+	logf(logTypeConnection, "Connection setting state to %v", state)
+	c.state = state
 }
 
 func (c *Connection) ensureStream(id uint32) *stream {
@@ -115,10 +131,8 @@ func (c *Connection) sendClientInitial() error {
 		return err
 	}
 	f := newStreamFrame(0, 0, ch)
-	fmt.Println("EKR: Stream frame=%v", f)
 	// Encode this so we know how much room it is going to take up.
 	l, err := f.length()
-	logf(logTypeHandshake, "Length of client hello stream frame=%d", l)	
 	if err != nil {
 		return err
 	}
@@ -141,6 +155,8 @@ func (c *Connection) sendClientInitial() error {
 	for i :=0; i < topad; i++ {
 		c.enqueueFrame(newPaddingFrame(0))
 	}
+
+	c.setState(kStateWaitServerFirstFlight)
 	return err
 }
 
@@ -149,17 +165,9 @@ func (c *Connection) enqueueFrame(f frame) error {
 	return nil
 }
 
-func (c *Connection) sendQueued() (int, error) {
-	// TODO(ekr@rtfm.com): Really write this.
-	_, err := c.sendPacket(PacketTypeClientInitial)
-	if err != nil {
-		return 0, err
-	}
-
-	return 1, nil	
-}
-
 func (c *Connection) sendPacket(pt uint8) (int, error) {
+	tosend := c.queuedFrames
+	logf(logTypeConnection, "Sending packet of type %v. %v eligible frames", pt, len(tosend))
 	left := c.mtu
 	
 	var connId connectionId
@@ -168,11 +176,15 @@ func (c *Connection) sendPacket(pt uint8) (int, error) {
 	connId = c.serverConnId
 	
 	if c.role == kRoleClient {
-		if pt == PacketTypeClientInitial {
+		if pt == PacketTypeClientInitial || pt == PacketTypeClientCleartext {
 			aead = c.writeClear
 			connId = c.clientConnId
 		} else if pt == PacketType0RTTProtected {
 			connId = c.clientConnId
+		}
+	} else {
+		if pt == PacketTypeServerCleartext {
+			aead = c.writeClear
 		}
 	}
 
@@ -199,9 +211,12 @@ func (c *Connection) sendPacket(pt uint8) (int, error) {
 	left -= len(hdr)
 
 	sent := 0
-	
-	for _, f := range c.queuedFrames {
+
+	// TODO(ekr@rtfm.com): Need to filter which frames can be sent in
+	// which packet.
+	for _, f := range tosend {
 		l, err := f.length()
+		logf(logTypeConnection, "%s: Adding frame of type %v len=%v", c.label(), f.f.getType(), l)
 		if err != nil {
 			return 0, err
 		}
@@ -228,9 +243,38 @@ func (c *Connection) sendPacket(pt uint8) (int, error) {
 
 func (c *Connection) sendOnStream(streamId uint32, data []byte) error {
 	stream := c.ensureStream(streamId)
-	
-	f := newStreamFrame(streamId, stream.writeOffset, data)
-	c.enqueueFrame(f)
+
+	for len(data) > 0 {
+		tocpy := 1024
+		if tocpy > len(data) {
+			tocpy = len(data)
+		}
+		stream.send(data[:tocpy])
+
+		data = data[tocpy:]
+	}
+
+	return nil
+}
+
+// TODO(ekr@rtfm.com): Write this properly.
+func (c *Connection) sendQueued() error {
+	// Right now, just send everything we have on stream 0
+	// as one packet per chunk. TODO(ekr@rtfm.com)
+	for _, chunk := range(c.streams[0].out) {
+		logf(logTypeConnection, "Sending chunk of len %v", len(chunk.data))
+		f := newStreamFrame(0, chunk.offset, chunk.data)
+		c.enqueueFrame(f)
+
+		pt := PacketTypeServerCleartext
+		if c.role == kRoleClient {
+			pt = PacketTypeClientCleartext
+		}
+		_, err := c.sendPacket(uint8(pt))
+		if err != nil {
+			return err
+		}
+	}
 
 	return nil
 }
@@ -262,7 +306,7 @@ func (c *Connection) input() error {
 func (c *Connection) recvPacket(p []byte) error {
 	var hdr PacketHeader
 
-	logf(logTypeTrace, "Receiving packet %v", hex.EncodeToString(p))
+	logf(logTypeTrace, "Receiving packet len=%v %v", len(p), hex.EncodeToString(p))
 	hdrlen, err := decode(&hdr, p)
 	if err != nil {
 		logf(logTypeConnection, "Could not decode packet")
@@ -286,6 +330,8 @@ func (c *Connection) recvPacket(p []byte) error {
 	switch (typ) {
 	case PacketTypeClientInitial:
 		err = c.processClientInitial(&hdr, payload)
+	case PacketTypeServerCleartext, PacketTypeClientCleartext:
+		err = c.processCleartext(&hdr, payload)
 	default:
 		logf(logTypeConnection, "Unsupported packet type %v", typ)
 		err = fmt.Errorf("Unsupported packet type %v", typ)
@@ -338,5 +384,67 @@ func (c *Connection) processClientInitial(hdr *PacketHeader, payload []byte) err
 
 	logf(logTypeTrace, "Output of server handshake: %v", hex.EncodeToString(sflt))
 
-	return c.sendOnStream(0, sflt)
+	err = c.sendOnStream(0, sflt)
+	if err != nil {
+		return err
+	}
+
+	c.setState(kStateWaitClientSecondFlight)
+	return c.sendQueued()
 }
+
+func (c *Connection) processCleartext(hdr *PacketHeader, payload []byte) error {
+	logf(logTypeHandshake, "Reading cleartext in state %v", c.state)
+	for len(payload) > 0 {
+		if c.role == kRoleClient {
+			if (c.state != kStateWaitServerFirstFlight) {
+				return fmt.Errorf("Received ServerClearText after handshake finished")
+			}
+			// TODO(ekr@rtfm.com): Cheat by clearig the client's outgoing queue.
+			// When we have ACKs here we won't need to do this.
+			c.queuedFrames = nil
+			
+		} else {
+			if (c.state != kStateWaitClientSecondFlight) {
+				return fmt.Errorf("Received ClientClearText after handshake finished")
+			}
+		}
+
+		var sf streamFrame
+		
+		n, err := decode(&sf, payload)
+		if err != nil {
+			logf(logTypeConnection, "Failure decoding stream frame in stream 0")
+			return err
+		}
+		payload = payload[n:]
+		
+		if sf.StreamId != 0 {
+			return fmt.Errorf("Received cleartext with stream id != 0")
+		}
+
+		c.streams[0].newFrameData(sf.Offset, sf.Data)
+		available := c.streams[0].readAll()
+		out, err := c.tls.handshake(available)
+		if err != nil {
+			return err
+		}
+
+		if len(out) > 0 {
+			c.sendOnStream(0, out)
+			err = c.sendQueued()
+			if err != nil {
+				return err
+			}
+			assert(c.tls.finished)
+			c.setState(kStateEstablished)
+		}
+	}
+	// TODO(ekr@rtfm.com): Check for more on stream 0, but we need to properly handle
+	// encrypted NST.
+
+	
+	return nil
+}
+
+

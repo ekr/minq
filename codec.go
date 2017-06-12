@@ -69,7 +69,9 @@ func encode(i interface{}) (ret []byte, err error) {
 		}
 	}
 
-	return buf.Bytes(), nil
+	ret = buf.Bytes()
+	logf(logTypeCodec, "Total encoded length = %v", len(ret))
+	return ret, nil
 }
 
 func uintDecode(buf *bytes.Reader, v reflect.Value, encodingSize uintptr) (uintptr, error) {

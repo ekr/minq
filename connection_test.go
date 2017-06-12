@@ -1,7 +1,6 @@
 package chip
 
 import (
-	"fmt"
 	"testing"
 )
 
@@ -26,10 +25,8 @@ func newTestTransportPipe(autoFlush bool) *testTransportPipe {
 
 func (t *testTransportPipe) Send(p *testPacket) {
 	if !t.autoFlush {
-		fmt.Println("Appending to in buffer")
 		t.in = append(t.in, p)
 	} else {
-		fmt.Println("Appending to out buffer")		
 		t.out = append(t.in, p)
 	}
 }
@@ -110,5 +107,34 @@ func TestSendReceiveCI(t *testing.T) {
 
 	err = server.input()
 	assertNotError(t, err, "Error processing CI")
+}
+
+func TestSendReceiveCISI(t *testing.T) {
+	cTrans, sTrans := newTestTransportPair(true)
+	
+	client := NewConnection(cTrans, kRoleClient, TlsConfig{})
+	assertNotNil(t, client, "Couldn't make client")
+
+	server := NewConnection(sTrans, kRoleServer, TlsConfig{})
+	assertNotNil(t, server, "Couldn't make server")
+	
+	err := client.sendClientInitial()
+	assertNotError(t, err, "Couldn't send client initial packet")
+
+	_, err = client.sendPacket(PacketTypeClientInitial)
+	assertNotError(t, err, "Couldn't flush queue")
+
+	err = server.input()
+	assertNotError(t, err, "Error processing CI")
+
+	_, err = server.sendPacket(PacketTypeServerCleartext)
+	assertNotError(t, err, "Error sending Server first flight")
+
+	err = client.input()
+	assertNotError(t, err, "Error processing SH")
+
+	err = server.input()
+	assertNotError(t, err, "Error processing CFIN")
+	
 }
 
