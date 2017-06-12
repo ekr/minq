@@ -27,7 +27,7 @@ func (t *testTransportPipe) Send(p *testPacket) {
 	if !t.autoFlush {
 		t.in = append(t.in, p)
 	} else {
-		t.out = append(t.in, p)
+		t.out = append(t.out, p)
 	}
 }
 
@@ -85,9 +85,6 @@ func TestSendCI(t *testing.T) {
 	
 	err := client.sendClientInitial()
 	assertNotError(t, err, "Couldn't send client initial packet")
-
-	_, err = client.sendPacket(PacketTypeClientInitial)
-	assertNotError(t, err, "Couldn't flush queue")
 }
 
 func TestSendReceiveCI(t *testing.T) {
@@ -101,9 +98,6 @@ func TestSendReceiveCI(t *testing.T) {
 	
 	err := client.sendClientInitial()
 	assertNotError(t, err, "Couldn't send client initial packet")
-
-	_, err = client.sendPacket(PacketTypeClientInitial)
-	assertNotError(t, err, "Couldn't flush queue")
 
 	err = server.input()
 	assertNotError(t, err, "Error processing CI")
@@ -121,20 +115,17 @@ func TestSendReceiveCISI(t *testing.T) {
 	err := client.sendClientInitial()
 	assertNotError(t, err, "Couldn't send client initial packet")
 
-	_, err = client.sendPacket(PacketTypeClientInitial)
-	assertNotError(t, err, "Couldn't flush queue")
-
 	err = server.input()
 	assertNotError(t, err, "Error processing CI")
-
-	_, err = server.sendPacket(PacketTypeServerCleartext)
-	assertNotError(t, err, "Error sending Server first flight")
 
 	err = client.input()
 	assertNotError(t, err, "Error processing SH")
 
 	err = server.input()
 	assertNotError(t, err, "Error processing CFIN")
+
+	assertEquals(t, client.state, kStateEstablished)
+	assertEquals(t, server.state, kStateEstablished)	
 	
 }
 

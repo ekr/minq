@@ -51,9 +51,9 @@ type Connection struct {
 	writeProtected Aead
 	readProtected Aead
 	nextSendPacket uint64
-	queuedFrames []frame
 	mtu int
 	streams []stream
+	clientInitial []byte
 }
 
 func NewConnection(trans Transport, role uint8, tls TlsConfig) *Connection{
@@ -74,8 +74,8 @@ func NewConnection(trans Transport, role uint8, tls TlsConfig) *Connection{
 		nil,
 		nil,
 		uint64(0),
-		[]frame{},
 		kInitialMTU,
+		nil,
 		nil,
 	}
 	c.ensureStream(0)
@@ -112,13 +112,27 @@ func (c *Connection) setState(state connState) {
 		return
 	}
 	
-	logf(logTypeConnection, "Connection setting state to %v", state)
+	logf(logTypeConnection, "%s: Connection state %s -> %v", c.label(), stateName(c.state), stateName(state))
 	c.state = state
 }
 
-func stateName(state connState) {
-	
-
+func stateName(state connState) string {
+	// TODO(ekr@rtfm.com): is there a way to get the name from the
+	// const value.
+	switch (state) {
+	case kStateInit:
+		return "kStateInit"
+	case kStateWaitClientInitial:
+		return "kStateWaitClientInitial"
+	case kStateWaitServerFirstFlight:
+		return "kStateWaitServerFirstFlight"
+	case kStateWaitClientSecondFlight:
+		return "kStateWaitClientSecondFlight"
+	case kStateEstablished:
+		return "kStateEstablished"
+	default:
+		return "Unknown state"
+	}
 }
 
 func (c *Connection) ensureStream(id uint32) *stream {
@@ -130,12 +144,18 @@ func (c *Connection) ensureStream(id uint32) *stream {
 }
 
 func (c *Connection) sendClientInitial() error {
+	queued := make([]frame, 0)
+	var err error
+
 	logf(logTypeHandshake, "Sending client initial packet")
-	ch, err := c.tls.handshake(nil)
-	if err != nil {
-		return err
+	if c.clientInitial == nil {
+		c.clientInitial, err = c.tls.handshake(nil)
+		if err != nil {
+			return err
+		}
 	}
-	f := newStreamFrame(0, 0, ch)
+	
+	f := newStreamFrame(0, 0, c.clientInitial)
 	// Encode this so we know how much room it is going to take up.
 	l, err := f.length()
 	if err != nil {
@@ -154,25 +174,21 @@ func (c *Connection) sendClientInitial() error {
 	logf(logTypeHandshake, "Padding with %d padding frames", topad)
 
 	// Enqueue the frame for transmission.
-	c.enqueueFrame(f)
-	c.streams[0].writeOffset = uint64(len(ch))
+	queued = append(queued, f)
+		
+	c.streams[0].writeOffset = uint64(len(c.clientInitial))
 	
 	for i :=0; i < topad; i++ {
-		c.enqueueFrame(newPaddingFrame(0))
+		queued = append(queued, newPaddingFrame(0))
 	}
 
 	c.setState(kStateWaitServerFirstFlight)
-	return err
+
+	return c.sendPacket(PacketTypeClientInitial, queued)
 }
 
-func (c *Connection) enqueueFrame(f frame) error {
-	c.queuedFrames = append(c.queuedFrames, f)
-	return nil
-}
-
-func (c *Connection) sendPacket(pt uint8) (int, error) {
-	tosend := c.queuedFrames
-	logf(logTypeConnection, "Sending packet of type %v. %v eligible frames", pt, len(tosend))
+func (c *Connection) sendPacket(pt uint8, tosend []frame) error {
+	logf(logTypeConnection, "Sending packet of type %v. %v frames", pt, len(tosend))
 	left := c.mtu
 	
 	var connId connectionId
@@ -211,7 +227,7 @@ func (c *Connection) sendPacket(pt uint8) (int, error) {
 	// TODO(ekr@rtfm.com): this is gross.
 	hdr, err := encode(&p.PacketHeader)
 	if err != nil {
-		return 0, err
+		return err
 	}
 	left -= len(hdr)
 
@@ -221,13 +237,11 @@ func (c *Connection) sendPacket(pt uint8) (int, error) {
 	// which packet.
 	for _, f := range tosend {
 		l, err := f.length()
-		logf(logTypeConnection, "%s: Adding frame of type %v len=%v", c.label(), f.f.getType(), l)
 		if err != nil {
-			return 0, err
+			return err
 		}
-		if l > left {
-			break
-		}
+
+		assert(l <= left)
 
 		p.payload = append(p.payload, f.encoded...)
 		sent++
@@ -235,7 +249,7 @@ func (c *Connection) sendPacket(pt uint8) (int, error) {
 
 	protected, err := aead.protect(p.PacketNumber, hdr, p.payload)
 	if err != nil {
-		return 0, err
+		return err
 	}
 
 	packet := append(hdr, protected...)
@@ -243,10 +257,11 @@ func (c *Connection) sendPacket(pt uint8) (int, error) {
 	logf(logTypeTrace, "Sending packet len=%d, len=%v", len(packet), hex.EncodeToString(packet))
 	c.transport.Send(packet)
 	
-	return sent, nil
+	return nil
 }
 
 func (c *Connection) sendOnStream(streamId uint32, data []byte) error {
+	logf(logTypeConnection, "%v: sending %v bytes on stream %v", c.label(), len(data), streamId)
 	stream := c.ensureStream(streamId)
 
 	for len(data) > 0 {
@@ -266,16 +281,18 @@ func (c *Connection) sendOnStream(streamId uint32, data []byte) error {
 func (c *Connection) sendQueued() error {
 	// Right now, just send everything we have on stream 0
 	// as one packet per chunk. TODO(ekr@rtfm.com)
-	for _, chunk := range(c.streams[0].out) {
+	stream := &c.streams[0]
+	logf(logTypeConnection, "%v: processing outgoing queue #chunks=%v", c.label(), len(stream.out))
+	
+	for _, chunk := range(stream.out) {
 		logf(logTypeConnection, "Sending chunk of len %v", len(chunk.data))
 		f := newStreamFrame(0, chunk.offset, chunk.data)
-		c.enqueueFrame(f)
 
 		pt := PacketTypeServerCleartext
 		if c.role == kRoleClient {
 			pt = PacketTypeClientCleartext
 		}
-		_, err := c.sendPacket(uint8(pt))
+		err := c.sendPacket(uint8(pt), []frame{f})
 		if err != nil {
 			return err
 		}
@@ -405,10 +422,13 @@ func (c *Connection) processCleartext(hdr *PacketHeader, payload []byte) error {
 			if (c.state != kStateWaitServerFirstFlight) {
 				return fmt.Errorf("Received ServerClearText after handshake finished")
 			}
-			// TODO(ekr@rtfm.com): Cheat by clearig the client's outgoing queue.
-			// When we have ACKs here we won't need to do this.
-			c.queuedFrames = nil
-			
+			// Ignore ACKs, so:
+			// 1. Remove the clientInitial packet.
+			// 2. Set the outgoing stream offset accordingly
+			if len(c.clientInitial) > 0 {
+				c.streams[0].writeOffset = uint64(len(c.clientInitial))
+				c.clientInitial = nil
+			}
 		} else {
 			if (c.state != kStateWaitClientSecondFlight) {
 				return fmt.Errorf("Received ClientClearText after handshake finished")
