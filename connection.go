@@ -116,6 +116,11 @@ func (c *Connection) setState(state connState) {
 	c.state = state
 }
 
+func stateName(state connState) {
+	
+
+}
+
 func (c *Connection) ensureStream(id uint32) *stream {
 	// TODO(ekr@rtfm.com): this is not really done, because we never clean up
 	for i := uint32(len(c.streams)); i <= id; i++ {
