@@ -15,8 +15,8 @@ func (c TlsConfig) toMint() *mint.Config {
 }
 
 type TlsConn struct {
-	conn *connBuffer
-	tls *mint.Conn
+	conn     *connBuffer
+	tls      *mint.Conn
 	finished bool
 }
 
@@ -27,7 +27,7 @@ func newTlsConn(conf TlsConfig, role uint8) *TlsConn {
 	}
 
 	c := newConnBuffer()
-	
+
 	return &TlsConn{
 		c,
 		mint.NewConn(c, conf.toMint(), isClient),
@@ -60,4 +60,3 @@ func (c *TlsConn) handshake(input []byte) ([]byte, error) {
 
 	return c.conn.getOutput(), nil
 }
-

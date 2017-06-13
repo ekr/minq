@@ -85,7 +85,7 @@ func isLongHeader(p *PacketHeader) bool {
 }
 
 func (p *PacketHeader) getHeaderType() byte {
-	if (isLongHeader(p)) {
+	if isLongHeader(p) {
 		return p.Type & 0x7f
 	}
 	panic("Can't parse short header yet")
@@ -152,5 +152,3 @@ func decodePacket(c ConnectionState, aead Aead, b []byte) (*Packet, error) {
 
 	return &Packet{hdr, pt}, nil
 }
-
-

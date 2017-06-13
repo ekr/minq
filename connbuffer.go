@@ -8,14 +8,13 @@ import (
 	"time"
 )
 
-
 type connBuffer struct {
-	r     *bytes.Buffer
-	w     *bytes.Buffer
+	r *bytes.Buffer
+	w *bytes.Buffer
 }
 
 func (p *connBuffer) Read(data []byte) (n int, err error) {
-	logf(logTypeConnBuffer, "Reading %v", n)	
+	logf(logTypeConnBuffer, "Reading %v", n)
 	n, err = p.r.Read(data)
 
 	// Suppress bytes.Buffer's EOF on an empty buffer
@@ -34,7 +33,6 @@ func (p *connBuffer) Close() error {
 	return nil
 }
 
-
 func (p *connBuffer) LocalAddr() net.Addr                { return nil }
 func (p *connBuffer) RemoteAddr() net.Addr               { return nil }
 func (p *connBuffer) SetDeadline(t time.Time) error      { return nil }
@@ -50,7 +48,7 @@ func newConnBuffer() *connBuffer {
 
 func (p *connBuffer) input(data []byte) error {
 	logf(logTypeConnBuffer, "input %v", len(data))
-	_, err :=  p.r.Write(data)
+	_, err := p.r.Write(data)
 	return err
 }
 

@@ -15,14 +15,14 @@ const logConfigVar = "MINQ_LOG"
 
 // Pre-defined log types
 const (
-	logTypeAead = "aead"
-	logTypeCodec = "codec"
+	logTypeAead       = "aead"
+	logTypeCodec      = "codec"
 	logTypeConnBuffer = "connbuffer"
 	logTypeConnection = "connection"
-	logTypeFrame = "frame"
-	logTypeHandshake = "handshake"
-	logTypeTls = "tls"
-	logTypeTrace = "trace"
+	logTypeFrame      = "frame"
+	logTypeHandshake  = "handshake"
+	logTypeTls        = "tls"
+	logTypeTrace      = "trace"
 )
 
 var (

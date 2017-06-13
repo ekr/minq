@@ -32,7 +32,7 @@ func packetHeaderEDE(t *testing.T, p *PacketHeader) {
 
 func TestLongHeader(t *testing.T) {
 	p := kTestPacketHeader
-	
+
 	p.setLongHeaderType(PacketTypeClientInitial)
 
 	packetHeaderEDE(t, &p)
@@ -45,27 +45,25 @@ type ConnectionStateMock struct {
 	aead AeadFNV
 }
 
-func (c *ConnectionStateMock) established() bool { return false }
+func (c *ConnectionStateMock) established() bool    { return false }
 func (c *ConnectionStateMock) zeroRttAllowed() bool { return false }
 func (c *ConnectionStateMock) expandPacketNumber(pn uint64) uint64 {
 	return pn
 }
 
-
-
 func TestEDEPacket(t *testing.T) {
 	var c ConnectionStateMock
-	
-	p := Packet {
+
+	p := Packet{
 		kTestPacketHeader,
-		[]byte{'a','b','c','d','e','f','g'},
+		[]byte{'a', 'b', 'c', 'd', 'e', 'f', 'g'},
 	}
 
 	encoded, err := encodePacket(&c, &c.aead, &p)
 	assertNotError(t, err, "Could not encode packet")
 
 	p2, err := decodePacket(&c, &c.aead, encoded)
-	assertNotError(t, err, "Could not decode packet")	
+	assertNotError(t, err, "Could not decode packet")
 
 	encoded2, err := encodePacket(&c, &c.aead, p2)
 	assertNotError(t, err, "Could not re-encode packet")
