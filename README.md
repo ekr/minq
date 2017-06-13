@@ -1,4 +1,4 @@
-![A mink forming a Q](/minq.svg)
+![A mink forming a Q](/minq.png)
 
 minq -- A minimal QUIC stack
 ============================
