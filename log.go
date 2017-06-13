@@ -1,6 +1,6 @@
 // Lightly modified from Mint
 
-package chip
+package minq
 
 import (
 	"fmt"

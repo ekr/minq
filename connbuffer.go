@@ -1,5 +1,5 @@
 // Stolen from Mint and renamed
-package chip
+package minq
 
 import (
 	"bytes"

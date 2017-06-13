@@ -1,4 +1,4 @@
-package chip
+package minq
 
 import (
 	"fmt"
