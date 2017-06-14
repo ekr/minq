@@ -11,7 +11,7 @@ import (
 
 // We use this environment variable to control logging.  It should be a
 // comma-separated list of log tags (see below) or "*" to enable all logging.
-const logConfigVar = "CHIP_LOG"
+const logConfigVar = "MINQ_LOG"
 
 // Pre-defined log types
 const (
