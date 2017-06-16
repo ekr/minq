@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"fmt"
 	"reflect"
+	"strings"
+	"strconv"
 )
 
 const (
@@ -34,6 +36,78 @@ func arrayEncode(buf *bytes.Buffer, v reflect.Value) error {
 	buf.Write(b)
 
 	return nil
+}
+
+// Length specifications are of the form:
+//
+// lengthbits: "B:L1,L2,...LN
+//
+// where B is the rightmost bit of the length bits and
+// L_n are the various lengths (in bytes) indicated by
+// the bit values in sequence. N must be a power of 2
+// and the right number of bytes is drawn to compute it.
+type lengthSpec struct {
+	rightBit uint
+	numBits uint
+	values []int
+}
+
+func parseLengthSpecification(spec string) (*lengthSpec, error) {
+	spl := strings.Split(spec, ":")
+	assert(len(spl) == 2)
+
+	// Rightmost bit.
+	p, err := strconv.ParseUint(spl[0],10,8)
+	if err != nil {
+		return nil, err
+	}
+	bitr := uint(p)
+	vals := strings.Split(spl[1], ",")
+
+	// Figure out how many bits we need.
+	nvals := int(1)
+	var bits int
+	for bits = 1; bits <=8; bits++ {
+		nvals <<= 1
+		if nvals == len(vals) {
+			break;
+		}
+	}
+	assert(bits < 9)
+
+	// Now compute the values
+	valArr := make([]int, nvals)
+	for i, v := range vals {
+		valArr[i], err = strconv.Atoi(v)
+		if err != nil {
+			return nil, err
+		}
+	}
+	
+	return &lengthSpec{
+		bitr,
+		uint(bits),
+		valArr,
+	}, nil
+}
+
+func computeLengthFromSpec(t byte, f reflect.StructField) uintptr {
+	st := f.Tag.Get("lengthbits")
+	if st == "" {
+		return CodecDefaultSize
+	}
+
+	spec, err := parseLengthSpecification(st)
+	assert(err == nil)
+
+	mask := byte(0)
+	bit := uint(0)
+	for ; bit < spec.numBits; bit++ {
+		mask |= (1 << bit)
+	}
+	idx := int(t >> (spec.rightBit - 1) & mask)
+
+	return uintptr(spec.values[idx])
 }
 
 // Encode all the fields of a struct to a bytestring.

@@ -3,6 +3,7 @@ package minq
 import (
 	"encoding/hex"
 	"fmt"
+	"reflect"
 	"testing"
 )
 
@@ -76,4 +77,21 @@ func TestCodecOverrideDecodeLength(t *testing.T) {
 	assertNotError(t, err, "Could not re-encode")
 
 	assertByteEquals(t, res, res2)
+}
+
+func TestParseLengthSpec(t *testing.T) {
+	// 1 bit, 2 values
+	spec, err := parseLengthSpecification("1:8,16")
+	assertNotError(t, err, "Couldn't parse single bit value")
+	fmt.Println(*spec)
+	assertX(t, reflect.DeepEqual(*spec, lengthSpec{1, 1, []int{8, 16}}),
+		"Spec parsed correctly")
+
+	// 2 bit, 4 values
+	spec, err = parseLengthSpecification("3:8,16,24,32")
+	assertNotError(t, err, "Couldn't parse two bit value")
+	fmt.Println(*spec)
+	assertX(t, reflect.DeepEqual(*spec, lengthSpec{3, 2, []int{8, 16, 24, 32}}),
+		"Spec parsed correctly")
+	
 }
