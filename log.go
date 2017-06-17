@@ -23,6 +23,7 @@ const (
 	logTypeHandshake  = "handshake"
 	logTypeTls        = "tls"
 	logTypeTrace      = "trace"
+	logTypeServer     = "server"
 )
 
 var (

@@ -174,13 +174,13 @@ func (c *Connection) sendClientInitial() error {
 	}
 
 	/*
-		 * draft-ietf-quic-transport S 9.8;
-		 *
-		 * Clients MUST ensure that the first packet in a connection, and any
-	         * etransmissions of those octets, has a QUIC packet size of least 1232
-		 * octets for an IPv6 packet and 1252 octets for an IPv4 packet.  In the
-		 * absence of extensions to the IP header, padding to exactly these
-		 * values will result in an IP packet that is 1280 octets. */
+			 * draft-ietf-quic-transport S 9.8;
+			 *
+			 * Clients MUST ensure that the first packet in a connection, and any
+		         * etransmissions of those octets, has a QUIC packet size of least 1232
+			 * octets for an IPv6 packet and 1252 octets for an IPv4 packet.  In the
+			 * absence of extensions to the IP header, padding to exactly these
+			 * values will result in an IP packet that is 1280 octets. */
 	topad := kMinimumClientInitialLength - (kInitialIntegrityCheckLength + l + kInitialIntegrityCheckLength)
 	logf(logTypeHandshake, "Padding with %d padding frames", topad)
 
@@ -375,30 +375,6 @@ func (c *Connection) sendQueued() (int, error) {
 	return sent, nil
 }
 
-func (c *Connection) input() error {
-	// TODO(ekr@rtfm.com): Do something smarter.
-	logf(logTypeConnection, "Connection.input()")
-	for {
-		p, err := c.transport.Recv()
-		if err == WouldBlock {
-			logf(logTypeConnection, "Read would have blocked")
-			return nil
-		}
-
-		if err != nil {
-			logf(logTypeConnection, "Error reading")
-			return err
-		}
-
-		logf(logTypeTrace, "Read packet %v", hex.EncodeToString(p))
-
-		err = c.recvPacket(p)
-		if err != nil {
-			logf(logTypeConnection, "Error processing packet", err)
-		}
-	}
-}
-
 // Walk through all the streams and see how many bytes are outstanding.
 // Right now this is very expensive.
 
@@ -410,7 +386,7 @@ func (c *Connection) outstandingQueuedBytes() (n int) {
 	return
 }
 
-func (c *Connection) recvPacket(p []byte) error {
+func (c *Connection) input(p []byte) error {
 	var hdr PacketHeader
 
 	logf(logTypeTrace, "Receiving packet len=%v %v", len(p), hex.EncodeToString(p))
@@ -683,9 +659,10 @@ func (c *Connection) checkTimer() (int, error) {
 	// Right now just re-send everything we might need to send.
 
 	// Special case the client's first message.
-	if c.state == kStateWaitServerFirstFlight {
+	if c.role == kRoleClient && (c.state == kStateInit ||
+		c.state == kStateWaitServerFirstFlight) {
 		err := c.sendClientInitial()
-		return 0, err
+		return 1, err
 	}
 
 	return c.sendQueued()

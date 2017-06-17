@@ -75,6 +75,26 @@ func newTestTransportPair(autoFlush bool) (a, b *testTransport) {
 	return
 }
 
+func inputAll(c *Connection) error {
+	t := c.transport.(*testTransport)
+
+	for {
+		p, err := t.Recv()
+		if err != nil && err != WouldBlock {
+			return err
+		}
+
+		if p == nil {
+			return nil
+		}
+
+		err = c.input(p)
+		if err != nil {
+			return err
+		}
+	}
+}
+
 func TestSendCI(t *testing.T) {
 	cTrans, _ := newTestTransportPair(true)
 
@@ -97,7 +117,8 @@ func TestSendReceiveCI(t *testing.T) {
 	err := client.sendClientInitial()
 	assertNotError(t, err, "Couldn't send client initial packet")
 
-	err = server.input()
+	err = inputAll(server)
+
 	assertNotError(t, err, "Error processing CI")
 }
 
@@ -113,13 +134,13 @@ func TestSendReceiveCISI(t *testing.T) {
 	err := client.sendClientInitial()
 	assertNotError(t, err, "Couldn't send client initial packet")
 
-	err = server.input()
+	err = inputAll(server)
 	assertNotError(t, err, "Error processing CI")
 
-	err = client.input()
+	err = inputAll(client)
 	assertNotError(t, err, "Error processing SH")
 
-	err = server.input()
+	err = inputAll(server)
 	assertNotError(t, err, "Error processing CFIN")
 
 	fmt.Println("Checking client state")
@@ -142,7 +163,7 @@ func TestSendReceiveCISI(t *testing.T) {
 	assertEquals(t, 1, n)
 
 	// Now the client can ingest it.
-	err = client.input()
+	err = inputAll(client)
 	assertNotError(t, err, "Error processing server ACK")
 	n = client.outstandingQueuedBytes()
 	assertEquals(t, 0, n)

@@ -84,6 +84,16 @@ func isLongHeader(p *PacketHeader) bool {
 	return isSet(p.Type, PacketFlagLongHeader)
 }
 
+func (p *PacketHeader) hasConnId() bool {
+	if isLongHeader(p) {
+		return true
+	}
+	if (p.Type & PacketFlagC) != 0 {
+		return true
+	}
+	return false
+}
+
 func (p *PacketHeader) getHeaderType() byte {
 	if isLongHeader(p) {
 		return p.Type & 0x7f

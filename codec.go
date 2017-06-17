@@ -4,8 +4,8 @@ import (
 	"bytes"
 	"fmt"
 	"reflect"
-	"strings"
 	"strconv"
+	"strings"
 )
 
 const (
@@ -48,8 +48,8 @@ func arrayEncode(buf *bytes.Buffer, v reflect.Value) error {
 // and the right number of bytes is drawn to compute it.
 type lengthSpec struct {
 	rightBit uint
-	numBits uint
-	values []int
+	numBits  uint
+	values   []int
 }
 
 func parseLengthSpecification(spec string) (*lengthSpec, error) {
@@ -57,7 +57,7 @@ func parseLengthSpecification(spec string) (*lengthSpec, error) {
 	assert(len(spl) == 2)
 
 	// Rightmost bit.
-	p, err := strconv.ParseUint(spl[0],10,8)
+	p, err := strconv.ParseUint(spl[0], 10, 8)
 	if err != nil {
 		return nil, err
 	}
@@ -67,10 +67,10 @@ func parseLengthSpecification(spec string) (*lengthSpec, error) {
 	// Figure out how many bits we need.
 	nvals := int(1)
 	var bits int
-	for bits = 1; bits <=8; bits++ {
+	for bits = 1; bits <= 8; bits++ {
 		nvals <<= 1
 		if nvals == len(vals) {
-			break;
+			break
 		}
 	}
 	assert(bits < 9)
@@ -83,7 +83,7 @@ func parseLengthSpecification(spec string) (*lengthSpec, error) {
 			return nil, err
 		}
 	}
-	
+
 	return &lengthSpec{
 		bitr,
 		uint(bits),

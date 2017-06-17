@@ -93,5 +93,5 @@ func TestParseLengthSpec(t *testing.T) {
 	fmt.Println(*spec)
 	assertX(t, reflect.DeepEqual(*spec, lengthSpec{3, 2, []int{8, 16, 24, 32}}),
 		"Spec parsed correctly")
-	
+
 }

@@ -1,4 +1,3 @@
-// Stolen from Mint and renamed
 package minq
 
 import (
