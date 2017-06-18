@@ -44,8 +44,6 @@ func main() {
 		}
 		b = b[:n]
 
-		fmt.Println("Packet from ", addr)
-		
 		conn, err := server.Input(addr, b)
 		if err != nil {
 			fmt.Println("server.Input returned error: ", err)

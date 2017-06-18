@@ -84,6 +84,18 @@ func isLongHeader(p *PacketHeader) bool {
 	return isSet(p.Type, PacketFlagLongHeader)
 }
 
+func (p *PacketHeader) isProtected() bool {
+	if !isLongHeader(p) {
+		return true
+	}
+
+	switch p.Type & 0x7f {
+	case PacketTypeClientInitial, PacketTypeClientCleartext, PacketTypeServerCleartext:
+		return false
+	}
+	return true
+}
+
 func (p *PacketHeader) hasConnId() bool {
 	if isLongHeader(p) {
 		return true
@@ -132,6 +144,9 @@ func (p *PacketHeader) setLongHeaderType(typ byte) {
 	p.Type = PacketFlagLongHeader | typ
 }
 
+/*
+We don't use these.
+
 func encodePacket(c ConnectionState, aead Aead, p *Packet) ([]byte, error) {
 	hdr, err := encode(&p.PacketHeader)
 	if err != nil {
@@ -162,3 +177,4 @@ func decodePacket(c ConnectionState, aead Aead, b []byte) (*Packet, error) {
 
 	return &Packet{hdr, pt}, nil
 }
+*/

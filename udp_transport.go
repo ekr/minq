@@ -23,7 +23,7 @@ func (t *UdpTransport) Send(p []byte) error {
 	return nil
 }
 
-func NewUdpTransport(u *net.UDPConn, r *net.UDPAddr) *UdpTransport{
+func NewUdpTransport(u *net.UDPConn, r *net.UDPAddr) *UdpTransport {
 	return &UdpTransport{u, r}
 }
 

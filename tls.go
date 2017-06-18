@@ -18,6 +18,7 @@ type TlsConn struct {
 	conn     *connBuffer
 	tls      *mint.Conn
 	finished bool
+	cs 	 *mint.CipherSuiteParams
 }
 
 func newTlsConn(conf TlsConfig, role uint8) *TlsConn {
@@ -32,6 +33,7 @@ func newTlsConn(conf TlsConfig, role uint8) *TlsConn {
 		c,
 		mint.NewConn(c, conf.toMint(), isClient),
 		false,
+		nil,
 	}
 }
 
@@ -50,6 +52,8 @@ func (c *TlsConn) handshake(input []byte) ([]byte, error) {
 	switch alert {
 	case mint.AlertNoAlert:
 		logf(logTypeTls, "TLS handshake complete")
+		cs := c.tls.GetConnectionState().CipherSuite
+		c.cs = &cs
 		c.finished = true
 	case mint.AlertWouldBlock:
 		logf(logTypeTls, "TLS would have blocked")
@@ -60,3 +64,4 @@ func (c *TlsConn) handshake(input []byte) ([]byte, error) {
 
 	return c.conn.getOutput(), nil
 }
+

@@ -11,6 +11,7 @@ type streamChunk struct {
 }
 
 type stream struct {
+	c           *Connection
 	id          uint32
 	writeOffset uint64
 	readOffset  uint64
@@ -92,4 +93,10 @@ func (s *stream) outstandingQueuedBytes() (n int) {
 	}
 
 	return
+}
+
+// Write bytes to a stream.
+func (s *stream) Write(b []byte) {
+	s.send(b)
+	s.c.sendQueued()
 }

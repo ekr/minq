@@ -38,8 +38,9 @@ func TestLongHeader(t *testing.T) {
 	packetHeaderEDE(t, &p)
 }
 
-// Whole packet tests.
-
+/* 
+* TODO(ekr@rtfm.com): Rewrite this code and merge it into 
+* connection.go 
 // Mock for connection state
 type ConnectionStateMock struct {
 	aead AeadFNV
@@ -70,3 +71,4 @@ func TestEDEPacket(t *testing.T) {
 
 	assertByteEquals(t, encoded, encoded2)
 }
+*/

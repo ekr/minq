@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/hex"
 	"fmt"
+	"runtime"
 	"testing"
 )
 
@@ -40,8 +41,16 @@ func unhex(h string) []byte {
 }
 
 func assertX(t *testing.T, test bool, msg string) {
+	prefix := string("")
+	for i := 1; ; i++ {
+		_, file, line, ok := runtime.Caller(i)
+		if !ok {
+			break
+		}
+		prefix = fmt.Sprintf("%v: %d\n", file, line) + prefix
+	}
 	if !test {
-		t.Fatalf(msg)
+		t.Fatalf(prefix + msg)
 	}
 }
 

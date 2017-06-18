@@ -73,7 +73,6 @@ func TestServer(t *testing.T) {
 	// Make sure we get the same server back.
 	assertEquals(t, s1, s2)
 
-	
 	// Now make a new client and ensure we get a different server connection
 	u2, _ := net.ResolveUDPAddr("udp", "127.0.0.1:4444") // Just a fixed address
 	cTrans2, sTrans2 := newTestTransportPair(true)

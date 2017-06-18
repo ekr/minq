@@ -95,6 +95,39 @@ func inputAll(c *Connection) error {
 	}
 }
 
+type csPair struct {
+	client *Connection
+	server *Connection
+}
+
+func newCsPair(t *testing.T) *csPair {
+	cTrans, sTrans := newTestTransportPair(true)
+
+	client := NewConnection(cTrans, RoleClient, TlsConfig{})
+	assertNotNil(t, client, "Couldn't make client")
+
+	server := NewConnection(sTrans, RoleServer, TlsConfig{})
+	assertNotNil(t, server, "Couldn't make server")
+
+	return &csPair{
+		client,
+		server,
+	}
+}
+
+func (pair *csPair) handshake(t *testing.T) {
+	err := pair.client.sendClientInitial()
+	assertNotError(t, err, "Couldn't send client initial packet")
+
+	for pair.client.state != kStateEstablished && pair.server.state != kStateEstablished {
+		err = inputAll(pair.server)
+		assertNotError(t, err, "Error processing CI")
+
+		err = inputAll(pair.client)
+		assertNotError(t, err, "Error processing SH")
+	}
+}
+
 func TestSendCI(t *testing.T) {
 	cTrans, _ := newTestTransportPair(true)
 
@@ -157,7 +190,7 @@ func TestSendReceiveCISI(t *testing.T) {
 	assertX(t, n > 0, "Client should still have un-acked data")
 
 	// Run the server timer which will cause it to send
-	// it's backup ACK frame.
+	// its backup ACK frame.
 	n, err = server.CheckTimer()
 	assertNotError(t, err, "Couldn't run server timer")
 	assertEquals(t, 1, n)
@@ -167,4 +200,28 @@ func TestSendReceiveCISI(t *testing.T) {
 	assertNotError(t, err, "Error processing server ACK")
 	n = client.outstandingQueuedBytes()
 	assertEquals(t, 0, n)
+}
+
+func TestSendReceiveData(t *testing.T) {
+	testString := "abcdef"
+	pair := newCsPair(t)
+
+	pair.handshake(t)
+
+	// Force the client to get the ACK from the server
+	pair.server.CheckTimer()
+	err := inputAll(pair.client)
+
+	s := pair.client.CreateStream()
+	assertNotNil(t, s, "Failed to create a stream")
+
+	s.Write([]byte(testString))
+
+	err = inputAll(pair.server)
+	assertNotError(t, err, "Couldn't read input packets")
+
+	b := pair.server.GetStream(1).readAll()
+	assertNotNil(t, b, "Read data from server")
+
+	assertByteEquals(t, []byte(testString), b)
 }

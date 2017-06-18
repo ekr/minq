@@ -204,6 +204,13 @@ func arrayDecode(buf *bytes.Reader, v reflect.Value, encodingSize uintptr) (uint
 	}
 
 	val := make([]byte, encodingSize)
+
+	logf(logTypeCodec, "Reading array of size %v", encodingSize)
+
+	// Go will return EOF if you try to read 0 bytes off a closed stream.
+	if encodingSize == 0 {
+		return 0, nil
+	}
 	rv, err := buf.Read(val)
 	if err != nil {
 		return 0, err
@@ -248,6 +255,7 @@ func decode(i interface{}, data []byte) (uintptr, error) {
 			return 0, fmt.Errorf("Unknown type")
 		}
 		if res != nil {
+			logf(logTypeCodec, "Error while reading field %v: %v", tipe.Name, res)
 			return bytesread, res
 		}
 		bytesread += br

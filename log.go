@@ -24,7 +24,7 @@ const (
 	logTypeTls        = "tls"
 	logTypeTrace      = "trace"
 	logTypeServer     = "server"
-	logTypeUdp	  = "udp"
+	logTypeUdp        = "udp"
 )
 
 var (
