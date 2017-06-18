@@ -7,7 +7,7 @@ import (
 // TransportFactory makes transports bound to a specific remote
 // address.
 type TransportFactory interface {
-	makeTransport(remote net.UDPAddr) Transport
+	makeTransport(remote *net.UDPAddr) (Transport, error)
 }
 
 // Server represents a QUIC server.
@@ -18,7 +18,8 @@ type Server struct {
 	idTable      map[connectionId]*Connection
 }
 
-func (s *Server) input(addr net.UDPAddr, data []byte) (*Connection, error) {
+func (s *Server) Input(addr *net.UDPAddr, data []byte) (*Connection, error) {
+	logf(logTypeServer, "Received packet from %v", addr)
 	var hdr PacketHeader
 
 	_, err := decode(&hdr, data)
@@ -37,10 +38,16 @@ func (s *Server) input(addr net.UDPAddr, data []byte) (*Connection, error) {
 	}
 
 	if conn == nil {
-		conn = NewConnection(s.transFactory.makeTransport(addr), kRoleServer, s.tls)
+		logf(logTypeServer, "New server connection from addr %v", addr)
+		trans, err := s.transFactory.makeTransport(addr)
+		if err != nil {
+			return nil, err
+		}
+		conn = NewConnection(trans, RoleServer, s.tls)
+		s.addrTable[addr.String()] = conn
 	}
 
-	return conn, conn.input(data)
+	return conn, conn.Input(data)
 }
 
 func NewServer(factory TransportFactory, tls TlsConfig) *Server {

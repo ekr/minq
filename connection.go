@@ -6,8 +6,8 @@ import (
 )
 
 const (
-	kRoleClient = 1
-	kRoleServer = 2
+	RoleClient = 1
+	RoleServer = 2
 )
 
 type connState uint8
@@ -67,7 +67,7 @@ type Connection struct {
 
 func NewConnection(trans Transport, role uint8, tls TlsConfig) *Connection {
 	initState := kStateInit
-	if role == kRoleServer {
+	if role == RoleServer {
 		initState = kStateWaitClientInitial
 	}
 	c := Connection{
@@ -112,7 +112,7 @@ func (c *Connection) start() error {
 }
 
 func (c *Connection) label() string {
-	if c.role == kRoleClient {
+	if c.role == RoleClient {
 		return "client"
 	}
 	return "server"
@@ -208,7 +208,7 @@ func (c *Connection) sendPacket(pt uint8, tosend []frame) error {
 	aead = c.writeProtected
 	connId = c.serverConnId
 
-	if c.role == kRoleClient {
+	if c.role == RoleClient {
 		if pt == PacketTypeClientInitial || pt == PacketTypeClientCleartext {
 			aead = c.writeClear
 			connId = c.clientConnId
@@ -320,7 +320,7 @@ func (c *Connection) sendQueued() (int, error) {
 
 	// And the packet type we want.
 	pt := PacketTypeServerCleartext
-	if c.role == kRoleClient {
+	if c.role == RoleClient {
 		pt = PacketTypeClientCleartext
 	}
 
@@ -361,8 +361,8 @@ func (c *Connection) sendQueued() (int, error) {
 
 	// Last ditch, make an ACK-only frame if we know there are ACKs that
 	// didn't get sent.
-	if len(stream.out) == 0 || acksSent < len(acks) {
-		logf(logTypeConnection, "Sending backup ACK frame")
+	if acksSent < len(acks) {
+		logf(logTypeConnection, "Sending backup ACK frame for %v acks", len(acks))
 		af, _, err := c.makeAckFrame(acks, c.mtu)
 		err = c.sendPacket(uint8(pt), []frame{*af})
 		if err != nil {
@@ -386,7 +386,7 @@ func (c *Connection) outstandingQueuedBytes() (n int) {
 	return
 }
 
-func (c *Connection) input(p []byte) error {
+func (c *Connection) Input(p []byte) error {
 	var hdr PacketHeader
 
 	logf(logTypeTrace, "Receiving packet len=%v %v", len(p), hex.EncodeToString(p))
@@ -501,7 +501,7 @@ func (c *Connection) processCleartext(hdr *PacketHeader, payload []byte) error {
 		payload = payload[n:]
 		switch inner := f.f.(type) {
 		case *streamFrame:
-			if c.role == kRoleClient {
+			if c.role == RoleClient {
 				if c.state != kStateWaitServerFirstFlight {
 					return fmt.Errorf("Received ServerClearText after handshake finished")
 				}
@@ -655,15 +655,19 @@ func (c *Connection) prepareAckRange() []ackRange {
 	return ranges
 }
 
-func (c *Connection) checkTimer() (int, error) {
+func (c *Connection) CheckTimer() (int, error) {
 	// Right now just re-send everything we might need to send.
 
 	// Special case the client's first message.
-	if c.role == kRoleClient && (c.state == kStateInit ||
+	if c.role == RoleClient && (c.state == kStateInit ||
 		c.state == kStateWaitServerFirstFlight) {
 		err := c.sendClientInitial()
 		return 1, err
 	}
 
 	return c.sendQueued()
+}
+
+func (c *Connection) Established() bool {
+	return c.state == kStateEstablished
 }

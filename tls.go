@@ -22,7 +22,7 @@ type TlsConn struct {
 
 func newTlsConn(conf TlsConfig, role uint8) *TlsConn {
 	isClient := true
-	if role == kRoleServer {
+	if role == RoleServer {
 		isClient = false
 	}
 

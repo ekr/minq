@@ -11,11 +11,11 @@ type testTransportFactory struct {
 	transports map[string]*testTransport
 }
 
-func (f *testTransportFactory) makeTransport(remote net.UDPAddr) Transport {
-	return f.transports[remote.String()]
+func (f *testTransportFactory) makeTransport(remote *net.UDPAddr) (Transport, error) {
+	return f.transports[remote.String()], nil
 }
 
-func (f *testTransportFactory) addTransport(remote net.UDPAddr, t *testTransport) {
+func (f *testTransportFactory) addTransport(remote *net.UDPAddr, t *testTransport) {
 	f.transports[remote.String()] = t
 }
 
@@ -32,7 +32,7 @@ func serverInputAll(t *testing.T, trans *testTransport, s *Server, u net.UDPAddr
 			return clast, nil
 		}
 
-		c, err := s.input(u, p)
+		c, err := s.Input(&u, p)
 		if err != nil {
 			return nil, err
 		}
@@ -50,15 +50,15 @@ func TestServer(t *testing.T) {
 
 	cTrans, sTrans := newTestTransportPair(true)
 	factory := &testTransportFactory{make(map[string]*testTransport)}
-	factory.addTransport(*u, sTrans)
+	factory.addTransport(u, sTrans)
 
 	server := NewServer(factory, TlsConfig{})
 	assertNotNil(t, server, "Couldn't make server")
 
-	client := NewConnection(cTrans, kRoleClient, TlsConfig{})
+	client := NewConnection(cTrans, RoleClient, TlsConfig{})
 	assertNotNil(t, client, "Couldn't make client")
 
-	n, err := client.checkTimer()
+	n, err := client.CheckTimer()
 	assertEquals(t, 1, n)
 	assertNotError(t, err, "Couldn't send client initial")
 
@@ -73,18 +73,19 @@ func TestServer(t *testing.T) {
 	// Make sure we get the same server back.
 	assertEquals(t, s1, s2)
 
+	
 	// Now make a new client and ensure we get a different server connection
 	u2, _ := net.ResolveUDPAddr("udp", "127.0.0.1:4444") // Just a fixed address
 	cTrans2, sTrans2 := newTestTransportPair(true)
-	factory.addTransport(*u2, sTrans2)
-	client = NewConnection(cTrans2, kRoleClient, TlsConfig{})
+	factory.addTransport(u2, sTrans2)
+	client = NewConnection(cTrans2, RoleClient, TlsConfig{})
 	assertNotNil(t, client, "Couldn't make client")
 
-	n, err = client.checkTimer()
+	n, err = client.CheckTimer()
 	assertEquals(t, 1, n)
 	assertNotError(t, err, "Couldn't send client initial")
 
-	s3, err := serverInputAll(t, sTrans, server, *u2)
+	s3, err := serverInputAll(t, sTrans2, server, *u2)
 	assertNotError(t, err, "Couldn't consume client initial")
 
 	assertX(t, s1 != s3, "Got the same server connection back with a different address")

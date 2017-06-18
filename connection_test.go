@@ -88,7 +88,7 @@ func inputAll(c *Connection) error {
 			return nil
 		}
 
-		err = c.input(p)
+		err = c.Input(p)
 		if err != nil {
 			return err
 		}
@@ -98,7 +98,7 @@ func inputAll(c *Connection) error {
 func TestSendCI(t *testing.T) {
 	cTrans, _ := newTestTransportPair(true)
 
-	client := NewConnection(cTrans, kRoleClient, TlsConfig{})
+	client := NewConnection(cTrans, RoleClient, TlsConfig{})
 	assertNotNil(t, client, "Couldn't make client")
 
 	err := client.sendClientInitial()
@@ -108,10 +108,10 @@ func TestSendCI(t *testing.T) {
 func TestSendReceiveCI(t *testing.T) {
 	cTrans, sTrans := newTestTransportPair(true)
 
-	client := NewConnection(cTrans, kRoleClient, TlsConfig{})
+	client := NewConnection(cTrans, RoleClient, TlsConfig{})
 	assertNotNil(t, client, "Couldn't make client")
 
-	server := NewConnection(sTrans, kRoleServer, TlsConfig{})
+	server := NewConnection(sTrans, RoleServer, TlsConfig{})
 	assertNotNil(t, server, "Couldn't make server")
 
 	err := client.sendClientInitial()
@@ -125,10 +125,10 @@ func TestSendReceiveCI(t *testing.T) {
 func TestSendReceiveCISI(t *testing.T) {
 	cTrans, sTrans := newTestTransportPair(true)
 
-	client := NewConnection(cTrans, kRoleClient, TlsConfig{})
+	client := NewConnection(cTrans, RoleClient, TlsConfig{})
 	assertNotNil(t, client, "Couldn't make client")
 
-	server := NewConnection(sTrans, kRoleServer, TlsConfig{})
+	server := NewConnection(sTrans, RoleServer, TlsConfig{})
 	assertNotNil(t, server, "Couldn't make server")
 
 	err := client.sendClientInitial()
@@ -158,7 +158,7 @@ func TestSendReceiveCISI(t *testing.T) {
 
 	// Run the server timer which will cause it to send
 	// it's backup ACK frame.
-	n, err = server.checkTimer()
+	n, err = server.CheckTimer()
 	assertNotError(t, err, "Couldn't run server timer")
 	assertEquals(t, 1, n)
 
