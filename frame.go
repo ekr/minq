@@ -23,7 +23,7 @@ const (
 
 const (
 	kFrameTypeFlagF = frameType(0x40)
-	kFrameTypeFlagD = frameType(0x20)
+	kFrameTypeFlagD = frameType(0x01)
 )
 
 type innerFrame interface {
