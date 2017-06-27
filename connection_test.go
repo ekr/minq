@@ -203,7 +203,7 @@ func TestSendReceiveCISI(t *testing.T) {
 }
 
 func TestSendReceiveData(t *testing.T) {
-	testString := "abcdef"
+	testString := []byte("abcdef")
 	pair := newCsPair(t)
 
 	pair.handshake(t)
@@ -212,16 +212,29 @@ func TestSendReceiveData(t *testing.T) {
 	pair.server.CheckTimer()
 	err := inputAll(pair.client)
 
-	s := pair.client.CreateStream()
-	assertNotNil(t, s, "Failed to create a stream")
+	// Write data C->S
+	cs := pair.client.CreateStream()
+	assertNotNil(t, cs, "Failed to create a stream")
+	cs.Write(testString)
 
-	s.Write([]byte(testString))
-
+	// Read data C->S
 	err = inputAll(pair.server)
 	assertNotError(t, err, "Couldn't read input packets")
-
-	b := pair.server.GetStream(1).readAll()
+	ss := pair.server.GetStream(1)
+	b := ss.readAll()
 	assertNotNil(t, b, "Read data from server")
-
 	assertByteEquals(t, []byte(testString), b)
+
+	// Write data S->C
+	for i, _ := range b {
+		b[i] ^= 0xff
+	}
+	ss.Write(b)
+
+	// Read data C->S
+	err = inputAll(pair.client)
+	b2 := cs.readAll()
+	assertNotNil(t, b2, "Read data from client")
+	assertByteEquals(t, b, b2)
+
 }
