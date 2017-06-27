@@ -67,7 +67,7 @@ type Connection struct {
 	readProtected  *cryptoState
 	nextSendPacket uint64
 	mtu            int
-	streams        []stream
+	streams        []Stream
 	maxStream      uint32
 	clientInitial  []byte
 	recvdClear     recvdPackets
@@ -152,10 +152,10 @@ func stateName(state connState) string {
 	}
 }
 
-func (c *Connection) ensureStream(id uint32) *stream {
+func (c *Connection) ensureStream(id uint32) *Stream {
 	// TODO(ekr@rtfm.com): this is not really done, because we never clean up
 	for i := uint32(len(c.streams)); i <= id; i++ {
-		c.streams = append(c.streams, stream{id: id, c: c})
+		c.streams = append(c.streams, Stream{id: id, c: c})
 	}
 	return &c.streams[id]
 }
@@ -374,7 +374,7 @@ func (c *Connection) sendStreamPacket(pt uint8, frames []frame, acks []ackRange)
 }
 
 // Send all the queued data on a set of streams with packet type |pt|
-func (c *Connection) sendQueuedStreams(pt uint8, streams []stream, recvd *recvdPackets) (int, error) {
+func (c *Connection) sendQueuedStreams(pt uint8, streams []Stream, recvd *recvdPackets) (int, error) {
 	left := c.mtu
 	frames := make([]frame, 0)
 	sent := int(0)
@@ -829,7 +829,7 @@ func (c *Connection) packetNonce(send bool, pn uint64) []byte {
 	return encodeArgs(pn)
 }
 
-func (c *Connection) CreateStream() *stream {
+func (c *Connection) CreateStream() *Stream {
 	nextStream := c.maxStream + 1
 
 	// Client opens odd streams
@@ -846,7 +846,7 @@ func (c *Connection) CreateStream() *stream {
 	return c.ensureStream(nextStream)
 }
 
-func (c *Connection) GetStream(id uint32) *stream {
+func (c *Connection) GetStream(id uint32) *Stream {
 	iid := int(id)
 
 	if id < id {

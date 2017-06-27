@@ -10,7 +10,7 @@ type streamChunk struct {
 	pns    []uint64 // The packet numbers where we sent this.
 }
 
-type stream struct {
+type Stream struct {
 	c           *Connection
 	id          uint32
 	writeOffset uint64
@@ -19,7 +19,7 @@ type stream struct {
 	out         []streamChunk
 }
 
-func (s *stream) readAll() []byte {
+func (s *Stream) readAll() []byte {
 	logf(logTypeConnection, "stream readAll() %d chunks", len(s.in))
 	ret := make([]byte, 0) // Arbitrary
 
@@ -40,7 +40,7 @@ func (s *stream) readAll() []byte {
 	return ret
 }
 
-func (s *stream) newFrameData(offset uint64, payload []byte) {
+func (s *Stream) newFrameData(offset uint64, payload []byte) {
 	logf(logTypeConnection, "Receiving stream with offset=%v, length=%v", offset, len(payload))
 	logf(logTypeTrace, "Stream payload %v", hex.EncodeToString(payload))
 	c := &streamChunk{offset, dup(payload), nil}
@@ -59,12 +59,12 @@ func (s *stream) newFrameData(offset uint64, payload []byte) {
 	logf(logTypeConnection, "Stream now has %v chunks", len(s.in))
 }
 
-func (s *stream) send(payload []byte) {
+func (s *Stream) send(payload []byte) {
 	s.out = append(s.out, streamChunk{s.writeOffset, dup(payload), nil})
 	s.writeOffset += uint64(len(payload))
 }
 
-func (s *stream) removeAckedChunks(pn uint64) {
+func (s *Stream) removeAckedChunks(pn uint64) {
 	logf(logTypeConnection, "Removing ACKed chunks for stream %v, PN=%v, currently %v chunks", s.id, pn, len(s.out))
 
 	for i := int(0); i < len(s.out); {
@@ -87,7 +87,7 @@ func (s *stream) removeAckedChunks(pn uint64) {
 	}
 }
 
-func (s *stream) outstandingQueuedBytes() (n int) {
+func (s *Stream) outstandingQueuedBytes() (n int) {
 	for _, ch := range s.out {
 		n += len(ch.data)
 	}
@@ -96,7 +96,7 @@ func (s *stream) outstandingQueuedBytes() (n int) {
 }
 
 // Write bytes to a stream.
-func (s *stream) Write(b []byte) {
+func (s *Stream) Write(b []byte) {
 	s.send(b)
 	s.c.sendQueued()
 }
