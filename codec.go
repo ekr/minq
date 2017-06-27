@@ -127,9 +127,11 @@ func encode(i interface{}) (ret []byte, err error) {
 			// encoding.
 			encodingSize := uintptr(CodecDefaultSize)
 			lFunc, getLength := reflected.Type().MethodByName(tipe.Name + "__length")
+			logf(logTypeCodec, "Looking for length overrider for type %v", tipe.Name)
 			if getLength {
 				length_result := lFunc.Func.Call([]reflect.Value{reflect.ValueOf(i).Elem()})
 				encodingSize = uintptr(length_result[0].Uint())
+				logf(logTypeCodec, "Overriden length to %v", encodingSize)
 			}
 			res = uintEncode(&buf, field, encodingSize)
 		case reflect.Array, reflect.Slice:

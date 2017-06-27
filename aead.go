@@ -21,6 +21,7 @@ func (a *AeadFNV) Overhead() int {
 
 func (a *AeadFNV) Seal(dst []byte, nonce []byte, plaintext []byte, aad []byte) []byte {
 	logf(logTypeAead, "FNV protecting aad len=%d, plaintext len=%d", len(aad), len(plaintext))
+	logf(logTypeTrace, "FNV input %x %x", aad, plaintext)
 	h := fnv.New64a()
 	h.Write(nonce)
 	h.Write(aad)
@@ -85,7 +86,7 @@ func (a *AeadWrapper) fmtNonce(in []byte) []byte {
 
 func (a *AeadWrapper) Seal(dst []byte, nonce []byte, plaintext []byte, aad []byte) []byte {
 	logf(logTypeAead, "AES protecting aad len=%d, plaintext len=%d", len(aad), len(plaintext))
-	logf(logTypeTrace, "AES input %x", plaintext)
+	logf(logTypeTrace, "AES input %x %x", aad, plaintext)
 	ret := a.cipher.Seal(dst, a.fmtNonce(nonce), plaintext, aad)
 	logf(logTypeTrace, "AES output %x", ret)
 

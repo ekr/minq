@@ -114,16 +114,17 @@ func (p *PacketHeader) getHeaderType() byte {
 	return 0
 }
 
-func PacketConnectionID__length(p *PacketHeader) uintptr {
-	if isLongHeader(p) || isSet(p.Type, PacketFlagC) {
+func (p PacketHeader) ConnectionID__length() uintptr {
+	if isLongHeader(&p) || isSet(p.Type, PacketFlagC) {
 		return 8
 	}
 	return CodecDefaultSize
 }
 
-func PacketPacketNumber__length(p *PacketHeader) uintptr {
-	if isLongHeader(p) {
-		return 0
+func (p PacketHeader) PacketNumber__length() uintptr {
+	logf(logTypeTrace, "PacketNumber__length()")
+	if isLongHeader(&p) {
+		return 4
 	}
 
 	switch p.Type {
@@ -133,8 +134,8 @@ func PacketPacketNumber__length(p *PacketHeader) uintptr {
 		return 4
 	}
 }
-func PacketVersion__length(p *PacketHeader) uintptr {
-	if isLongHeader(p) {
+func (p PacketHeader) Version__length() uintptr {
+	if isLongHeader(&p) {
 		return 4
 	}
 	return CodecDefaultSize

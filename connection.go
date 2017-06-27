@@ -202,7 +202,7 @@ func (c *Connection) sendClientInitial() error {
 			 * octets for an IPv6 packet and 1252 octets for an IPv4 packet.  In the
 			 * absence of extensions to the IP header, padding to exactly these
 			 * values will result in an IP packet that is 1280 octets. */
-	topad := kMinimumClientInitialLength - (kInitialIntegrityCheckLength + l + kInitialIntegrityCheckLength)
+	topad := kMinimumClientInitialLength - (kLongHeaderLength + l + kInitialIntegrityCheckLength)
 	logf(logTypeHandshake, "Padding with %d padding frames", topad)
 
 	// Enqueue the frame for transmission.
