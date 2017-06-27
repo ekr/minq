@@ -2,6 +2,7 @@ package minq
 
 import (
 	"crypto/cipher"
+	"crypto/rand"
 	"encoding/hex"
 	"fmt"
 )
@@ -75,16 +76,12 @@ type Connection struct {
 }
 
 func NewConnection(trans Transport, role uint8, tls TlsConfig) *Connection {
-	initState := kStateInit
-	if role == RoleServer {
-		initState = kStateWaitClientInitial
-	}
 	c := Connection{
 		role,
-		initState,
+		kStateInit,
 		kQuicVersion,
-		0, // TODO(ekr@rtfm.com): generate
-		0, // TODO(ekr@rtfm.com): generate
+		0,
+		0,
 		trans,
 		newTlsConn(tls, role),
 		&AeadFNV{},
@@ -98,6 +95,18 @@ func NewConnection(trans Transport, role uint8, tls TlsConfig) *Connection {
 		nil,
 		newRecvdPackets(),
 		newRecvdPackets(),
+	}
+
+	connId, err := generateConnId()
+	if err != nil {
+		return nil
+	}
+
+	if role == RoleClient {
+		c.clientConnId = connId
+	} else {
+		c.serverConnId = connId
+		c.setState(kStateWaitClientInitial)
 	}
 	c.ensureStream(0)
 	return &c
@@ -163,6 +172,12 @@ func (c *Connection) ensureStream(id uint32) *Stream {
 func (c *Connection) sendClientInitial() error {
 	queued := make([]frame, 0)
 	var err error
+
+	// Generate conn ID
+	c.clientConnId, err = generateConnId()
+	if err != nil {
+		return err
+	}
 
 	logf(logTypeHandshake, "Sending client initial packet")
 	if c.clientInitial == nil {
@@ -520,12 +535,19 @@ func (c *Connection) processClientInitial(hdr *PacketHeader, payload []byte) err
 	}
 
 	// TODO(ekr@rtfm.com): check that the length is long enough.
+	// TODO(ekr@rtfm.com): check version, etc.
 	payload = payload[n:]
 	logf(logTypeTrace, "Expecting %d bytes of padding", len(payload))
 	for _, b := range payload {
 		if b != 0 {
 			return fmt.Errorf("ClientInitial has non-padding after ClientHello")
 		}
+	}
+
+	// Generate the connection ID.
+	c.serverConnId, err = generateConnId()
+	if err != nil {
+		return err
 	}
 
 	c.streams[0].readOffset = uint64(len(sf.Data))
@@ -854,4 +876,21 @@ func (c *Connection) GetStream(id uint32) *Stream {
 	}
 
 	return &c.streams[iid]
+}
+
+func generateConnId() (connectionId, error) {
+	b := make([]byte, 8)
+
+	_, err := rand.Read(b)
+	if err != nil {
+		return 0, err
+	}
+
+	ret := uint64(0)
+	for _, c := range b {
+		ret <<= 8
+		ret |= uint64(c)
+	}
+
+	return connectionId(ret), nil
 }

@@ -30,7 +30,11 @@ func (s *Server) Input(addr *net.UDPAddr, data []byte) (*Connection, error) {
 	var conn *Connection
 
 	if hdr.hasConnId() {
+		logf(logTypeServer, "Received conn id %v", hdr.ConnectionID)
 		conn = s.idTable[hdr.ConnectionID]
+		if conn != nil {
+			logf(logTypeServer, "Found by conn id")
+		}
 	}
 
 	if conn == nil {
@@ -44,6 +48,7 @@ func (s *Server) Input(addr *net.UDPAddr, data []byte) (*Connection, error) {
 			return nil, err
 		}
 		conn = NewConnection(trans, RoleServer, s.tls)
+		s.idTable[conn.serverConnId] = conn
 		s.addrTable[addr.String()] = conn
 	}
 
