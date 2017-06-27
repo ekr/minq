@@ -72,8 +72,8 @@ func newPaddingFrame(stream uint32) frame {
 type streamFrame struct {
 	Typ        frameType
 	StreamId   uint32
-	DataLength uint16
 	Offset     uint64
+	DataLength uint16
 	Data       []byte
 }
 
@@ -120,8 +120,8 @@ func newStreamFrame(stream uint32, offset uint64, data []byte) frame {
 			// Set all of SSOO to 1
 			kFrameTypeStream | 0x1e | kFrameTypeFlagD,
 			uint32(stream),
-			uint16(len(data)),
 			offset,
+			uint16(len(data)),
 			dup(data),
 		},
 		nil,
