@@ -118,7 +118,7 @@ func newStreamFrame(stream uint32, offset uint64, data []byte) frame {
 			// TODO(ekr@tfm.com): One might want to allow non
 			// D bit, but not for now.
 			// Set all of SSOO to 1
-			kFrameTypeStream | 0xe | kFrameTypeFlagD,
+			kFrameTypeStream | 0x1e | kFrameTypeFlagD,
 			uint32(stream),
 			uint16(len(data)),
 			offset,
