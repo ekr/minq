@@ -71,8 +71,8 @@ func newPaddingFrame(stream uint32) frame {
 // Stream
 type streamFrame struct {
 	Typ        frameType
-	DataLength uint16
 	StreamId   uint32
+	DataLength uint16
 	Offset     uint64
 	Data       []byte
 }
@@ -92,13 +92,13 @@ func (f streamFrame) DataLength__length() uintptr {
 
 func (f streamFrame) StreamId__length() uintptr {
 	lengths := []uintptr{1, 2, 3, 4}
-	val := (f.Typ >> 2) & 0x03
+	val := (f.Typ >> 3) & 0x03
 	return lengths[val]
 }
 
 func (f streamFrame) Offset__length() uintptr {
 	lengths := []uintptr{0, 2, 4, 8}
-	val := (f.Typ) & 0x03
+	val := (f.Typ >> 1) & 0x03
 	return lengths[val]
 }
 
@@ -117,9 +117,10 @@ func newStreamFrame(stream uint32, offset uint64, data []byte) frame {
 		&streamFrame{
 			// TODO(ekr@tfm.com): One might want to allow non
 			// D bit, but not for now.
-			kFrameTypeStream | kFrameTypeFlagD | 0xf,
+			// Set all of SSOO to 1
+			kFrameTypeStream | 0xe | kFrameTypeFlagD,
+			uint32(stream),
 			uint16(len(data)),
-			stream,
 			offset,
 			dup(data),
 		},
