@@ -23,7 +23,6 @@ func (a *AeadFNV) Seal(dst []byte, nonce []byte, plaintext []byte, aad []byte) [
 	logf(logTypeAead, "FNV protecting aad len=%d, plaintext len=%d", len(aad), len(plaintext))
 	logf(logTypeTrace, "FNV input %x %x", aad, plaintext)
 	h := fnv.New64a()
-	h.Write(nonce)
 	h.Write(aad)
 	h.Write(plaintext)
 	res := encodeArgs(plaintext, h.Sum64())
@@ -40,7 +39,6 @@ func (a *AeadFNV) Open(dst []byte, nonce []byte, ciphertext []byte, aad []byte) 
 	pt := ciphertext[:len(ciphertext)-8]
 	at := ciphertext[len(ciphertext)-8:]
 	h := fnv.New64a()
-	h.Write(nonce)
 	h.Write(aad)
 	h.Write(pt)
 

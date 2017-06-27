@@ -65,7 +65,6 @@ func testAeadWrongAead(t *testing.T, aead cipher.AEAD, aead2 cipher.AEAD) {
 
 func testAeadAll(t *testing.T, aead cipher.AEAD) {
 	t.Run("Success", func(t *testing.T) { testAeadSuccess(t, aead) })
-	t.Run("WrongPacketNumber", func(t *testing.T) { testAeadWrongPacketNumber(t, aead) })
 	t.Run("WrongHeader", func(t *testing.T) { testAeadWrongHeader(t, aead) })
 	t.Run("CorruptCT", func(t *testing.T) { testAeadCorruptCT(t, aead) })
 	t.Run("CorruptTag", func(t *testing.T) { testAeadCorruptTag(t, aead) })
@@ -91,4 +90,5 @@ func TestAeadAES128GCM(t *testing.T) {
 	testAeadAll(t, a1)
 	t.Run("WrongKey", func(t *testing.T) { testAeadWrongAead(t, a1, a2) })
 	t.Run("WrongIV", func(t *testing.T) { testAeadWrongAead(t, a1, a3) })
+	t.Run("WrongPacketNumber", func(t *testing.T) { testAeadWrongPacketNumber(t, a1) })
 }
