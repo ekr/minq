@@ -210,6 +210,25 @@ func newAckFrame(rs []ackRange) (*frame, error) {
 	return &frame{0, &f, nil}, nil
 }
 
+type goawayFrame struct {
+	LargestClientStreamId uint32
+	LargestServerStreamId uint32
+}
+
+func (f goawayFrame) getType() frameType {
+	return kFrameTypeGoaway
+}
+
+type connectionCloseFrame struct {
+	ErrorCode          uint32
+	ReasonPhraseLength uint16
+	ReasonPhrase       []byte
+}
+
+func (f connectionCloseFrame) getType() frameType {
+	return kFrameTypeConnectionClose
+}
+
 func decodeFrame(data []byte) (uintptr, *frame, error) {
 	var inner innerFrame
 	t := data[0]
@@ -217,6 +236,8 @@ func decodeFrame(data []byte) (uintptr, *frame, error) {
 	switch {
 	case t == uint8(kFrameTypePadding):
 		inner = &paddingFrame{}
+	case t == uint8(kFrameTypeGoaway):
+		inner = &goawayFrame{}
 	case t >= uint8(kFrameTypeAck) && t <= 0xbf:
 		inner = &ackFrame{}
 	case t >= uint8(kFrameTypeStream):
