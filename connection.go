@@ -810,6 +810,7 @@ func (p *recvdPackets) packetSetReceived(pn uint64) {
 	p.r[pn-p.min] = true
 }
 
+// Prepare a list of the ACK ranges, starting at the highest
 func (p *recvdPackets) prepareAckRange() []ackRange {
 	var inrange = false
 	var last uint64

@@ -106,6 +106,7 @@ func (s *Stream) Write(b []byte) {
 
 // Read from a stream into a buffer.
 func (s *Stream) Read(b []byte) (int, error) {
+	logf(logTypeConnection, "Reading from stream %v", s.Id())
 	if len(s.in) == 0 {
 		return 0, WouldBlock
 	}
@@ -113,9 +114,10 @@ func (s *Stream) Read(b []byte) (int, error) {
 		return 0, WouldBlock
 	}
 	n := copy(b, s.in[0].data)
-	if n == len(s.in) {
+	if n == len(s.in[0].data) {
 		s.in = s.in[1:]
 	}
+	s.readOffset += uint64(n)
 	return n, nil
 }
 

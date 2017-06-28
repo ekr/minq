@@ -129,8 +129,13 @@ func newStreamFrame(stream uint32, offset uint64, data []byte) frame {
 }
 
 type ackBlock struct {
-	Gap    uint8
-	Length uint64
+	lengthLength uintptr
+	Gap          uint8
+	Length       uint64
+}
+
+func (f ackBlock) Length__length() uintptr {
+	return f.lengthLength
 }
 
 type ackFrame struct {
@@ -168,7 +173,7 @@ func (f ackFrame) FirstAckBlockLength__length() uintptr {
 }
 
 func (f ackFrame) AckBlockSection__length() uintptr {
-	return uintptr(f.NumBlocks) * (1 + f.FirstAckBlockLength__length())
+	return uintptr(f.NumBlocks) * (1 + f.LargestAcknowledged__length())
 }
 
 func (f ackFrame) TimestampSection__length() uintptr {
@@ -176,16 +181,17 @@ func (f ackFrame) TimestampSection__length() uintptr {
 }
 
 func newAckFrame(rs []ackRange) (*frame, error) {
-	logf(logTypeFrame, "Making ACK frame")
+	logf(logTypeFrame, "Making ACK frame %v", rs)
+
 	var f ackFrame
 
 	f.Type = kFrameTypeAck | 0xb
 	if len(rs) > 1 {
 		f.Type |= 0x10
-		f.NumBlocks = uint8(len(rs))
+		f.NumBlocks = uint8(len(rs) - 1)
 	}
-	f.LargestAcknowledged = rs[len(rs)-1].lastPacket
-	f.FirstAckBlockLength = rs[len(rs)-1].count - 1
+	f.LargestAcknowledged = rs[0].lastPacket
+	f.FirstAckBlockLength = rs[0].count - 1
 	last := f.LargestAcknowledged - f.FirstAckBlockLength
 	// TODO(ekr@rtfm.com): Fill in any of the timestamp stuff.
 	f.AckDelay = 0
@@ -196,11 +202,12 @@ func newAckFrame(rs []ackRange) (*frame, error) {
 		gap := last - rs[i].lastPacket
 		assert(gap < 256) // TODO(ekr@rtfm.com): handle this.
 		b := &ackBlock{
+			4, // Fixed 32-bit width (see 0xb above)
 			uint8(last - rs[i].lastPacket),
 			rs[i].count,
 		}
 		last = rs[i].lastPacket - rs[i].count + 1
-		encoded, err := encode(&b)
+		encoded, err := encode(b)
 		if err != nil {
 			return nil, err
 		}
@@ -219,6 +226,13 @@ func (f goawayFrame) getType() frameType {
 	return kFrameTypeGoaway
 }
 
+func newGoawayFrame(client uint32, server uint32) frame {
+	return frame{0,
+		&goawayFrame{client, server},
+		nil,
+	}
+}
+
 type connectionCloseFrame struct {
 	ErrorCode          uint32
 	ReasonPhraseLength uint16
@@ -227,6 +241,10 @@ type connectionCloseFrame struct {
 
 func (f connectionCloseFrame) getType() frameType {
 	return kFrameTypeConnectionClose
+}
+
+func (f connectionCloseFrame) ReasonPhrase__length() uintptr {
+	return uintptr(f.ReasonPhraseLength)
 }
 
 func decodeFrame(data []byte) (uintptr, *frame, error) {

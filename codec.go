@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"unicode"
 )
 
 const (
@@ -36,6 +37,11 @@ func arrayEncode(buf *bytes.Buffer, v reflect.Value) error {
 	buf.Write(b)
 
 	return nil
+}
+
+// Check to see if fields
+func ignoreField(name string) bool {
+	return unicode.IsLower(rune(name[0]))
 }
 
 // Length specifications are of the form:
@@ -120,6 +126,10 @@ func encode(i interface{}) (ret []byte, err error) {
 	for j := 0; j < fields; j += 1 {
 		field := reflected.Field(j)
 		tipe := reflected.Type().Field(j)
+
+		if ignoreField(tipe.Name) {
+			continue
+		}
 
 		switch field.Kind() {
 		case reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
@@ -239,6 +249,10 @@ func decode(i interface{}, data []byte) (uintptr, error) {
 		field := reflected.Field(j)
 		tipe := reflected.Type().Field(j)
 
+		if ignoreField(tipe.Name) {
+			continue
+		}
+
 		// Call the length overrider to tell us if we should be using a shorter
 		// encoding.
 		encodingSize := uintptr(CodecDefaultSize)
@@ -246,6 +260,7 @@ func decode(i interface{}, data []byte) (uintptr, error) {
 		if getLength {
 			length_result := lFunc.Func.Call([]reflect.Value{reflect.ValueOf(i).Elem()})
 			encodingSize = uintptr(length_result[0].Uint())
+			logf(logTypeCodec, "Length overrider for %s returns %v", tipe.Name, encodingSize)
 		}
 
 		switch field.Kind() {
