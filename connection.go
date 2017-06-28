@@ -97,17 +97,22 @@ func NewConnection(trans Transport, role uint8, tls TlsConfig) *Connection {
 		newRecvdPackets(),
 	}
 
-	connId, err := generateConnId()
+	tmp, err := generateRand64()
 	if err != nil {
 		return nil
 	}
-
+	connId := connectionId(tmp)
 	if role == RoleClient {
 		c.clientConnId = connId
 	} else {
 		c.serverConnId = connId
 		c.setState(kStateWaitClientInitial)
 	}
+	tmp, err = generateRand64()
+	if err != nil {
+		return nil
+	}
+	c.nextSendPacket = tmp & 0xffffffff
 	c.ensureStream(0)
 	return &c
 }
@@ -172,12 +177,6 @@ func (c *Connection) ensureStream(id uint32) *Stream {
 func (c *Connection) sendClientInitial() error {
 	queued := make([]frame, 0)
 	var err error
-
-	// Generate conn ID
-	c.clientConnId, err = generateConnId()
-	if err != nil {
-		return err
-	}
 
 	logf(logTypeHandshake, "Sending client initial packet")
 	if c.clientInitial == nil {
@@ -470,8 +469,11 @@ func (c *Connection) Input(p []byte) error {
 	}
 
 	// TODO(ekr@rtfm.com): Reconstruct the packet number
+	// TODO(ekr@rtfm.com): this dup detection doesn't work right if you
+	// get a cleartext packet that has the same PN as a ciphertext or vice versa.
+	// Need to fix.
 	logf(logTypeConnection, "Received (unverified) packet with PN=%v", hdr.PacketNumber)
-	if !recvd.packetNotReceived(hdr.PacketNumber) {
+	if recvd.initialized() && !recvd.packetNotReceived(hdr.PacketNumber) {
 		logf(logTypeConnection, "Discarding duplicate packet")
 		return fmt.Errorf("Duplicate packet")
 	}
@@ -482,6 +484,10 @@ func (c *Connection) Input(p []byte) error {
 		return err
 	}
 
+	if !recvd.initialized() {
+		c.recvdClear.init(hdr.PacketNumber)
+		c.recvdProtected.init(hdr.PacketNumber) // Ridiculous.
+	}
 	// TODO(ekr@rtfm.com): Reject unprotected packets once we are established.
 
 	// We have now verified that this is a valid packet, so mark
@@ -542,12 +548,6 @@ func (c *Connection) processClientInitial(hdr *PacketHeader, payload []byte) err
 		if b != 0 {
 			return fmt.Errorf("ClientInitial has non-padding after ClientHello")
 		}
-	}
-
-	// Generate the connection ID.
-	c.serverConnId, err = generateConnId()
-	if err != nil {
-		return err
 	}
 
 	c.streams[0].readOffset = uint64(len(sf.Data))
@@ -738,7 +738,16 @@ func (c *Connection) processAckFrame(f *ackFrame) error {
 }
 
 func newRecvdPackets() recvdPackets {
-	return recvdPackets{make([]bool, 10), 0}
+	return recvdPackets{nil, 0}
+}
+
+func (p *recvdPackets) initialized() bool {
+	return p.r != nil
+}
+
+func (p *recvdPackets) init(min uint64) {
+	p.min = min
+	p.r = make([]bool, 10)
 }
 
 func (p *recvdPackets) packetNotReceived(pn uint64) bool {
@@ -878,7 +887,7 @@ func (c *Connection) GetStream(id uint32) *Stream {
 	return &c.streams[iid]
 }
 
-func generateConnId() (connectionId, error) {
+func generateRand64() (uint64, error) {
 	b := make([]byte, 8)
 
 	_, err := rand.Read(b)
@@ -892,5 +901,5 @@ func generateConnId() (connectionId, error) {
 		ret |= uint64(c)
 	}
 
-	return connectionId(ret), nil
+	return ret, nil
 }
