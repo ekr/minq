@@ -231,11 +231,15 @@ func (c *Connection) sendPacket(pt uint8, tosend []frame) error {
 	connId = c.serverConnId
 
 	if c.role == RoleClient {
-		if pt == PacketTypeClientInitial || pt == PacketTypeClientCleartext {
+		switch {
+		case pt == PacketTypeClientInitial:
 			aead = c.writeClear
 			connId = c.clientConnId
-		} else if pt == PacketType0RTTProtected {
+		case pt == PacketTypeClientCleartext:
+			aead = c.writeClear
+		case pt == PacketType0RTTProtected:
 			connId = c.clientConnId
+			aead = nil // This will cause a crash b/c 0-RTT doesn't work yet
 		}
 	} else {
 		if pt == PacketTypeServerCleartext {
@@ -602,12 +606,15 @@ func (c *Connection) processCleartext(hdr *PacketHeader, payload []byte) error {
 				if c.state != kStateWaitServerFirstFlight {
 					return fmt.Errorf("Received ServerClearText after handshake finished")
 				}
-				// Ignore ACKs, so:
+				// This is the first packet from the server, so.
+				//
 				// 1. Remove the clientInitial packet.
 				// 2. Set the outgoing stream offset accordingly
+				// 3. Remember the connection ID
 				if len(c.clientInitial) > 0 {
 					c.streams[0].writeOffset = uint64(len(c.clientInitial))
 					c.clientInitial = nil
+					c.serverConnId = hdr.ConnectionID
 				}
 			} else {
 				if c.state != kStateWaitClientSecondFlight {
