@@ -119,7 +119,7 @@ func (pair *csPair) handshake(t *testing.T) {
 	err := pair.client.sendClientInitial()
 	assertNotError(t, err, "Couldn't send client initial packet")
 
-	for pair.client.state != kStateEstablished && pair.server.state != kStateEstablished {
+	for pair.client.state != StateEstablished && pair.server.state != StateEstablished {
 		err = inputAll(pair.server)
 		assertNotError(t, err, "Error processing CI")
 
@@ -177,9 +177,9 @@ func TestSendReceiveCISI(t *testing.T) {
 	assertNotError(t, err, "Error processing CFIN")
 
 	fmt.Println("Checking client state")
-	assertEquals(t, client.state, kStateEstablished)
+	assertEquals(t, client.state, StateEstablished)
 	fmt.Println("Checking server state")
-	assertEquals(t, server.state, kStateEstablished)
+	assertEquals(t, server.state, StateEstablished)
 
 	// All the server's data should be acked.
 	n := server.outstandingQueuedBytes()

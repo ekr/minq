@@ -15,11 +15,11 @@ const (
 type State uint8
 
 const (
-	kStateInit                   = State(1)
-	kStateWaitClientInitial      = State(2)
-	kStateWaitServerFirstFlight  = State(3)
-	kStateWaitClientSecondFlight = State(4)
-	kStateEstablished            = State(5)
+	StateInit                   = State(1)
+	StateWaitClientInitial      = State(2)
+	StateWaitServerFirstFlight  = State(3)
+	StateWaitClientSecondFlight = State(4)
+	StateEstablished            = State(5)
 )
 
 const (
@@ -34,12 +34,6 @@ type VersionNumber uint32
 const (
 	kQuicVersion = VersionNumber(0xff000004)
 )
-
-type connectionState interface {
-	established() bool
-	zeroRttAllowed() bool
-	expandPacketNumber(pn uint64) uint64
-}
 
 // The interface that the API consumer needs to implement.
 type ConnectionHandler interface {
@@ -87,7 +81,7 @@ func NewConnection(trans Transport, role uint8, tls TlsConfig, handler Connectio
 	c := Connection{
 		handler,
 		role,
-		kStateInit,
+		StateInit,
 		kQuicVersion,
 		0,
 		0,
@@ -115,7 +109,7 @@ func NewConnection(trans Transport, role uint8, tls TlsConfig, handler Connectio
 		c.clientConnId = connId
 	} else {
 		c.serverConnId = connId
-		c.setState(kStateWaitClientInitial)
+		c.setState(StateWaitClientInitial)
 	}
 	tmp, err = generateRand64()
 	if err != nil {
@@ -163,16 +157,16 @@ func stateName(state State) string {
 	// TODO(ekr@rtfm.com): is there a way to get the name from the
 	// const value.
 	switch state {
-	case kStateInit:
-		return "kStateInit"
-	case kStateWaitClientInitial:
-		return "kStateWaitClientInitial"
-	case kStateWaitServerFirstFlight:
-		return "kStateWaitServerFirstFlight"
-	case kStateWaitClientSecondFlight:
-		return "kStateWaitClientSecondFlight"
-	case kStateEstablished:
-		return "kStateEstablished"
+	case StateInit:
+		return "StateInit"
+	case StateWaitClientInitial:
+		return "StateWaitClientInitial"
+	case StateWaitServerFirstFlight:
+		return "StateWaitServerFirstFlight"
+	case StateWaitClientSecondFlight:
+		return "StateWaitClientSecondFlight"
+	case StateEstablished:
+		return "StateEstablished"
 	default:
 		return "Unknown state"
 	}
@@ -225,7 +219,7 @@ func (c *Connection) sendClientInitial() error {
 		queued = append(queued, newPaddingFrame(0))
 	}
 
-	c.setState(kStateWaitServerFirstFlight)
+	c.setState(StateWaitServerFirstFlight)
 
 	return c.sendPacket(PacketTypeClientInitial, queued)
 }
@@ -341,7 +335,7 @@ func (c *Connection) makeAckFrame(acks []ackRange, maxlength int) (*frame, int, 
 }
 
 func (c *Connection) sendQueued() (int, error) {
-	if c.state == kStateInit || c.state == kStateWaitClientInitial {
+	if c.state == StateInit || c.state == StateWaitClientInitial {
 		return 0, nil
 	}
 
@@ -360,7 +354,7 @@ func (c *Connection) sendQueued() (int, error) {
 	sent += s
 
 	// Now send other streams if we are in encrypted mode.
-	if c.state == kStateEstablished {
+	if c.state == StateEstablished {
 		s, err := c.sendQueuedStreams(PacketType1RTTProtectedPhase0, c.streams[1:], &c.recvdProtected)
 		if err != nil {
 			return sent, err
@@ -533,7 +527,7 @@ func (c *Connection) Input(p []byte) error {
 func (c *Connection) processClientInitial(hdr *PacketHeader, payload []byte) error {
 	logf(logTypeHandshake, "Handling client initial packet")
 
-	if c.state != kStateWaitClientInitial {
+	if c.state != StateWaitClientInitial {
 		// TODO(ekr@rtfm.com): Distinguish from retransmission.
 		return fmt.Errorf("Received repeat Client Initial")
 	}
@@ -579,7 +573,7 @@ func (c *Connection) processClientInitial(hdr *PacketHeader, payload []byte) err
 		return err
 	}
 
-	c.setState(kStateWaitClientSecondFlight)
+	c.setState(StateWaitClientSecondFlight)
 
 	_, err = c.sendQueued()
 	return err
@@ -591,7 +585,7 @@ func (c *Connection) processCleartext(hdr *PacketHeader, payload []byte) error {
 	/*
 		We should probably reinstate this once we have encrypted ACKs.
 
-		if c.state != kStateWaitServerFirstFlight && c.state != kStateWaitClientSecondFlight {
+		if c.state != StateWaitServerFirstFlight && c.state != StateWaitClientSecondFlight {
 			logf(logTypeConnection, "Received cleartext packet in inappropriate state. Ignoring")
 			return nil
 		}*/
@@ -615,7 +609,7 @@ func (c *Connection) processCleartext(hdr *PacketHeader, payload []byte) error {
 
 			// This is fresh data so sanity check.
 			if c.role == RoleClient {
-				if c.state != kStateWaitServerFirstFlight {
+				if c.state != StateWaitServerFirstFlight {
 					// TODO(ekr@rtfm.com): Not clear what to do here. It's
 					// clearly a protocol error, but also allows on-path
 					// connection termination, so ust ignore the rest of the
@@ -634,7 +628,7 @@ func (c *Connection) processCleartext(hdr *PacketHeader, payload []byte) error {
 					c.serverConnId = hdr.ConnectionID
 				}
 			} else {
-				if c.state != kStateWaitClientSecondFlight {
+				if c.state != StateWaitClientSecondFlight {
 					// TODO(ekr@rtfm.com): Not clear what to do here. It's
 					// clearly a protocol error, but also allows on-path
 					// connection termination, so ust ignore the rest of the
@@ -858,8 +852,8 @@ func (c *Connection) CheckTimer() (int, error) {
 	// Right now just re-send everything we might need to send.
 
 	// Special case the client's first message.
-	if c.role == RoleClient && (c.state == kStateInit ||
-		c.state == kStateWaitServerFirstFlight) {
+	if c.role == RoleClient && (c.state == StateInit ||
+		c.state == StateWaitServerFirstFlight) {
 		err := c.sendClientInitial()
 		return 1, err
 	}
@@ -886,13 +880,13 @@ func (c *Connection) handshakeComplete() (err error) {
 	if err != nil {
 		return
 	}
-	c.setState(kStateEstablished)
+	c.setState(StateEstablished)
 
 	return nil
 }
 
 func (c *Connection) Established() bool {
-	return c.state == kStateEstablished
+	return c.state == StateEstablished
 }
 
 func (c *Connection) packetNonce(send bool, pn uint64) []byte {
