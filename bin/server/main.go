@@ -21,6 +21,10 @@ func (h *serverHandler) NewConnection(c *minq.Connection) {
 type connHandler struct {
 }
 
+func (h *connHandler) StateChanged(s minq.State) {
+	fmt.Println("State changed to ", s)
+}
+
 func (h *connHandler) NewStream(s *minq.Stream) {
 	fmt.Println("Created new stream id=", s.Id())
 }

@@ -12,14 +12,14 @@ const (
 	RoleServer = 2
 )
 
-type connState uint8
+type State uint8
 
 const (
-	kStateInit                   = connState(1)
-	kStateWaitClientInitial      = connState(2)
-	kStateWaitServerFirstFlight  = connState(3)
-	kStateWaitClientSecondFlight = connState(4)
-	kStateEstablished            = connState(5)
+	kStateInit                   = State(1)
+	kStateWaitClientInitial      = State(2)
+	kStateWaitServerFirstFlight  = State(3)
+	kStateWaitClientSecondFlight = State(4)
+	kStateEstablished            = State(5)
 )
 
 const (
@@ -35,7 +35,7 @@ const (
 	kQuicVersion = VersionNumber(0xff000004)
 )
 
-type ConnectionState interface {
+type connectionState interface {
 	established() bool
 	zeroRttAllowed() bool
 	expandPacketNumber(pn uint64) uint64
@@ -43,6 +43,7 @@ type ConnectionState interface {
 
 // The interface that the API consumer needs to implement.
 type ConnectionHandler interface {
+	StateChanged(s State)
 	NewStream(s *Stream)
 	StreamReadable(s *Stream)
 }
@@ -63,7 +64,7 @@ type recvdPackets struct {
 type Connection struct {
 	handler        ConnectionHandler
 	role           uint8
-	state          connState
+	state          State
 	version        VersionNumber
 	clientConnId   connectionId
 	serverConnId   connectionId
@@ -146,16 +147,19 @@ func (c *Connection) label() string {
 	return "server"
 }
 
-func (c *Connection) setState(state connState) {
+func (c *Connection) setState(state State) {
 	if c.state == state {
 		return
 	}
 
 	logf(logTypeConnection, "%s: Connection state %s -> %v", c.label(), stateName(c.state), stateName(state))
+	if c.handler != nil {
+		c.handler.StateChanged(state)
+	}
 	c.state = state
 }
 
-func stateName(state connState) string {
+func stateName(state State) string {
 	// TODO(ekr@rtfm.com): is there a way to get the name from the
 	// const value.
 	switch state {
