@@ -40,7 +40,8 @@ func (s *Stream) readAll() []byte {
 	return ret
 }
 
-func (s *Stream) newFrameData(offset uint64, payload []byte) {
+// Add data to a stream. Return true if this is readable now.
+func (s *Stream) newFrameData(offset uint64, payload []byte) bool {
 	logf(logTypeConnection, "Receiving stream with offset=%v, length=%v", offset, len(payload))
 	logf(logTypeTrace, "Stream payload %v", hex.EncodeToString(payload))
 	c := &streamChunk{offset, dup(payload), nil}
@@ -57,6 +58,8 @@ func (s *Stream) newFrameData(offset uint64, payload []byte) {
 
 	s.in = tmp
 	logf(logTypeConnection, "Stream now has %v chunks", len(s.in))
+
+	return s.in[0].offset <= s.readOffset
 }
 
 func (s *Stream) send(payload []byte) {
@@ -99,4 +102,24 @@ func (s *Stream) outstandingQueuedBytes() (n int) {
 func (s *Stream) Write(b []byte) {
 	s.send(b)
 	s.c.sendQueued()
+}
+
+// Read from a stream into a buffer.
+func (s *Stream) Read(b []byte) (int, error) {
+	if len(s.in) == 0 {
+		return 0, WouldBlock
+	}
+	if s.in[0].offset > s.readOffset {
+		return 0, WouldBlock
+	}
+	n := copy(b, s.in[0].data)
+	if n == len(s.in) {
+		s.in = s.in[1:]
+	}
+	return n, nil
+}
+
+// Get the ID of a stream.
+func (s *Stream) Id() uint32 {
+	return s.id
 }

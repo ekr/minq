@@ -3,12 +3,37 @@ package main
 import (
 	"flag"
 	"fmt"
-	"net"
-
 	"github.com/ekr/minq"
+	"net"
+	"os"
 )
 
 var addr string
+
+type connHandler struct {
+}
+
+func (h *connHandler) NewStream(s *minq.Stream) {
+}
+
+func (h *connHandler) StreamReadable(s *minq.Stream) {
+	b := make([]byte, 1024)
+
+	n, err := s.Read(b)
+	if err != nil {
+		fmt.Println("Error reading")
+		return
+	}
+	b = b[:n]
+
+	// Flip the case so we can distinguish echo
+	for i, _ := range b {
+		if b[i] > 0x40 {
+			b[i] ^= 0x20
+		}
+	}
+	os.Stdout.Write(b)
+}
 
 func readUDP(s *net.UDPConn) []byte {
 	b := make([]byte, 8192)
@@ -44,7 +69,7 @@ func main() {
 
 	utrans := minq.NewUdpTransport(usock, uaddr)
 
-	conn := minq.NewConnection(utrans, minq.RoleClient, minq.TlsConfig{})
+	conn := minq.NewConnection(utrans, minq.RoleClient, minq.TlsConfig{}, &connHandler{})
 
 	// Start things off.
 	_, err = conn.CheckTimer()
@@ -64,16 +89,53 @@ func main() {
 
 	fmt.Println("Connection established")
 
-	for {
-		b := readUDP(usock)
-		if b == nil {
-			return
-		}
+	str := conn.CreateStream()
 
-		err = conn.Input(b)
-		if err != nil {
-			fmt.Println("Error post-handshake: ", err)
-			return
+	udpin := make(chan []byte)
+	stdin := make(chan []byte)
+
+	// Read from the UDP socket.
+	go func() {
+		for {
+			b := readUDP(usock)
+			udpin <- b
+			if b == nil {
+				return
+			}
+		}
+	}()
+
+	// Read from stdin.
+	go func() {
+		for {
+			b := make([]byte, 1024)
+			n, err := os.Stdin.Read(b)
+			if err != nil {
+				stdin <- nil
+				return
+			}
+			b = b[:n]
+			stdin <- b
+		}
+	}()
+
+	for {
+		select {
+		case u := <-udpin:
+			err = conn.Input(u)
+			if err != nil {
+				fmt.Println("Error", err)
+				return
+			}
+		case i := <-stdin:
+			if i == nil {
+				return
+			}
+			str.Write(i)
+			if err != nil {
+				fmt.Println("Error", err)
+				return
+			}
 		}
 
 	}

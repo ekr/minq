@@ -41,6 +41,12 @@ type ConnectionState interface {
 	expandPacketNumber(pn uint64) uint64
 }
 
+// The interface that the API consumer needs to implement.
+type ConnectionHandler interface {
+	NewStream(s *Stream)
+	StreamReadable(s *Stream)
+}
+
 // Internal structure indicating ranges to ACK
 type ackRange struct {
 	lastPacket uint64
@@ -55,6 +61,7 @@ type recvdPackets struct {
 }
 
 type Connection struct {
+	handler        ConnectionHandler
 	role           uint8
 	state          connState
 	version        VersionNumber
@@ -75,8 +82,9 @@ type Connection struct {
 	recvdProtected recvdPackets
 }
 
-func NewConnection(trans Transport, role uint8, tls TlsConfig) *Connection {
+func NewConnection(trans Transport, role uint8, tls TlsConfig, handler ConnectionHandler) *Connection {
 	c := Connection{
+		handler,
 		role,
 		kStateInit,
 		kQuicVersion,
@@ -695,8 +703,19 @@ func (c *Connection) processUnprotected(hdr *PacketHeader, payload []byte) error
 		case *streamFrame:
 			logf(logTypeConnection, "Received data on stream %v len=%v", inner.StreamId, len(inner.Data))
 			logf(logTypeTrace, "Received on stream %v %x", inner.StreamId, inner.Data)
-			s := c.ensureStream(inner.StreamId)
-			s.newFrameData(inner.Offset, inner.Data)
+
+			notifyCreated := false
+			s := c.GetStream(inner.StreamId)
+			if s == nil {
+				notifyCreated = true
+			}
+			s = c.ensureStream(inner.StreamId)
+			if notifyCreated && c.handler != nil {
+				c.handler.NewStream(s)
+			}
+			if s.newFrameData(inner.Offset, inner.Data) && c.handler != nil {
+				c.handler.StreamReadable(s)
+			}
 		case *ackFrame:
 			logf(logTypeConnection, "Received ACK, first range=%v-%v", inner.LargestAcknowledged-inner.FirstAckBlockLength, inner.LargestAcknowledged)
 
@@ -897,7 +916,7 @@ func (c *Connection) CreateStream() *Stream {
 func (c *Connection) GetStream(id uint32) *Stream {
 	iid := int(id)
 
-	if id < id {
+	if iid >= len(c.streams) {
 		return nil
 	}
 
@@ -919,4 +938,8 @@ func generateRand64() (uint64, error) {
 	}
 
 	return ret, nil
+}
+
+func (c *Connection) SetHandler(h ConnectionHandler) {
+	c.handler = h
 }

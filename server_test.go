@@ -52,10 +52,10 @@ func TestServer(t *testing.T) {
 	factory := &testTransportFactory{make(map[string]*testTransport)}
 	factory.addTransport(u, sTrans)
 
-	server := NewServer(factory, TlsConfig{})
+	server := NewServer(factory, TlsConfig{}, nil)
 	assertNotNil(t, server, "Couldn't make server")
 
-	client := NewConnection(cTrans, RoleClient, TlsConfig{})
+	client := NewConnection(cTrans, RoleClient, TlsConfig{}, nil)
 	assertNotNil(t, client, "Couldn't make client")
 
 	n, err := client.CheckTimer()
@@ -77,7 +77,7 @@ func TestServer(t *testing.T) {
 	u2, _ := net.ResolveUDPAddr("udp", "127.0.0.1:4444") // Just a fixed address
 	cTrans2, sTrans2 := newTestTransportPair(true)
 	factory.addTransport(u2, sTrans2)
-	client = NewConnection(cTrans2, RoleClient, TlsConfig{})
+	client = NewConnection(cTrans2, RoleClient, TlsConfig{}, nil)
 	assertNotNil(t, client, "Couldn't make client")
 
 	n, err = client.CheckTimer()

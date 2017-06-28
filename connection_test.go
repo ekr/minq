@@ -103,10 +103,10 @@ type csPair struct {
 func newCsPair(t *testing.T) *csPair {
 	cTrans, sTrans := newTestTransportPair(true)
 
-	client := NewConnection(cTrans, RoleClient, TlsConfig{})
+	client := NewConnection(cTrans, RoleClient, TlsConfig{}, nil)
 	assertNotNil(t, client, "Couldn't make client")
 
-	server := NewConnection(sTrans, RoleServer, TlsConfig{})
+	server := NewConnection(sTrans, RoleServer, TlsConfig{}, nil)
 	assertNotNil(t, server, "Couldn't make server")
 
 	return &csPair{
@@ -131,7 +131,7 @@ func (pair *csPair) handshake(t *testing.T) {
 func TestSendCI(t *testing.T) {
 	cTrans, _ := newTestTransportPair(true)
 
-	client := NewConnection(cTrans, RoleClient, TlsConfig{})
+	client := NewConnection(cTrans, RoleClient, TlsConfig{}, nil)
 	assertNotNil(t, client, "Couldn't make client")
 
 	err := client.sendClientInitial()
@@ -141,10 +141,10 @@ func TestSendCI(t *testing.T) {
 func TestSendReceiveCI(t *testing.T) {
 	cTrans, sTrans := newTestTransportPair(true)
 
-	client := NewConnection(cTrans, RoleClient, TlsConfig{})
+	client := NewConnection(cTrans, RoleClient, TlsConfig{}, nil)
 	assertNotNil(t, client, "Couldn't make client")
 
-	server := NewConnection(sTrans, RoleServer, TlsConfig{})
+	server := NewConnection(sTrans, RoleServer, TlsConfig{}, nil)
 	assertNotNil(t, server, "Couldn't make server")
 
 	err := client.sendClientInitial()
@@ -158,10 +158,10 @@ func TestSendReceiveCI(t *testing.T) {
 func TestSendReceiveCISI(t *testing.T) {
 	cTrans, sTrans := newTestTransportPair(true)
 
-	client := NewConnection(cTrans, RoleClient, TlsConfig{})
+	client := NewConnection(cTrans, RoleClient, TlsConfig{}, nil)
 	assertNotNil(t, client, "Couldn't make client")
 
-	server := NewConnection(sTrans, RoleServer, TlsConfig{})
+	server := NewConnection(sTrans, RoleServer, TlsConfig{}, nil)
 	assertNotNil(t, server, "Couldn't make server")
 
 	err := client.sendClientInitial()

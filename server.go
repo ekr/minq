@@ -12,10 +12,15 @@ type TransportFactory interface {
 
 // Server represents a QUIC server.
 type Server struct {
+	handler      ServerHandler
 	transFactory TransportFactory
 	tls          TlsConfig
 	addrTable    map[string]*Connection
 	idTable      map[connectionId]*Connection
+}
+
+type ServerHandler interface {
+	NewConnection(c *Connection)
 }
 
 func (s *Server) Input(addr *net.UDPAddr, data []byte) (*Connection, error) {
@@ -47,16 +52,21 @@ func (s *Server) Input(addr *net.UDPAddr, data []byte) (*Connection, error) {
 		if err != nil {
 			return nil, err
 		}
-		conn = NewConnection(trans, RoleServer, s.tls)
+		conn = NewConnection(trans, RoleServer, s.tls, nil)
 		s.idTable[conn.serverConnId] = conn
 		s.addrTable[addr.String()] = conn
+
+		if s.handler != nil {
+			s.handler.NewConnection(conn)
+		}
 	}
 
 	return conn, conn.Input(data)
 }
 
-func NewServer(factory TransportFactory, tls TlsConfig) *Server {
+func NewServer(factory TransportFactory, tls TlsConfig, handler ServerHandler) *Server {
 	return &Server{
+		handler,
 		factory,
 		tls,
 		make(map[string]*Connection),
