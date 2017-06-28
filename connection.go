@@ -604,7 +604,12 @@ func (c *Connection) processCleartext(hdr *PacketHeader, payload []byte) error {
 			// This is fresh data so sanity check.
 			if c.role == RoleClient {
 				if c.state != kStateWaitServerFirstFlight {
-					return fmt.Errorf("Received ServerClearText after handshake finished")
+					// TODO(ekr@rtfm.com): Not clear what to do here. It's
+					// clearly a protocol error, but also allows on-path
+					// connection termination, so ust ignore the rest of the
+					// packet.
+					logf(logTypeConnection, "Received ServerClearText after handshake finished")
+					return nil
 				}
 				// This is the first packet from the server, so.
 				//
@@ -618,7 +623,12 @@ func (c *Connection) processCleartext(hdr *PacketHeader, payload []byte) error {
 				}
 			} else {
 				if c.state != kStateWaitClientSecondFlight {
-					return fmt.Errorf("Received ClientClearText after handshake finished")
+					// TODO(ekr@rtfm.com): Not clear what to do here. It's
+					// clearly a protocol error, but also allows on-path
+					// connection termination, so ust ignore the rest of the
+					// packet.
+					logf(logTypeConnection, "Received ClientClearText after handshake finished")
+					return nil
 				}
 			}
 
