@@ -133,6 +133,7 @@ func main() {
 			}
 		case i := <-stdin:
 			if i == nil {
+				conn.Close()
 				return
 			}
 			str.Write(i)

@@ -40,7 +40,7 @@ func (h *connHandler) StreamReadable(s *minq.Stream) {
 	}
 	b = b[:n]
 
-	fmt.Printf("Read %v bytes from peer %x", n, b)
+	fmt.Printf("Read %v bytes from peer %x\n", n, b)
 	s.Write(b)
 }
 
