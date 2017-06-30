@@ -20,6 +20,7 @@ const (
 	StateWaitServerFirstFlight  = State(3)
 	StateWaitClientSecondFlight = State(4)
 	StateEstablished            = State(5)
+	StateClosed                 = State(6)
 )
 
 const (
@@ -457,6 +458,10 @@ func (c *Connection) outstandingQueuedBytes() (n int) {
 }
 
 func (c *Connection) Input(p []byte) error {
+	if c.isClosed() {
+		return fmt.Errorf("Connection is closed")
+	}
+
 	var hdr PacketHeader
 
 	logf(logTypeTrace, "Receiving packet len=%v %v", len(p), hex.EncodeToString(p))
@@ -672,6 +677,9 @@ func (c *Connection) processCleartext(hdr *PacketHeader, payload []byte) error {
 			if err != nil {
 				return err
 			}
+		case *connectionCloseFrame:
+			logf(logTypeConnection, "Received frame close")
+			c.setState(StateClosed)
 
 		default:
 			logf(logTypeConnection, "Received unexpected frame type")
@@ -721,7 +729,9 @@ func (c *Connection) processUnprotected(hdr *PacketHeader, payload []byte) error
 			if err != nil {
 				return err
 			}
-
+		case *connectionCloseFrame:
+			logf(logTypeConnection, "Received close frame")
+			c.setState(StateClosed)
 		default:
 			logf(logTypeConnection, "Received unexpected frame type")
 			fmt.Errorf("Unexpected frame type")
@@ -941,4 +951,19 @@ func generateRand64() (uint64, error) {
 
 func (c *Connection) SetHandler(h ConnectionHandler) {
 	c.handler = h
+}
+
+// This is a hack because it will not contain ACKs.
+func (c *Connection) Close() {
+	logf(logTypeConnection, "%v Close()", c.label())
+	f := newConnectionCloseFrame(0, "You don't have to go home but you can't stay here")
+	c.sendPacket(PacketType1RTTProtectedPhase0, []frame{f})
+}
+
+func (c *Connection) isClosed() bool {
+	return c.state == StateClosed
+}
+
+func (c *Connection) GetState() State {
+	return c.state
 }

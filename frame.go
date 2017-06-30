@@ -218,6 +218,7 @@ func newAckFrame(rs []ackRange) (*frame, error) {
 }
 
 type goawayFrame struct {
+	Type                  frameType
 	LargestClientStreamId uint32
 	LargestServerStreamId uint32
 }
@@ -228,12 +229,13 @@ func (f goawayFrame) getType() frameType {
 
 func newGoawayFrame(client uint32, server uint32) frame {
 	return frame{0,
-		&goawayFrame{client, server},
+		&goawayFrame{kFrameTypeGoaway, client, server},
 		nil,
 	}
 }
 
 type connectionCloseFrame struct {
+	Type               frameType
 	ErrorCode          uint32
 	ReasonPhraseLength uint16
 	ReasonPhrase       []byte
@@ -247,6 +249,16 @@ func (f connectionCloseFrame) ReasonPhrase__length() uintptr {
 	return uintptr(f.ReasonPhraseLength)
 }
 
+func newConnectionCloseFrame(errcode uint32, reason string) frame {
+	str := []byte(reason)
+
+	return frame{0, &connectionCloseFrame{
+		kFrameTypeConnectionClose,
+		errcode,
+		uint16(len(str)),
+		str}, nil}
+}
+
 func decodeFrame(data []byte) (uintptr, *frame, error) {
 	var inner innerFrame
 	t := data[0]
@@ -256,11 +268,14 @@ func decodeFrame(data []byte) (uintptr, *frame, error) {
 		inner = &paddingFrame{}
 	case t == uint8(kFrameTypeGoaway):
 		inner = &goawayFrame{}
+	case t == uint8(kFrameTypeConnectionClose):
+		inner = &connectionCloseFrame{}
 	case t >= uint8(kFrameTypeAck) && t <= 0xbf:
 		inner = &ackFrame{}
 	case t >= uint8(kFrameTypeStream):
 		inner = &streamFrame{}
 	default:
+		logf(logTypeConnection, "Unknown frame type %v", t)
 		panic("Unknown frame type") // TODO(ekr@rtfm.com): implement the others in the spec.
 	}
 

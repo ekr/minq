@@ -237,4 +237,11 @@ func TestSendReceiveData(t *testing.T) {
 	assertNotNil(t, b2, "Read data from client")
 	assertByteEquals(t, b, b2)
 
+	// Close the client.
+	pair.client.Close()
+
+	// Read the close.
+	err = inputAll(pair.server)
+	assertNotError(t, err, "Read close")
+	assertEquals(t, pair.server.GetState(), StateClosed)
 }
