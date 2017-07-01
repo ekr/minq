@@ -378,7 +378,7 @@ func (f streamFrame) Offset__length() uintptr {
 
 func (f streamFrame) Data__length() uintptr {
 	if f.DataLength__length() == 0 {
-		return CodecDefaultSize
+		return codecDefaultSize
 	}
 	return uintptr(f.DataLength)
 }

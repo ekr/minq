@@ -14,14 +14,14 @@ func (c TlsConfig) toMint() *mint.Config {
 	return &mint.Config{ServerName: "example.com", NonBlocking: true}
 }
 
-type TlsConn struct {
+type tlsConn struct {
 	conn     *connBuffer
 	tls      *mint.Conn
 	finished bool
-	cs 	 *mint.CipherSuiteParams
+	cs       *mint.CipherSuiteParams
 }
 
-func newTlsConn(conf TlsConfig, role uint8) *TlsConn {
+func newtlsConn(conf TlsConfig, role uint8) *tlsConn {
 	isClient := true
 	if role == RoleServer {
 		isClient = false
@@ -29,7 +29,7 @@ func newTlsConn(conf TlsConfig, role uint8) *TlsConn {
 
 	c := newConnBuffer()
 
-	return &TlsConn{
+	return &tlsConn{
 		c,
 		mint.NewConn(c, conf.toMint(), isClient),
 		false,
@@ -37,7 +37,7 @@ func newTlsConn(conf TlsConfig, role uint8) *TlsConn {
 	}
 }
 
-func (c *TlsConn) handshake(input []byte) ([]byte, error) {
+func (c *tlsConn) handshake(input []byte) ([]byte, error) {
 	logf(logTypeTls, "TLS handshake input len=%v", len(input))
 	logf(logTypeTrace, "TLS handshake input = %v", hex.EncodeToString(input))
 	if input != nil {
@@ -64,4 +64,3 @@ func (c *TlsConn) handshake(input []byte) ([]byte, error) {
 
 	return c.conn.getOutput(), nil
 }
-

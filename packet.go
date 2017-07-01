@@ -41,21 +41,21 @@ Short Header
 */
 
 const (
-	PacketFlagLongHeader = 0x80
-	PacketFlagC          = 0x40
-	PacketFlagK          = 0x20
+	packetFlagLongHeader = 0x80
+	packetFlagC          = 0x40
+	packetFlagK          = 0x20
 )
 
 const (
-	PacketTypeVersionNegotiation   = 1
-	PacketTypeClientInitial        = 2
-	PacketTypeServerStatelessRetry = 3
-	PacketTypeServerCleartext      = 4
-	PacketTypeClientCleartext      = 5
-	PacketType0RTTProtected        = 6
-	PacketType1RTTProtectedPhase0  = 7
-	PacketType1RTTProtectedPhase1  = 8
-	PacketTypePublicReset          = 9
+	packetTypeVersionNegotiation   = 1
+	packetTypeClientInitial        = 2
+	packetTypeServerStatelessRetry = 3
+	packetTypeServerCleartext      = 4
+	packetTypeClientCleartext      = 5
+	packetType0RTTProtected        = 6
+	packetType1RTTProtectedPhase0  = 7
+	packetType1RTTProtectedPhase1  = 8
+	packetTypePublicReset          = 9
 )
 
 type connectionId uint64
@@ -63,15 +63,15 @@ type version uint32
 
 // The PDU definition for the header.
 // These types are capitalized so that |codec| can use the,
-type PacketHeader struct {
+type packetHeader struct {
 	Type         byte
 	ConnectionID connectionId
 	PacketNumber uint64 // Never more than 32 bits on the wire.
 	Version      VersionNumber
 }
 
-type Packet struct {
-	PacketHeader
+type packet struct {
+	packetHeader
 	payload []byte
 }
 
@@ -80,33 +80,33 @@ func isSet(b byte, flag byte) bool {
 	return (b & flag) != 0
 }
 
-func isLongHeader(p *PacketHeader) bool {
-	return isSet(p.Type, PacketFlagLongHeader)
+func isLongHeader(p *packetHeader) bool {
+	return isSet(p.Type, packetFlagLongHeader)
 }
 
-func (p *PacketHeader) isProtected() bool {
+func (p *packetHeader) isProtected() bool {
 	if !isLongHeader(p) {
 		return true
 	}
 
 	switch p.Type & 0x7f {
-	case PacketTypeClientInitial, PacketTypeClientCleartext, PacketTypeServerCleartext:
+	case packetTypeClientInitial, packetTypeClientCleartext, packetTypeServerCleartext:
 		return false
 	}
 	return true
 }
 
-func (p *PacketHeader) hasConnId() bool {
+func (p *packetHeader) hasConnId() bool {
 	if isLongHeader(p) {
 		return true
 	}
-	if (p.Type & PacketFlagC) != 0 {
+	if (p.Type & packetFlagC) != 0 {
 		return true
 	}
 	return false
 }
 
-func (p *PacketHeader) getHeaderType() byte {
+func (p *packetHeader) getHeaderType() byte {
 	if isLongHeader(p) {
 		return p.Type & 0x7f
 	}
@@ -114,14 +114,14 @@ func (p *PacketHeader) getHeaderType() byte {
 	return 0
 }
 
-func (p PacketHeader) ConnectionID__length() uintptr {
-	if isLongHeader(&p) || isSet(p.Type, PacketFlagC) {
+func (p packetHeader) ConnectionID__length() uintptr {
+	if isLongHeader(&p) || isSet(p.Type, packetFlagC) {
 		return 8
 	}
-	return CodecDefaultSize
+	return codecDefaultSize
 }
 
-func (p PacketHeader) PacketNumber__length() uintptr {
+func (p packetHeader) PacketNumber__length() uintptr {
 	logf(logTypeTrace, "PacketNumber__length()")
 	if isLongHeader(&p) {
 		return 4
@@ -134,27 +134,27 @@ func (p PacketHeader) PacketNumber__length() uintptr {
 		return 4
 	}
 }
-func (p PacketHeader) Version__length() uintptr {
+func (p packetHeader) Version__length() uintptr {
 	if isLongHeader(&p) {
 		return 4
 	}
-	return CodecDefaultSize
+	return codecDefaultSize
 }
 
-func (p *PacketHeader) setLongHeaderType(typ byte) {
-	p.Type = PacketFlagLongHeader | typ
+func (p *packetHeader) setLongHeaderType(typ byte) {
+	p.Type = packetFlagLongHeader | typ
 }
 
 /*
 We don't use these.
 
 func encodePacket(c ConnectionState, aead Aead, p *Packet) ([]byte, error) {
-	hdr, err := encode(&p.PacketHeader)
+	hdr, err := encode(&p.packetHeader)
 	if err != nil {
 		return nil, err
 	}
 
-	b, err := aead.protect(p.PacketHeader.PacketNumber, hdr, p.payload)
+	b, err := aead.protect(p.packetHeader.PacketNumber, hdr, p.payload)
 	if err != nil {
 		return nil, err
 	}
@@ -164,7 +164,7 @@ func encodePacket(c ConnectionState, aead Aead, p *Packet) ([]byte, error) {
 
 func decodePacket(c ConnectionState, aead Aead, b []byte) (*Packet, error) {
 	// Parse the header
-	var hdr PacketHeader
+	var hdr packetHeader
 	br, err := decode(&hdr, b)
 	if err != nil {
 		return nil, err

@@ -60,7 +60,7 @@ func (t *testTransport) Send(p []byte) error {
 func (t *testTransport) Recv() ([]byte, error) {
 	p := t.r.Recv()
 	if p == nil {
-		return nil, WouldBlock
+		return nil, ErrorWouldBlock
 	}
 	return p.b, nil
 }
@@ -80,7 +80,7 @@ func inputAll(c *Connection) error {
 
 	for {
 		p, err := t.Recv()
-		if err != nil && err != WouldBlock {
+		if err != nil && err != ErrorWouldBlock {
 			return err
 		}
 

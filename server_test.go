@@ -24,7 +24,7 @@ func serverInputAll(t *testing.T, trans *testTransport, s *Server, u net.UDPAddr
 
 	for {
 		p, err := trans.Recv()
-		if err != nil && err != WouldBlock {
+		if err != nil && err != ErrorWouldBlock {
 			return nil, err
 		}
 

@@ -25,7 +25,7 @@ type ServerHandler interface {
 
 func (s *Server) Input(addr *net.UDPAddr, data []byte) (*Connection, error) {
 	logf(logTypeServer, "Received packet from %v", addr)
-	var hdr PacketHeader
+	var hdr packetHeader
 
 	_, err := decode(&hdr, data)
 	if err != nil {

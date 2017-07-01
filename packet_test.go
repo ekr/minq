@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-var kTestPacketHeader = PacketHeader{
+var kTestpacketHeader = packetHeader{
 	0,
 	0x0123456789abcdef,
 	0xdeadbeef,
@@ -14,8 +14,8 @@ var kTestPacketHeader = PacketHeader{
 }
 
 // Packet header tests.
-func packetHeaderEDE(t *testing.T, p *PacketHeader) {
-	var p2 PacketHeader
+func packetHeaderEDE(t *testing.T, p *packetHeader) {
+	var p2 packetHeader
 	res, err := encode(p)
 	assertNotError(t, err, "Could not encode")
 
@@ -31,9 +31,9 @@ func packetHeaderEDE(t *testing.T, p *PacketHeader) {
 }
 
 func TestLongHeader(t *testing.T) {
-	p := kTestPacketHeader
+	p := kTestpacketHeader
 
-	p.setLongHeaderType(PacketTypeClientInitial)
+	p.setLongHeaderType(packetTypeClientInitial)
 
 	packetHeaderEDE(t, &p)
 }
@@ -43,7 +43,7 @@ func TestLongHeader(t *testing.T) {
 * connection.go 
 // Mock for connection state
 type ConnectionStateMock struct {
-	aead AeadFNV
+	aead aeadFNV
 }
 
 func (c *ConnectionStateMock) established() bool    { return false }
@@ -56,7 +56,7 @@ func TestEDEPacket(t *testing.T) {
 	var c ConnectionStateMock
 
 	p := Packet{
-		kTestPacketHeader,
+		kTestpacketHeader,
 		[]byte{'a', 'b', 'c', 'd', 'e', 'f', 'g'},
 	}
 

@@ -9,17 +9,17 @@ import (
 )
 
 // Definition for AEAD using 64-bit FNV-1a
-type AeadFNV struct {
+type aeadFNV struct {
 }
 
-func (a *AeadFNV) NonceSize() int {
+func (a *aeadFNV) NonceSize() int {
 	return 12
 }
-func (a *AeadFNV) Overhead() int {
+func (a *aeadFNV) Overhead() int {
 	return 8
 }
 
-func (a *AeadFNV) Seal(dst []byte, nonce []byte, plaintext []byte, aad []byte) []byte {
+func (a *aeadFNV) Seal(dst []byte, nonce []byte, plaintext []byte, aad []byte) []byte {
 	logf(logTypeAead, "FNV protecting aad len=%d, plaintext len=%d", len(aad), len(plaintext))
 	logf(logTypeTrace, "FNV input %x %x", aad, plaintext)
 	h := fnv.New64a()
@@ -31,7 +31,7 @@ func (a *AeadFNV) Seal(dst []byte, nonce []byte, plaintext []byte, aad []byte) [
 	return dst
 }
 
-func (a *AeadFNV) Open(dst []byte, nonce []byte, ciphertext []byte, aad []byte) ([]byte, error) {
+func (a *aeadFNV) Open(dst []byte, nonce []byte, ciphertext []byte, aad []byte) ([]byte, error) {
 	logf(logTypeAead, "FNV unprotecting aad len=%d, ciphertext len=%d", len(aad), len(ciphertext))
 	if len(ciphertext) < 8 {
 		return nil, fmt.Errorf("Data too short to contain authentication tag")
@@ -53,21 +53,21 @@ func (a *AeadFNV) Open(dst []byte, nonce []byte, ciphertext []byte, aad []byte) 
 	return pt, nil
 }
 
-// AeadWrapper contains an existing AEAD object and does the
+// aeadWrapper contains an existing AEAD object and does the
 // QUIC nonce masking.
-type AeadWrapper struct {
+type aeadWrapper struct {
 	iv     []byte
 	cipher cipher.AEAD
 }
 
-func (a *AeadWrapper) NonceSize() int {
+func (a *aeadWrapper) NonceSize() int {
 	return a.cipher.NonceSize()
 }
-func (a *AeadWrapper) Overhead() int {
+func (a *aeadWrapper) Overhead() int {
 	return a.cipher.Overhead()
 }
 
-func (a *AeadWrapper) fmtNonce(in []byte) []byte {
+func (a *aeadWrapper) fmtNonce(in []byte) []byte {
 	// The input nonce is actually a packet number.
 	assert(len(in) == 8)
 	assert(a.NonceSize() == 12)
@@ -82,7 +82,7 @@ func (a *AeadWrapper) fmtNonce(in []byte) []byte {
 	return nonce
 }
 
-func (a *AeadWrapper) Seal(dst []byte, nonce []byte, plaintext []byte, aad []byte) []byte {
+func (a *aeadWrapper) Seal(dst []byte, nonce []byte, plaintext []byte, aad []byte) []byte {
 	logf(logTypeAead, "AES protecting aad len=%d, plaintext len=%d", len(aad), len(plaintext))
 	logf(logTypeTrace, "AES input %x %x", aad, plaintext)
 	ret := a.cipher.Seal(dst, a.fmtNonce(nonce), plaintext, aad)
@@ -91,7 +91,7 @@ func (a *AeadWrapper) Seal(dst []byte, nonce []byte, plaintext []byte, aad []byt
 	return ret
 }
 
-func (a *AeadWrapper) Open(dst []byte, nonce []byte, ciphertext []byte, aad []byte) ([]byte, error) {
+func (a *aeadWrapper) Open(dst []byte, nonce []byte, ciphertext []byte, aad []byte) ([]byte, error) {
 	logf(logTypeAead, "AES unprotecting aad len=%d, ciphertext len=%d", len(aad), len(ciphertext))
 	logf(logTypeTrace, "AES input %x", ciphertext)
 	ret, err := a.cipher.Open(dst, a.fmtNonce(nonce), ciphertext, aad)
@@ -113,5 +113,5 @@ func newWrappedAESGCM(key []byte, iv []byte) (cipher.AEAD, error) {
 		return nil, err
 	}
 
-	return &AeadWrapper{iv, aead}, nil
+	return &aeadWrapper{iv, aead}, nil
 }

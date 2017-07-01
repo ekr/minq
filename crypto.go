@@ -13,7 +13,7 @@ type cryptoState struct {
 const clientPpSecretLabel = "EXPORTER-QUIC client 1-RTT Secret"
 const serverPpSecretLabel = "EXPORTER-QUIC server 1-RTT Secret"
 
-func newCryptoState(t *TlsConn, label string) (*cryptoState, error) {
+func newCryptoState(t *tlsConn, label string) (*cryptoState, error) {
 	var st cryptoState
 	var err error
 

@@ -64,7 +64,7 @@ type Connection struct {
 	clientConnId   connectionId
 	serverConnId   connectionId
 	transport      Transport
-	tls            *TlsConn
+	tls            *tlsConn
 	writeClear     cipher.AEAD
 	readClear      cipher.AEAD
 	writeProtected *cryptoState
@@ -87,9 +87,9 @@ func NewConnection(trans Transport, role uint8, tls TlsConfig, handler Connectio
 		0,
 		0,
 		trans,
-		newTlsConn(tls, role),
-		&AeadFNV{},
-		&AeadFNV{},
+		newtlsConn(tls, role),
+		&aeadFNV{},
+		&aeadFNV{},
 		nil,
 		nil,
 		uint64(0),
@@ -223,7 +223,7 @@ func (c *Connection) sendClientInitial() error {
 
 	c.setState(StateWaitServerFirstFlight)
 
-	return c.sendPacket(PacketTypeClientInitial, queued)
+	return c.sendPacket(packetTypeClientInitial, queued)
 }
 
 func (c *Connection) sendPacket(pt uint8, tosend []frame) error {
@@ -240,17 +240,17 @@ func (c *Connection) sendPacket(pt uint8, tosend []frame) error {
 
 	if c.role == RoleClient {
 		switch {
-		case pt == PacketTypeClientInitial:
+		case pt == packetTypeClientInitial:
 			aead = c.writeClear
 			connId = c.clientConnId
-		case pt == PacketTypeClientCleartext:
+		case pt == packetTypeClientCleartext:
 			aead = c.writeClear
-		case pt == PacketType0RTTProtected:
+		case pt == packetType0RTTProtected:
 			connId = c.clientConnId
 			aead = nil // This will cause a crash b/c 0-RTT doesn't work yet
 		}
 	} else {
-		if pt == PacketTypeServerCleartext {
+		if pt == packetTypeServerCleartext {
 			aead = c.writeClear
 		}
 	}
@@ -258,9 +258,9 @@ func (c *Connection) sendPacket(pt uint8, tosend []frame) error {
 	left -= aead.Overhead()
 
 	// For now, just do the long header.
-	p := Packet{
-		PacketHeader{
-			pt | PacketFlagLongHeader,
+	p := packet{
+		packetHeader{
+			pt | packetFlagLongHeader,
 			connId,
 			c.nextSendPacket,
 			c.version,
@@ -271,7 +271,7 @@ func (c *Connection) sendPacket(pt uint8, tosend []frame) error {
 
 	// Encode the header so we know how long it is.
 	// TODO(ekr@rtfm.com): this is gross.
-	hdr, err := encode(&p.PacketHeader)
+	hdr, err := encode(&p.packetHeader)
 	if err != nil {
 		return err
 	}
@@ -342,9 +342,9 @@ func (c *Connection) sendQueued() (int, error) {
 	sent := int(0)
 
 	// First send stream 0 if needed.
-	pt := uint8(PacketTypeClientCleartext)
+	pt := uint8(packetTypeClientCleartext)
 	if c.role == RoleServer {
-		pt = PacketTypeServerCleartext
+		pt = packetTypeServerCleartext
 	}
 
 	s, err := c.sendQueuedStreams(pt, c.streams[0:1], &c.recvdClear)
@@ -355,7 +355,7 @@ func (c *Connection) sendQueued() (int, error) {
 
 	// Now send other streams if we are in encrypted mode.
 	if c.state == StateEstablished {
-		s, err := c.sendQueuedStreams(PacketType1RTTProtectedPhase0, c.streams[1:], &c.recvdProtected)
+		s, err := c.sendQueuedStreams(packetType1RTTProtectedPhase0, c.streams[1:], &c.recvdProtected)
 		if err != nil {
 			return sent, err
 		}
@@ -461,7 +461,7 @@ func (c *Connection) Input(p []byte) error {
 		return fmt.Errorf("Connection is closed")
 	}
 
-	var hdr PacketHeader
+	var hdr packetHeader
 
 	logf(logTypeTrace, "Receiving packet len=%v %v", len(p), hex.EncodeToString(p))
 	hdrlen, err := decode(&hdr, p)
@@ -510,15 +510,15 @@ func (c *Connection) Input(p []byte) error {
 	typ := hdr.getHeaderType()
 	if !isLongHeader(&hdr) {
 		// TODO(ekr@rtfm.com): We are using this for both types.
-		typ = PacketType1RTTProtectedPhase0
+		typ = packetType1RTTProtectedPhase0
 	}
 	logf(logTypeConnection, "Packet header %v, %d", hdr, typ)
 	switch typ {
-	case PacketTypeClientInitial:
+	case packetTypeClientInitial:
 		err = c.processClientInitial(&hdr, payload)
-	case PacketTypeServerCleartext, PacketTypeClientCleartext:
+	case packetTypeServerCleartext, packetTypeClientCleartext:
 		err = c.processCleartext(&hdr, payload)
-	case PacketType1RTTProtectedPhase0, PacketType1RTTProtectedPhase1:
+	case packetType1RTTProtectedPhase0, packetType1RTTProtectedPhase1:
 		err = c.processUnprotected(&hdr, payload)
 	default:
 		logf(logTypeConnection, "Unsupported packet type %v", typ)
@@ -528,7 +528,7 @@ func (c *Connection) Input(p []byte) error {
 	return err
 }
 
-func (c *Connection) processClientInitial(hdr *PacketHeader, payload []byte) error {
+func (c *Connection) processClientInitial(hdr *packetHeader, payload []byte) error {
 	logf(logTypeHandshake, "Handling client initial packet")
 
 	if c.state != StateWaitClientInitial {
@@ -583,7 +583,7 @@ func (c *Connection) processClientInitial(hdr *PacketHeader, payload []byte) err
 	return err
 }
 
-func (c *Connection) processCleartext(hdr *PacketHeader, payload []byte) error {
+func (c *Connection) processCleartext(hdr *packetHeader, payload []byte) error {
 	logf(logTypeHandshake, "Reading cleartext in state %v", c.state)
 	// TODO(ekr@rtfm.com): Need clearer state checks.
 	/*
@@ -692,7 +692,7 @@ func (c *Connection) processCleartext(hdr *PacketHeader, payload []byte) error {
 	return nil
 }
 
-func (c *Connection) processUnprotected(hdr *PacketHeader, payload []byte) error {
+func (c *Connection) processUnprotected(hdr *packetHeader, payload []byte) error {
 	logf(logTypeHandshake, "Reading unprotected data in state %v", c.state)
 	for len(payload) > 0 {
 		logf(logTypeConnection, "%s: payload bytes left %d", c.label(), len(payload))
@@ -954,7 +954,7 @@ func (c *Connection) SetHandler(h ConnectionHandler) {
 func (c *Connection) Close() {
 	logf(logTypeConnection, "%v Close()", c.label())
 	f := newConnectionCloseFrame(0, "You don't have to go home but you can't stay here")
-	c.sendPacket(PacketType1RTTProtectedPhase0, []frame{f})
+	c.sendPacket(packetType1RTTProtectedPhase0, []frame{f})
 }
 
 func (c *Connection) isClosed() bool {
