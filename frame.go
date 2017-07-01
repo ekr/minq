@@ -55,7 +55,38 @@ func (f *frame) length() (int, error) {
 	return len(f.encoded), nil
 }
 
-// Padding
+// Decode an arbitrary frame.
+func decodeFrame(data []byte) (uintptr, *frame, error) {
+	var inner innerFrame
+	t := data[0]
+	logf(logTypeFrame, "Frame type byte %v", t)
+	switch {
+	case t == uint8(kFrameTypePadding):
+		inner = &paddingFrame{}
+	case t == uint8(kFrameTypeGoaway):
+		inner = &goawayFrame{}
+	case t == uint8(kFrameTypeConnectionClose):
+		inner = &connectionCloseFrame{}
+	case t >= uint8(kFrameTypeAck) && t <= 0xbf:
+		inner = &ackFrame{}
+	case t >= uint8(kFrameTypeStream):
+		inner = &streamFrame{}
+	default:
+		logf(logTypeConnection, "Unknown frame type %v", t)
+		panic("Unknown frame type") // TODO(ekr@rtfm.com): implement the others in the spec.
+	}
+
+	n, err := decode(inner, data)
+	if err != nil {
+		return 0, nil, err
+	}
+
+	return n, &frame{0, inner, data[:n]}, nil
+}
+
+// Frame definitions below this point.
+
+// PADDING
 type paddingFrame struct {
 	Typ frameType
 }
@@ -68,66 +99,51 @@ func newPaddingFrame(stream uint32) frame {
 	return frame{stream, &paddingFrame{0}, nil}
 }
 
-// Stream
-type streamFrame struct {
-	Typ        frameType
-	StreamId   uint32
-	Offset     uint64
-	DataLength uint16
-	Data       []byte
+// CONNECTION_CLOSE
+type connectionCloseFrame struct {
+	Type               frameType
+	ErrorCode          uint32
+	ReasonPhraseLength uint16
+	ReasonPhrase       []byte
 }
 
-func (f streamFrame) getType() frameType {
-	return kFrameTypeStream
+func (f connectionCloseFrame) getType() frameType {
+	return kFrameTypeConnectionClose
 }
 
-func (f streamFrame) DataLength__length() uintptr {
-	logf(logTypeFrame, "DataLength__length() called")
-	if (f.Typ & kFrameTypeFlagD) == 0 {
-		return 0
-	}
-	logf(logTypeFrame, "DataLength__length() returning 2")
-	return 2
+func (f connectionCloseFrame) ReasonPhrase__length() uintptr {
+	return uintptr(f.ReasonPhraseLength)
 }
 
-func (f streamFrame) StreamId__length() uintptr {
-	lengths := []uintptr{1, 2, 3, 4}
-	val := (f.Typ >> 3) & 0x03
-	return lengths[val]
+func newConnectionCloseFrame(errcode uint32, reason string) frame {
+	str := []byte(reason)
+
+	return frame{0, &connectionCloseFrame{
+		kFrameTypeConnectionClose,
+		errcode,
+		uint16(len(str)),
+		str}, nil}
 }
 
-func (f streamFrame) Offset__length() uintptr {
-	lengths := []uintptr{0, 2, 4, 8}
-	val := (f.Typ >> 1) & 0x03
-	return lengths[val]
+// GOAWAY
+type goawayFrame struct {
+	Type                  frameType
+	LargestClientStreamId uint32
+	LargestServerStreamId uint32
 }
 
-func (f streamFrame) Data__length() uintptr {
-	if f.DataLength__length() == 0 {
-		return CodecDefaultSize
-	}
-	return uintptr(f.DataLength)
+func (f goawayFrame) getType() frameType {
+	return kFrameTypeGoaway
 }
 
-func newStreamFrame(stream uint32, offset uint64, data []byte) frame {
-	logf(logTypeFrame, "Creating stream frame with data length=%d", len(data))
-	assert(len(data) <= 65535)
-	return frame{
-		stream,
-		&streamFrame{
-			// TODO(ekr@tfm.com): One might want to allow non
-			// D bit, but not for now.
-			// Set all of SSOO to 1
-			kFrameTypeStream | 0x1e | kFrameTypeFlagD,
-			uint32(stream),
-			offset,
-			uint16(len(data)),
-			dup(data),
-		},
+func newGoawayFrame(client uint32, server uint32) frame {
+	return frame{0,
+		&goawayFrame{kFrameTypeGoaway, client, server},
 		nil,
 	}
 }
 
+// ACK Frames
 type ackBlock struct {
 	lengthLength uintptr
 	Gap          uint8
@@ -217,72 +233,62 @@ func newAckFrame(rs []ackRange) (*frame, error) {
 	return &frame{0, &f, nil}, nil
 }
 
-type goawayFrame struct {
-	Type                  frameType
-	LargestClientStreamId uint32
-	LargestServerStreamId uint32
+// STREAM
+type streamFrame struct {
+	Typ        frameType
+	StreamId   uint32
+	Offset     uint64
+	DataLength uint16
+	Data       []byte
 }
 
-func (f goawayFrame) getType() frameType {
-	return kFrameTypeGoaway
+func (f streamFrame) getType() frameType {
+	return kFrameTypeStream
 }
 
-func newGoawayFrame(client uint32, server uint32) frame {
-	return frame{0,
-		&goawayFrame{kFrameTypeGoaway, client, server},
+func (f streamFrame) DataLength__length() uintptr {
+	logf(logTypeFrame, "DataLength__length() called")
+	if (f.Typ & kFrameTypeFlagD) == 0 {
+		return 0
+	}
+	logf(logTypeFrame, "DataLength__length() returning 2")
+	return 2
+}
+
+func (f streamFrame) StreamId__length() uintptr {
+	lengths := []uintptr{1, 2, 3, 4}
+	val := (f.Typ >> 3) & 0x03
+	return lengths[val]
+}
+
+func (f streamFrame) Offset__length() uintptr {
+	lengths := []uintptr{0, 2, 4, 8}
+	val := (f.Typ >> 1) & 0x03
+	return lengths[val]
+}
+
+func (f streamFrame) Data__length() uintptr {
+	if f.DataLength__length() == 0 {
+		return CodecDefaultSize
+	}
+	return uintptr(f.DataLength)
+}
+
+func newStreamFrame(stream uint32, offset uint64, data []byte) frame {
+	logf(logTypeFrame, "Creating stream frame with data length=%d", len(data))
+	assert(len(data) <= 65535)
+	return frame{
+		stream,
+		&streamFrame{
+			// TODO(ekr@tfm.com): One might want to allow non
+			// D bit, but not for now.
+			// Set all of SSOO to 1
+			kFrameTypeStream | 0x1e | kFrameTypeFlagD,
+			uint32(stream),
+			offset,
+			uint16(len(data)),
+			dup(data),
+		},
 		nil,
 	}
-}
-
-type connectionCloseFrame struct {
-	Type               frameType
-	ErrorCode          uint32
-	ReasonPhraseLength uint16
-	ReasonPhrase       []byte
-}
-
-func (f connectionCloseFrame) getType() frameType {
-	return kFrameTypeConnectionClose
-}
-
-func (f connectionCloseFrame) ReasonPhrase__length() uintptr {
-	return uintptr(f.ReasonPhraseLength)
-}
-
-func newConnectionCloseFrame(errcode uint32, reason string) frame {
-	str := []byte(reason)
-
-	return frame{0, &connectionCloseFrame{
-		kFrameTypeConnectionClose,
-		errcode,
-		uint16(len(str)),
-		str}, nil}
-}
-
-func decodeFrame(data []byte) (uintptr, *frame, error) {
-	var inner innerFrame
-	t := data[0]
-	logf(logTypeFrame, "Frame type byte %v", t)
-	switch {
-	case t == uint8(kFrameTypePadding):
-		inner = &paddingFrame{}
-	case t == uint8(kFrameTypeGoaway):
-		inner = &goawayFrame{}
-	case t == uint8(kFrameTypeConnectionClose):
-		inner = &connectionCloseFrame{}
-	case t >= uint8(kFrameTypeAck) && t <= 0xbf:
-		inner = &ackFrame{}
-	case t >= uint8(kFrameTypeStream):
-		inner = &streamFrame{}
-	default:
-		logf(logTypeConnection, "Unknown frame type %v", t)
-		panic("Unknown frame type") // TODO(ekr@rtfm.com): implement the others in the spec.
-	}
-
-	n, err := decode(inner, data)
-	if err != nil {
-		return 0, nil, err
-	}
-
-	return n, &frame{0, inner, data[:n]}, nil
 }
