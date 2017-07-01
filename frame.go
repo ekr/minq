@@ -1,6 +1,8 @@
 package minq
 
-import ()
+import (
+	"fmt"
+)
 
 type frameType uint8
 
@@ -89,7 +91,7 @@ func decodeFrame(data []byte) (uintptr, *frame, error) {
 		inner = &streamFrame{}
 	default:
 		logf(logTypeConnection, "Unknown frame type %v", t)
-		panic("Unknown frame type") // TODO(ekr@rtfm.com): implement the others in the spec.
+		return 0, nil, fmt.Errorf("Received unknwon frame type: %v", t)
 	}
 
 	n, err := decode(inner, data)

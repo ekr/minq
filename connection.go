@@ -175,6 +175,7 @@ func stateName(state State) string {
 
 func (c *Connection) ensureStream(id uint32) *Stream {
 	// TODO(ekr@rtfm.com): this is not really done, because we never clean up
+	// TODO(ekr@rtfm.com): Only create streams with the same parity.
 	for i := uint32(len(c.streams)); i <= id; i++ {
 		c.streams = append(c.streams, Stream{id: id, c: c})
 	}
@@ -278,8 +279,6 @@ func (c *Connection) sendPacket(pt uint8, tosend []frame) error {
 
 	sent := 0
 
-	// TODO(ekr@rtfm.com): Need to filter which frames can be sent in
-	// which packet.
 	for _, f := range tosend {
 		l, err := f.length()
 		if err != nil {
@@ -293,7 +292,7 @@ func (c *Connection) sendPacket(pt uint8, tosend []frame) error {
 		sent++
 	}
 
-	protected := aead.Seal(nil, c.packetNonce(true, p.PacketNumber), p.payload, hdr)
+	protected := aead.Seal(nil, c.packetNonce(p.PacketNumber), p.payload, hdr)
 	packet := append(hdr, protected...)
 
 	logf(logTypeTrace, "Sending packet len=%d, len=%v", len(packet), hex.EncodeToString(packet))
@@ -493,7 +492,7 @@ func (c *Connection) Input(p []byte) error {
 		return fmt.Errorf("Duplicate packet")
 	}
 
-	payload, err := aead.Open(nil, c.packetNonce(false, hdr.PacketNumber), p[hdrlen:], p[:hdrlen])
+	payload, err := aead.Open(nil, c.packetNonce(hdr.PacketNumber), p[hdrlen:], p[:hdrlen])
 	if err != nil {
 		logf(logTypeConnection, "Could not unprotect packet")
 		return err
@@ -899,8 +898,7 @@ func (c *Connection) Established() bool {
 	return c.state == StateEstablished
 }
 
-func (c *Connection) packetNonce(send bool, pn uint64) []byte {
-	// TODO(ekr@rtfm.com): Implement this once we have keys.
+func (c *Connection) packetNonce(pn uint64) []byte {
 	return encodeArgs(pn)
 }
 

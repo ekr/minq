@@ -193,7 +193,6 @@ func encodeArgs(args ...interface{}) []byte {
 
 	for _, arg := range args {
 		reflected := reflect.ValueOf(arg)
-		// TODO(ekr@rtfm.com): Factor out this switch.
 		switch reflected.Kind() {
 		case reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
 			res = uintEncode(&buf, reflected, CodecDefaultSize)
