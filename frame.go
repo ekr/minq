@@ -63,10 +63,26 @@ func decodeFrame(data []byte) (uintptr, *frame, error) {
 	switch {
 	case t == uint8(kFrameTypePadding):
 		inner = &paddingFrame{}
-	case t == uint8(kFrameTypeGoaway):
-		inner = &goawayFrame{}
+	case t == uint8(kFrameTypeRstStream):
+		inner = &rstStreamFrame{}
 	case t == uint8(kFrameTypeConnectionClose):
 		inner = &connectionCloseFrame{}
+	case t == uint8(kFrameTypeGoaway):
+		inner = &goawayFrame{}
+	case t == uint8(kFrameTypeMaxData):
+		inner = &maxDataFrame{}
+	case t == uint8(kFrameTypeMaxStreamData):
+		inner = &maxStreamDataFrame{}
+	case t == uint8(kFrameTypePing):
+		inner = &pingFrame{}
+	case t == uint8(kFrameTypeBlocked):
+		inner = &blockedFrame{}
+	case t == uint8(kFrameTypeStreamBlocked):
+		inner = &streamBlockedFrame{}
+	case t == uint8(kFrameTypeStreamIdNeeded):
+		inner = &streamIdNeededFrame{}
+	case t == uint8(kFrameTypeNewConnectionId):
+		inner = &newConnectionIdFrame{}
 	case t >= uint8(kFrameTypeAck) && t <= 0xbf:
 		inner = &ackFrame{}
 	case t >= uint8(kFrameTypeStream):
@@ -97,6 +113,18 @@ func (f paddingFrame) getType() frameType {
 
 func newPaddingFrame(stream uint32) frame {
 	return frame{stream, &paddingFrame{0}, nil}
+}
+
+// RST_STREAM
+type rstStreamFrame struct {
+	Type        frameType
+	StreamId    uint32
+	ErrorCode   uint32
+	FinalOffset uint64
+}
+
+func (f rstStreamFrame) getType() frameType {
+	return kFrameTypeRstStream
 }
 
 // CONNECTION_CLOSE
@@ -143,7 +171,86 @@ func newGoawayFrame(client uint32, server uint32) frame {
 	}
 }
 
-// ACK Frames
+// MAX_DATA
+type maxDataFrame struct {
+	Type        frameType
+	MaximumData uint64
+}
+
+func (f maxDataFrame) getType() frameType {
+	return kFrameTypeMaxData
+}
+
+// MAX_STREAM_DATA
+type maxStreamDataFrame struct {
+	Type              frameType
+	StreamId          uint32
+	MaximumStreamData uint64
+}
+
+func (f maxStreamDataFrame) getType() frameType {
+	return kFrameTypeMaxStreamData
+}
+
+// MAX_STREAM_ID
+type maxStreamIdFrame struct {
+	Type            frameType
+	MaximumStreamId uint32
+}
+
+func (f maxStreamIdFrame) getType() frameType {
+	return kFrameTypeMaxStreamId
+}
+
+// PING
+type pingFrame struct {
+	Type frameType
+}
+
+func (f pingFrame) getType() frameType {
+	return kFrameTypePing
+}
+
+// BLOCKED
+type blockedFrame struct {
+	Type frameType
+}
+
+func (f blockedFrame) getType() frameType {
+	return kFrameTypeBlocked
+}
+
+// STREAM_BLOCKED
+type streamBlockedFrame struct {
+	Type     frameType
+	StreamId uint32
+}
+
+func (f streamBlockedFrame) getType() frameType {
+	return kFrameTypeStreamBlocked
+}
+
+// STREAM_ID_NEEDED
+type streamIdNeededFrame struct {
+	Type frameType
+}
+
+func (f streamIdNeededFrame) getType() frameType {
+	return kFrameTypeStreamIdNeeded
+}
+
+// NEW_CONNECTION_ID
+type newConnectionIdFrame struct {
+	Type         frameType
+	Sequence     uint16
+	ConnectionId uint64
+}
+
+func (f newConnectionIdFrame) getType() frameType {
+	return kFrameTypeNewConnectionId
+}
+
+// ACK
 type ackBlock struct {
 	lengthLength uintptr
 	Gap          uint8

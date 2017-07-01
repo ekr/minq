@@ -734,7 +734,6 @@ func (c *Connection) processUnprotected(hdr *PacketHeader, payload []byte) error
 			c.setState(StateClosed)
 		default:
 			logf(logTypeConnection, "Received unexpected frame type")
-			fmt.Errorf("Unexpected frame type")
 		}
 	}
 
