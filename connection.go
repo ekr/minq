@@ -62,6 +62,22 @@ type recvdPackets struct {
 	min uint64
 }
 
+/*
+Connection represents a QUIC connection. Clients can make
+connections directly but servers should create a minq.Server
+object which creates Connections as a side effect.
+
+The control discipline is entirely operated by the consuming
+application. It has two major responsibilities:
+
+  1. Deliver any incoming datagrams using Input()
+  2. Periodically call CheckTimer(). In future there will be some
+     way to know how often to call it, but right now it treats
+     every call to CheckTimer() as timer expiry.
+
+The application provides a handler object which the Connection
+calls to notify it of various events.
+*/
 type Connection struct {
 	handler        ConnectionHandler
 	role           uint8
@@ -84,6 +100,8 @@ type Connection struct {
 	recvdProtected recvdPackets
 }
 
+// Create a new QUIC connection. Should only be used with role=RoleClient,
+// though we use it with RoleServer internally.
 func NewConnection(trans Transport, role uint8, tls TlsConfig, handler ConnectionHandler) *Connection {
 	c := Connection{
 		handler,
@@ -462,6 +480,9 @@ func (c *Connection) outstandingQueuedBytes() (n int) {
 	return
 }
 
+// Provide a packet to the connection.
+//
+// TODO(ekr@rtfm.com): when is error returned?
 func (c *Connection) Input(p []byte) error {
 	if c.isClosed() {
 		return fmt.Errorf("Connection is closed")
@@ -863,6 +884,8 @@ func (p *recvdPackets) packetsToAck() int {
 	return toack
 }
 
+// Check the connection's timer and process any events whose time has
+// expired in the meantime. This includes sending retransmits, etc.
 func (c *Connection) CheckTimer() (int, error) {
 	// Right now just re-send everything we might need to send.
 
@@ -900,14 +923,12 @@ func (c *Connection) handshakeComplete() (err error) {
 	return nil
 }
 
-func (c *Connection) Established() bool {
-	return c.state == StateEstablished
-}
-
 func (c *Connection) packetNonce(pn uint64) []byte {
 	return encodeArgs(pn)
 }
 
+// Create a stream on a given connection. Returns the created
+// stream.
 func (c *Connection) CreateStream() *Stream {
 	nextStream := c.maxStream + 1
 
@@ -925,6 +946,8 @@ func (c *Connection) CreateStream() *Stream {
 	return c.ensureStream(nextStream)
 }
 
+// Get the stream with stream id |id|. Returns nil if no such
+// stream exists.
 func (c *Connection) GetStream(id uint32) *Stream {
 	iid := int(id)
 
@@ -952,11 +975,12 @@ func generateRand64() (uint64, error) {
 	return ret, nil
 }
 
+// Set the handler class for a given connection.
 func (c *Connection) SetHandler(h ConnectionHandler) {
 	c.handler = h
 }
 
-// This is a hack because it will not contain ACKs.
+// Close a connection.
 func (c *Connection) Close() {
 	logf(logTypeConnection, "%v Close()", c.label())
 	f := newConnectionCloseFrame(0, "You don't have to go home but you can't stay here")
@@ -967,6 +991,7 @@ func (c *Connection) isClosed() bool {
 	return c.state == StateClosed
 }
 
+// Get the current state of a connection.
 func (c *Connection) GetState() State {
 	return c.state
 }
