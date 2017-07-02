@@ -25,5 +25,4 @@ Other defects include:
 - Doesn't properly clean up state
 - TLS configuration and verification
 
-**WARNING: Minq is absolutely not ready for any kind production use and should
-only be used for testing. **
+**WARNING: Minq is absolutely not ready for any kind production use and should only be used for testing. **
