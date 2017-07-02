@@ -10,6 +10,7 @@ type streamChunk struct {
 	pns    []uint64 // The packet numbers where we sent this.
 }
 
+// A single QUIC stream.
 type Stream struct {
 	c           *Connection
 	id          uint32
@@ -98,13 +99,15 @@ func (s *Stream) outstandingQueuedBytes() (n int) {
 	return
 }
 
-// Write bytes to a stream.
+// Write bytes to a stream. This function always succeeds, though the
+// bytes may end up being buffered.
 func (s *Stream) Write(b []byte) {
 	s.send(b)
 	s.c.sendQueued()
 }
 
-// Read from a stream into a buffer.
+// Read from a stream into a buffer. Up to |len(b)| bytes will be read,
+// and the number of bytes returned is in |n|.
 func (s *Stream) Read(b []byte) (int, error) {
 	logf(logTypeConnection, "Reading from stream %v", s.Id())
 	if len(s.in) == 0 {

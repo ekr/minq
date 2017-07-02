@@ -18,6 +18,7 @@ const (
 	RoleServer = 2
 )
 
+// The state of a QUIC connection.
 type State uint8
 
 const (
@@ -36,16 +37,24 @@ const (
 	kInitialMTU                  = 1252 // 1280 - UDP headers.
 )
 
+// The protocol version number.
 type VersionNumber uint32
 
 const (
 	kQuicVersion = VersionNumber(0xff000004)
 )
 
-// The interface that the API consumer needs to implement.
+// Interface for the handler object which the Connection will call
+// to notify of events on the connection.
 type ConnectionHandler interface {
+	// The connection has changed state to state |s|
 	StateChanged(s State)
+
+	// A new stream has been created (by receiving a frame
+	// from the other side. |s| contains the stream.
 	NewStream(s *Stream)
+
+	// Stream |s| is now readable.
 	StreamReadable(s *Stream)
 }
 

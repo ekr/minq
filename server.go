@@ -7,10 +7,13 @@ import (
 // TransportFactory makes transports bound to a specific remote
 // address.
 type TransportFactory interface {
+	// Make a transport object bound to |remote|.
 	makeTransport(remote *net.UDPAddr) (Transport, error)
 }
 
-// Server represents a QUIC server.
+// Server represents a QUIC server. A server can be fed an arbitrary
+// number of packets and will create Connections as needed, passing
+// each packet to the right connection.
 type Server struct {
 	handler      ServerHandler
 	transFactory TransportFactory
@@ -19,10 +22,14 @@ type Server struct {
 	idTable      map[connectionId]*Connection
 }
 
+// Interface for the handler object which the Server will call
+// to notify of events.
 type ServerHandler interface {
+	// A new connection has been created and can be found in |c|.
 	NewConnection(c *Connection)
 }
 
+// Pass an incoming packet to the Server.
 func (s *Server) Input(addr *net.UDPAddr, data []byte) (*Connection, error) {
 	logf(logTypeServer, "Received packet from %v", addr)
 	var hdr packetHeader
@@ -64,6 +71,7 @@ func (s *Server) Input(addr *net.UDPAddr, data []byte) (*Connection, error) {
 	return conn, conn.Input(data)
 }
 
+// Create a new QUIC server with the provide TLS config.
 func NewServer(factory TransportFactory, tls TlsConfig, handler ServerHandler) *Server {
 	return &Server{
 		handler,
