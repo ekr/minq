@@ -21,7 +21,7 @@ type tlsConn struct {
 	cs       *mint.CipherSuiteParams
 }
 
-func newtlsConn(conf TlsConfig, role uint8) *tlsConn {
+func newTlsConn(conf TlsConfig, role uint8) *tlsConn {
 	isClient := true
 	if role == RoleServer {
 		isClient = false

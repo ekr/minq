@@ -1,3 +1,9 @@
+/*
+
+Package minq is a minimal implementation of QUIC, as documented at
+https://quicwg.github.io/. Minq partly implements draft-04.
+
+*/
 package minq
 
 import (
@@ -87,7 +93,7 @@ func NewConnection(trans Transport, role uint8, tls TlsConfig, handler Connectio
 		0,
 		0,
 		trans,
-		newtlsConn(tls, role),
+		newTlsConn(tls, role),
 		&aeadFNV{},
 		&aeadFNV{},
 		nil,
