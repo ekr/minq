@@ -58,14 +58,14 @@ const (
 	packetTypePublicReset          = 9
 )
 
-type connectionId uint64
+type ConnectionId uint64
 type version uint32
 
 // The PDU definition for the header.
 // These types are capitalized so that |codec| can use the,
 type packetHeader struct {
 	Type         byte
-	ConnectionID connectionId
+	ConnectionID ConnectionId
 	PacketNumber uint64 // Never more than 32 bits on the wire.
 	Version      VersionNumber
 }

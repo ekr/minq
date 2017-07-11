@@ -3,12 +3,27 @@ package main
 import (
 	"flag"
 	"fmt"
-	"net"
-
 	"github.com/ekr/minq"
+	"net"
+	"time"
 )
 
 var addr string
+
+type conn struct {
+	conn *minq.Connection
+	last time.Time
+}
+
+func (c *conn) checkTimer() {
+	t := time.Now()
+	if t.After(c.last.Add(time.Second)) {
+		c.conn.CheckTimer()
+		c.last = time.Now()
+	}
+}
+
+var conns = make(map[minq.ConnectionId]*conn)
 
 type serverHandler struct {
 }
@@ -16,6 +31,7 @@ type serverHandler struct {
 func (h *serverHandler) NewConnection(c *minq.Connection) {
 	fmt.Println("New connection")
 	c.SetHandler(&connHandler{})
+	conns[c.Id()] = &conn{c, time.Now()}
 }
 
 type connHandler struct {
@@ -65,22 +81,35 @@ func main() {
 	for {
 		b := make([]byte, 8192)
 
+		usock.SetDeadline(time.Now().Add(time.Second))
 		n, addr, err := usock.ReadFromUDP(b)
 		if err != nil {
-			fmt.Println("Error reading from UDP socket: ", err)
-			return
+			e, o := err.(net.Error)
+			if !o || !e.Timeout() {
+				fmt.Println("Error reading from UDP socket: ", err)
+				return
+			}
+			n = 0
 		}
 
-		if n == len(b) {
-			fmt.Println("Underread from UDP socket")
-			return
-		}
-		b = b[:n]
+		// If we read data, process it.
+		if n > 0 {
+			if n == len(b) {
+				fmt.Println("Underread from UDP socket")
+				return
+			}
+			b = b[:n]
 
-		_, err = server.Input(addr, b)
-		if err != nil {
-			fmt.Println("server.Input returned error: ", err)
-			return
+			_, err = server.Input(addr, b)
+			if err != nil {
+				fmt.Println("server.Input returned error: ", err)
+				return
+			}
+		}
+
+		// Check all the timers
+		for _, c := range conns {
+			c.checkTimer()
 		}
 	}
 }

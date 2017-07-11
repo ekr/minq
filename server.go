@@ -19,7 +19,7 @@ type Server struct {
 	transFactory TransportFactory
 	tls          TlsConfig
 	addrTable    map[string]*Connection
-	idTable      map[connectionId]*Connection
+	idTable      map[ConnectionId]*Connection
 }
 
 // Interface for the handler object which the Server will call
@@ -78,6 +78,6 @@ func NewServer(factory TransportFactory, tls TlsConfig, handler ServerHandler) *
 		factory,
 		tls,
 		make(map[string]*Connection),
-		make(map[connectionId]*Connection),
+		make(map[ConnectionId]*Connection),
 	}
 }

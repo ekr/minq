@@ -97,8 +97,8 @@ type Connection struct {
 	role           uint8
 	state          State
 	version        VersionNumber
-	clientConnId   connectionId
-	serverConnId   connectionId
+	clientConnId   ConnectionId
+	serverConnId   ConnectionId
 	transport      Transport
 	tls            *tlsConn
 	writeClear     cipher.AEAD
@@ -141,7 +141,7 @@ func NewConnection(trans Transport, role uint8, tls TlsConfig, handler Connectio
 	if err != nil {
 		return nil
 	}
-	connId := connectionId(tmp)
+	connId := ConnectionId(tmp)
 	if role == RoleClient {
 		c.clientConnId = connId
 	} else {
@@ -267,7 +267,7 @@ func (c *Connection) sendPacket(pt uint8, tosend []frame) error {
 	logf(logTypeTrace, "Sending packet of type %v. %v frames", pt, len(tosend))
 	left := c.mtu
 
-	var connId connectionId
+	var connId ConnectionId
 	var aead cipher.AEAD
 	if c.writeProtected != nil {
 		aead = c.writeProtected.aead
@@ -1026,4 +1026,11 @@ func (c *Connection) isClosed() bool {
 // Get the current state of a connection.
 func (c *Connection) GetState() State {
 	return c.state
+}
+
+// Get the connection ID for a connection. Returns 0 if
+// you are a client and the first server packet hasn't
+// been received.
+func (c *Connection) Id() ConnectionId {
+	return c.serverConnId
 }
