@@ -26,7 +26,7 @@ Other defects include:
 - TLS configuration and verification
 
 
-# Mint Versions
+## Mint Versions
 
 Minq depends on Mint (https://www.github.com/bifurcation/mint) for TLS.
 There are some changes to Mint to support QUIC that haven't been
@@ -34,6 +34,8 @@ merged yet, so in the meantime you will want the following branch:
 https://github.com/ekr/mint/tree/expose_internals
 
 
-**WARNING**: Minq is absolutely not ready for any kind of production use and should only be used for testing.
+## WARNING
+
+Minq is absolutely not ready for any kind of production use and should only be used for testing.
 
 
