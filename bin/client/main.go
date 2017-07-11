@@ -78,7 +78,7 @@ func main() {
 	// Start things off.
 	_, err = conn.CheckTimer()
 
-	for !conn.Established() {
+	for conn.GetState() != minq.StateEstablished {
 		b := readUDP(usock)
 		if b == nil {
 			return
