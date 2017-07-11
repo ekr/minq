@@ -853,6 +853,7 @@ func (p *recvdPacketsInt) packetSetReceived(pn uint64) {
 			grow = 10
 		}
 
+		logf(logTypeConnection, "Growing receive window by %v", grow)
 		p.r = append(p.r, make([]bool, grow)...)
 	}
 	p.r[pn-p.min] = true
