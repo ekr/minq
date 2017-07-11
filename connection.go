@@ -847,13 +847,14 @@ func (p *recvdPacketsInt) packetNotReceived(pn uint64) bool {
 
 func (p *recvdPacketsInt) packetSetReceived(pn uint64) {
 	assert(pn >= p.min)
+	logf(logTypeAck, "Setting received for pn=%v min=%v", pn, p.min)
 	if pn >= p.min+uint64(len(p.r)) {
-		grow := uint64(len(p.r)) - (pn - p.min)
+		grow := (pn - p.min) - uint64(len(p.r))
 		if grow < 10 {
 			grow = 10
 		}
 
-		logf(logTypeConnection, "Growing receive window by %v", grow)
+		logf(logTypeAck, "Growing received packet window by %v", grow)
 		p.r = append(p.r, make([]bool, grow)...)
 	}
 	p.r[pn-p.min] = true
@@ -868,9 +869,11 @@ func (p *recvdPackets) initialized() bool {
 }
 
 func (p *recvdPackets) init(pn uint64) {
+	logf(logTypeAck, "Initializing received packet start=%v", pn)
 	p.clear.init(pn)
 	p.all.init(pn)
 }
+
 func (p *recvdPackets) packetNotReceived(pn uint64) bool {
 	return p.clear.packetNotReceived(pn) && p.all.packetNotReceived(pn)
 }

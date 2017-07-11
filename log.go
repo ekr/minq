@@ -19,6 +19,7 @@ const (
 	logTypeCodec      = "codec"
 	logTypeConnBuffer = "connbuffer"
 	logTypeConnection = "connection"
+	logTypeAck        = "ack"
 	logTypeFrame      = "frame"
 	logTypeHandshake  = "handshake"
 	logTypeTls        = "tls"
