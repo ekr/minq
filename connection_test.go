@@ -190,10 +190,10 @@ func TestSendReceiveCISI(t *testing.T) {
 	assertX(t, n > 0, "Client should still have un-acked data")
 
 	// Run the server timer which will cause it to send
-	// its backup ACK frame.
+	// ACKs for both the encrypted and clear frames.
 	n, err = server.CheckTimer()
 	assertNotError(t, err, "Couldn't run server timer")
-	assertEquals(t, 1, n)
+	assertEquals(t, 2, n)
 
 	// Now the client can ingest it.
 	err = inputAll(client)
