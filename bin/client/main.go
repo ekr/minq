@@ -6,6 +6,7 @@ import (
 	"github.com/ekr/minq"
 	"net"
 	"os"
+	"time"
 )
 
 var addr string
@@ -39,21 +40,26 @@ func (h *connHandler) StreamReadable(s *minq.Stream) {
 	os.Stdout.Write(b)
 }
 
-func readUDP(s *net.UDPConn) []byte {
+func readUDP(s *net.UDPConn) ([]byte, error) {
 	b := make([]byte, 8192)
 
+	s.SetReadDeadline(time.Now().Add(time.Second))
 	n, _, err := s.ReadFromUDP(b)
 	if err != nil {
+		e, o := err.(net.Error)
+		if o && e.Timeout() {
+			return nil, minq.ErrorWouldBlock
+		}
 		fmt.Println("Error reading from UDP socket: ", err)
-		return nil
+		return nil, err
 	}
 
 	if n == len(b) {
 		fmt.Println("Underread from UDP socket")
-		return nil
+		return nil, err
 	}
 	b = b[:n]
-	return b
+	return b, nil
 }
 
 func main() {
@@ -79,8 +85,15 @@ func main() {
 	_, err = conn.CheckTimer()
 
 	for conn.GetState() != minq.StateEstablished {
-		b := readUDP(usock)
-		if b == nil {
+		b, err := readUDP(usock)
+		if err != nil {
+			if err == minq.ErrorWouldBlock {
+				_, err = conn.CheckTimer()
+				if err != nil {
+					return
+				}
+				continue
+			}
 			return
 		}
 
@@ -101,7 +114,11 @@ func main() {
 	// Read from the UDP socket.
 	go func() {
 		for {
-			b := readUDP(usock)
+			b, err := readUDP(usock)
+			if err == minq.ErrorWouldBlock {
+				udpin <- make([]byte, 0)
+				continue
+			}
 			udpin <- b
 			if b == nil {
 				return
@@ -126,7 +143,11 @@ func main() {
 	for {
 		select {
 		case u := <-udpin:
-			err = conn.Input(u)
+			if len(u) == 0 {
+				_, err = conn.CheckTimer()
+			} else {
+				err = conn.Input(u)
+			}
 			if err != nil {
 				fmt.Println("Error", err)
 				return
