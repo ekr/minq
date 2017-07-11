@@ -390,6 +390,9 @@ func (c *Connection) sendQueued() (int, error) {
 	sent += s
 
 	// Now send other streams if we are in encrypted mode.
+	// TODO(ekr@rtfm.com): In the special case where there
+	// is no data and the ACK is a duplicate, just don't send
+	// it.
 	if c.state == StateEstablished {
 		s, err := c.sendQueuedStreams(packetType1RTTProtectedPhase0, c.streams[1:], true)
 		if err != nil {
