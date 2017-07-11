@@ -152,7 +152,7 @@ func NewConnection(trans Transport, role uint8, tls TlsConfig, handler Connectio
 	if err != nil {
 		return nil
 	}
-	c.nextSendPacket = tmp & 0xffffffff
+	c.nextSendPacket = tmp & 0x7fffffff
 	c.ensureStream(0)
 	return &c
 }
