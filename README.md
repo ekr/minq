@@ -19,6 +19,7 @@ Important missing pieces for the first implementation draft include:
 - ALPN
 - Handling ACK ranges
 - Real timeout and retransmission support
+- Proper handling of ACKs of ACKs (right now ACKs grow without bound).
 
 Other defects include:
 
