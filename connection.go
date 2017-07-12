@@ -72,8 +72,9 @@ type recvdPacketsInt struct {
 }
 
 type recvdPackets struct {
-	clear recvdPacketsInt
-	all   recvdPacketsInt
+	clear  recvdPacketsInt
+	all    recvdPacketsInt
+	acked2 recvdPacketsInt // Acks that have been ACKed.
 }
 
 /*
@@ -111,6 +112,7 @@ type Connection struct {
 	maxStream      uint32
 	clientInitial  []byte
 	recvd          recvdPackets
+	sentAcks       map[uint64][]ackRange
 }
 
 // Create a new QUIC connection. Should only be used with role=RoleClient,
@@ -135,6 +137,7 @@ func NewConnection(trans Transport, role uint8, tls TlsConfig, handler Connectio
 		0,
 		nil,
 		newRecvdPackets(),
+		make(map[uint64][]ackRange, 0),
 	}
 
 	tmp, err := generateRand64()
@@ -427,6 +430,8 @@ func (c *Connection) sendStreamPacket(pt uint8, frames []frame, acks []ackRange)
 		}
 		frames = append(frames, *af)
 	}
+	// Record which packets we sent ACKs in.
+	c.sentAcks[c.nextSendPacket] = acks[0:asent]
 
 	err = c.sendPacket(pt, frames)
 	if err != nil {
@@ -634,6 +639,7 @@ func (c *Connection) processCleartext(hdr *packetHeader, payload []byte) error {
 			return nil
 		}*/
 
+	otherThanAck := false
 	for len(payload) > 0 {
 		logf(logTypeConnection, "%s: payload bytes left %d", c.label(), len(payload))
 		n, f, err := decodeFrame(payload)
@@ -644,6 +650,7 @@ func (c *Connection) processCleartext(hdr *packetHeader, payload []byte) error {
 		logf(logTypeHandshake, "Frame type %v", f.f.getType())
 
 		payload = payload[n:]
+		nonAck := true
 		switch inner := f.f.(type) {
 		case *streamFrame:
 			// If this is duplicate data and if so early abort.
@@ -716,6 +723,7 @@ func (c *Connection) processCleartext(hdr *packetHeader, payload []byte) error {
 			if err != nil {
 				return err
 			}
+			nonAck = false
 		case *connectionCloseFrame:
 			logf(logTypeConnection, "Received frame close")
 			c.setState(StateClosed)
@@ -724,6 +732,16 @@ func (c *Connection) processCleartext(hdr *packetHeader, payload []byte) error {
 			logf(logTypeConnection, "Received unexpected frame type")
 			fmt.Errorf("Unexpected frame type")
 		}
+		if nonAck {
+			otherThanAck = true
+		}
+	}
+
+	// If this is just an ACK packet, set it as if it was
+	// double-acked so we don't send ACKs for it.
+	if !otherThanAck {
+		logf(logTypeAck, "Packet just contained ACKs")
+		c.recvd.packetSetAcked2(hdr.PacketNumber)
 	}
 
 	// TODO(ekr@rtfm.com): Check for more on stream 0, but we need to properly handle
@@ -734,6 +752,7 @@ func (c *Connection) processCleartext(hdr *packetHeader, payload []byte) error {
 
 func (c *Connection) processUnprotected(hdr *packetHeader, payload []byte) error {
 	logf(logTypeHandshake, "Reading unprotected data in state %v", c.state)
+	otherThanAck := false
 	for len(payload) > 0 {
 		logf(logTypeConnection, "%s: payload bytes left %d", c.label(), len(payload))
 		n, f, err := decodeFrame(payload)
@@ -744,6 +763,7 @@ func (c *Connection) processUnprotected(hdr *packetHeader, payload []byte) error
 		logf(logTypeHandshake, "Frame type %v", f.f.getType())
 
 		payload = payload[n:]
+		nonAck := true
 		switch inner := f.f.(type) {
 		case *streamFrame:
 			logf(logTypeConnection, "Received data on stream %v len=%v", inner.StreamId, len(inner.Data))
@@ -768,12 +788,23 @@ func (c *Connection) processUnprotected(hdr *packetHeader, payload []byte) error
 			if err != nil {
 				return err
 			}
+			nonAck = false
 		case *connectionCloseFrame:
 			logf(logTypeConnection, "Received close frame")
 			c.setState(StateClosed)
 		default:
 			logf(logTypeConnection, "Received unexpected frame type")
 		}
+		if nonAck {
+			otherThanAck = true
+		}
+	}
+
+	// If this is just an ACK packet, set it as if it was
+	// double-acked so we don't send ACKs for it.
+	if !otherThanAck {
+		logf(logTypeAck, "Packet just contained ACKs")
+		c.recvd.packetSetAcked2(hdr.PacketNumber)
 	}
 
 	return nil
@@ -785,7 +816,7 @@ func (c *Connection) processAckFrame(f *ackFrame) error {
 
 	// Go through all the ACK blocks and process everything.
 	for {
-		logf(logTypeConnection, "%s: processing ACK range %v-%v", c.label(), start, end)
+		logf(logTypeAck, "%s: processing ACK range %v-%v", c.label(), start, end)
 		// Unusual loop structure to avoid weirdness at 2^64-1
 		pn := start
 		for {
@@ -802,7 +833,16 @@ func (c *Connection) processAckFrame(f *ackFrame) error {
 				st.removeAckedChunks(pn)
 			}
 
-			// 2. Remove all our ACKed acks TODO(ekr@rtfm.com)
+			// 2. Mark all the packets that were ACKed in this packet as double-acked.
+			acks, ok := c.sentAcks[pn]
+			if ok {
+				for _, a := range acks {
+					logf(logTypeAck, "Ack2 for ack range last=%v len=%v", a.lastPacket, a.count)
+					for i := uint64(0); i < a.count; i++ {
+						c.recvd.packetSetAcked2(a.lastPacket - i)
+					}
+				}
+			}
 
 			if pn == end {
 				break
@@ -861,7 +901,10 @@ func (p *recvdPacketsInt) packetSetReceived(pn uint64) {
 }
 
 func newRecvdPackets() recvdPackets {
-	return recvdPackets{newRecvdPacketsInt(), newRecvdPacketsInt()}
+	return recvdPackets{
+		newRecvdPacketsInt(),
+		newRecvdPacketsInt(),
+		newRecvdPacketsInt()}
 }
 
 func (p *recvdPackets) initialized() bool {
@@ -872,6 +915,7 @@ func (p *recvdPackets) init(pn uint64) {
 	logf(logTypeAck, "Initializing received packet start=%v", pn)
 	p.clear.init(pn)
 	p.all.init(pn)
+	p.acked2.init(pn)
 }
 
 func (p *recvdPackets) packetNotReceived(pn uint64) bool {
@@ -879,10 +923,16 @@ func (p *recvdPackets) packetNotReceived(pn uint64) bool {
 }
 
 func (p *recvdPackets) packetSetReceived(pn uint64, protected bool) {
+	logf(logTypeAck, "Setting packet received=%v", pn)
 	if !protected {
 		p.clear.packetSetReceived(pn)
 	}
 	p.all.packetSetReceived(pn)
+}
+
+func (p *recvdPackets) packetSetAcked2(pn uint64) {
+	logf(logTypeAck, "Setting packet acked2=%v", pn)
+	p.acked2.packetSetReceived(pn)
 }
 
 // Prepare a list of the ACK ranges, starting at the highest
@@ -894,25 +944,28 @@ func (p *recvdPackets) prepareAckRange(protected bool) []ackRange {
 	if !protected {
 		ps = &p.clear
 	}
+	logf(logTypeAck, "Preparing ACK range recvd=%v acked2=%v protected=%v", ps, p.acked2, protected)
 	ranges := make([]ackRange, 0)
 	for i := len(ps.r) - 1; i >= 0; i-- {
 		pn = uint64(i) + ps.min
-		if inrange != ps.r[i] {
+		needs_ack := ps.r[i] && !p.acked2.r[i]
+		if inrange != needs_ack {
 			if inrange {
 				// This is the end of a range.
 				ranges = append(ranges, ackRange{last, last - pn})
 			} else {
 				last = pn
 			}
-			inrange = ps.r[i]
+			inrange = needs_ack
 		}
 	}
 	if inrange {
+		logf(logTypeTrace, "EKR: appending final range")
 		ranges = append(ranges, ackRange{last, last - pn + 1})
 	}
 
-	logf(logTypeConnection, "%v ACK ranges to send", len(ranges))
-	logf(logTypeTrace, "ACK ranges = %v", ranges)
+	logf(logTypeAck, "%v ACK ranges to send", len(ranges))
+	logf(logTypeAck, "ACK ranges = %v", ranges)
 	return ranges
 }
 

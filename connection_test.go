@@ -200,6 +200,16 @@ func TestSendReceiveCISI(t *testing.T) {
 	assertNotError(t, err, "Error processing server ACK")
 	n = client.outstandingQueuedBytes()
 	assertEquals(t, 0, n)
+
+	// Run the client's checkTimer, which shouldn't do
+	// anything because you don't ACK acks.
+	n, err = client.CheckTimer()
+	assertNotError(t, err, "Couldn't run client timer")
+	assertEquals(t, 0, n)
+
+	// Note: the server will still try to generate ACKs for
+	// the client's packets, because the client hasn't ACKed
+	// the ACKs. This is a bug.
 }
 
 func TestSendReceiveData(t *testing.T) {
