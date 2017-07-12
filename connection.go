@@ -266,7 +266,7 @@ func (c *Connection) sendClientInitial() error {
 }
 
 func (c *Connection) sendPacket(pt uint8, tosend []frame) error {
-	logf(logTypeConnection, "Sending packet of type %v. %v frames", pt, len(tosend))
+	logf(logTypeConnection, "%s: Sending packet of type %v. %v frames", c.label(), pt, len(tosend))
 	logf(logTypeTrace, "Sending packet of type %v. %v frames", pt, len(tosend))
 	left := c.mtu
 
@@ -373,7 +373,7 @@ func (c *Connection) makeAckFrame(acks []ackRange, maxlength int) (*frame, int, 
 	return af, len(acks), nil
 }
 
-func (c *Connection) sendQueued() (int, error) {
+func (c *Connection) sendQueued(bareAcks bool) (int, error) {
 	if c.state == StateInit || c.state == StateWaitClientInitial {
 		return 0, nil
 	}
@@ -386,7 +386,7 @@ func (c *Connection) sendQueued() (int, error) {
 		pt = packetTypeServerCleartext
 	}
 
-	s, err := c.sendQueuedStreams(pt, c.streams[0:1], false)
+	s, err := c.sendQueuedStreams(pt, c.streams[0:1], false, bareAcks)
 	if err != nil {
 		return sent, err
 	}
@@ -397,7 +397,7 @@ func (c *Connection) sendQueued() (int, error) {
 	// is no data and the ACK is a duplicate, just don't send
 	// it.
 	if c.state == StateEstablished {
-		s, err := c.sendQueuedStreams(packetType1RTTProtectedPhase0, c.streams[1:], true)
+		s, err := c.sendQueuedStreams(packetType1RTTProtectedPhase0, c.streams[1:], true, bareAcks)
 		if err != nil {
 			return sent, err
 		}
@@ -442,7 +442,9 @@ func (c *Connection) sendStreamPacket(pt uint8, frames []frame, acks []ackRange)
 }
 
 // Send all the queued data on a set of streams with packet type |pt|
-func (c *Connection) sendQueuedStreams(pt uint8, streams []Stream, protected bool) (int, error) {
+func (c *Connection) sendQueuedStreams(pt uint8, streams []Stream, protected bool, bareAcks bool) (int, error) {
+	logf(logTypeConnection, "%v: sendQueuedStreams pt=%v, protected=%v, bareAcks=%v",
+		c.label(), pt, protected, bareAcks)
 	left := c.mtu
 	frames := make([]frame, 0)
 	sent := int(0)
@@ -476,8 +478,10 @@ func (c *Connection) sendQueuedStreams(pt uint8, streams []Stream, protected boo
 		}
 	}
 
-	// Send the remainder.
-	if len(acks) > 0 || len(frames) > 0 {
+	// Send the remainder, plus any ACKs that are left.
+	logf(logTypeConnection, "%s: Remainder to send? sent=%v frames=%v acks=%v",
+		c.label(), sent, len(frames), len(acks))
+	if len(frames) > 0 || ((len(acks) > 0) && bareAcks) {
 		_, err := c.sendStreamPacket(pt, frames, acks)
 		if err != nil {
 			return 0, err
@@ -531,7 +535,8 @@ func (c *Connection) Input(p []byte) error {
 	// TODO(ekr@rtfm.com): this dup detection doesn't work right if you
 	// get a cleartext packet that has the same PN as a ciphertext or vice versa.
 	// Need to fix.
-	logf(logTypeConnection, "Received (unverified) packet with PN=%v", hdr.PacketNumber)
+	logf(logTypeConnection, "%s: Received (unverified) packet with PN=%v PT=%v",
+		c.label(), hdr.PacketNumber, hdr.getHeaderType())
 	if c.recvd.initialized() && !c.recvd.packetNotReceived(hdr.PacketNumber) {
 		logf(logTypeConnection, "Discarding duplicate packet")
 		return fmt.Errorf("Duplicate packet")
@@ -624,7 +629,7 @@ func (c *Connection) processClientInitial(hdr *packetHeader, payload []byte) err
 
 	c.setState(StateWaitClientSecondFlight)
 
-	_, err = c.sendQueued()
+	_, err = c.sendQueued(true)
 	return err
 }
 
@@ -709,7 +714,6 @@ func (c *Connection) processCleartext(hdr *packetHeader, payload []byte) error {
 
 			if len(out) > 0 {
 				c.sendOnStream(0, out)
-				_, err = c.sendQueued()
 				if err != nil {
 					return err
 				}
@@ -746,6 +750,12 @@ func (c *Connection) processCleartext(hdr *packetHeader, payload []byte) error {
 
 	// TODO(ekr@rtfm.com): Check for more on stream 0, but we need to properly handle
 	// encrypted NST.
+
+	// Now flush our output buffers.
+	_, err := c.sendQueued(true)
+	if err != nil {
+		return err
+	}
 
 	return nil
 }
@@ -972,6 +982,7 @@ func (p *recvdPackets) prepareAckRange(protected bool) []ackRange {
 // Check the connection's timer and process any events whose time has
 // expired in the meantime. This includes sending retransmits, etc.
 func (c *Connection) CheckTimer() (int, error) {
+	logf(logTypeConnection, "Checking timer")
 	// Right now just re-send everything we might need to send.
 
 	// Special case the client's first message.
@@ -981,7 +992,7 @@ func (c *Connection) CheckTimer() (int, error) {
 		return 1, err
 	}
 
-	return c.sendQueued()
+	return c.sendQueued(false)
 }
 
 // Called when the handshake is complete.

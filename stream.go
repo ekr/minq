@@ -103,7 +103,7 @@ func (s *Stream) outstandingQueuedBytes() (n int) {
 // bytes may end up being buffered.
 func (s *Stream) Write(b []byte) {
 	s.send(b)
-	s.c.sendQueued()
+	s.c.sendQueued(false)
 }
 
 // Read from a stream into a buffer. Up to |len(b)| bytes will be read,

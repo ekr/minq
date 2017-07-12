@@ -189,13 +189,8 @@ func TestSendReceiveCISI(t *testing.T) {
 	n = client.outstandingQueuedBytes()
 	assertX(t, n > 0, "Client should still have un-acked data")
 
-	// Run the server timer which will cause it to send
-	// ACKs for both the encrypted and clear frames.
-	n, err = server.CheckTimer()
-	assertNotError(t, err, "Couldn't run server timer")
-	assertEquals(t, 2, n)
-
-	// Now the client can ingest it.
+	// Have the client ingest the server's ACK, sent on
+	// reading CFIN.
 	err = inputAll(client)
 	assertNotError(t, err, "Error processing server ACK")
 	n = client.outstandingQueuedBytes()
@@ -207,9 +202,9 @@ func TestSendReceiveCISI(t *testing.T) {
 	assertNotError(t, err, "Couldn't run client timer")
 	assertEquals(t, 0, n)
 
-	// Note: the server will still try to generate ACKs for
-	// the client's packets, because the client hasn't ACKed
-	// the ACKs. This is a bug.
+	n, err = server.CheckTimer()
+	assertNotError(t, err, "Couldn't run server timer")
+	assertEquals(t, 0, n)
 }
 
 func TestSendReceiveData(t *testing.T) {
