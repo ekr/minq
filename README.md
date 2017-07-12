@@ -44,6 +44,7 @@ only be used for testing.
     git remote add ekr https://www.github.com/ekr/mint
     git fetch ekr
     git checkout minq_head
+    cd ../../ekr/minq
     go test
 
 
