@@ -48,14 +48,31 @@ only be used for testing.
     cd ../../ekr/minq
     go test
 
+This should produce something like this:
 
-## Test Programs
+    Result =  010002616263
+    Result2 =  010002616263
+    Result =  0102616263
+    Result2 =  0102616263
+    {1 2 [97 98 99]}
+    {1 1 [8 16]}
+    {3 2 [8 16 24 32]}
+    Checking client state
+    Checking server state
+    Encoded frame  ab00deadbeef0000000000000001
+    Encoded frame  bb0100deadbeef00000000000000010e00000001
+    Result =  820123456789abcdefdeadbeefff000001
+    Result2 =  820123456789abcdefdeadbeefff000001
+    PASS
+    ok  	github.com/ekr/minq	1.285s
+
+It's the "ok" at the end that's important.
 
 There are two test programs that live in ```minq/bin/client``` and
 ```minq/bin/server```. The server is an echo server that upcases the
 returned data. The client is just a passthrough.
 
-Doing
+In ```${GOPATH}/src/github.com/ekr```, doing
 
     go run minq/bin/server/main.go
     go run minq/bin/client/main.go
