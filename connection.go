@@ -581,11 +581,6 @@ func (c *Connection) Input(p []byte) error {
 func (c *Connection) processClientInitial(hdr *packetHeader, payload []byte) error {
 	logf(logTypeHandshake, "Handling client initial packet")
 
-	if c.state != StateWaitClientInitial {
-		// TODO(ekr@rtfm.com): Distinguish from retransmission.
-		return fmt.Errorf("Received repeat Client Initial")
-	}
-
 	// Directly parse the ClientInitial rather than inserting it into
 	// the stream processor.
 	var sf streamFrame
@@ -602,6 +597,13 @@ func (c *Connection) processClientInitial(hdr *packetHeader, payload []byte) err
 
 	if sf.Offset != 0 {
 		return fmt.Errorf("Received ClientInitial with offset != 0")
+	}
+
+	if c.state != StateWaitClientInitial {
+		if uint64(len(sf.Data)) > c.streams[0].readOffset {
+			return fmt.Errorf("Received second ClientInitial which seems to be too long, offset=%v len=%v", c.streams[0].readOffset, n)
+		}
+		return nil
 	}
 
 	// TODO(ekr@rtfm.com): check that the length is long enough.

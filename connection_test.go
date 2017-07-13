@@ -155,6 +155,29 @@ func TestSendReceiveCI(t *testing.T) {
 	assertNotError(t, err, "Error processing CI")
 }
 
+func TestSendReceiveDupCI(t *testing.T) {
+	cTrans, sTrans := newTestTransportPair(true)
+
+	client := NewConnection(cTrans, RoleClient, TlsConfig{}, nil)
+	assertNotNil(t, client, "Couldn't make client")
+
+	server := NewConnection(sTrans, RoleServer, TlsConfig{}, nil)
+	assertNotNil(t, server, "Couldn't make server")
+
+	err := client.sendClientInitial()
+	assertNotError(t, err, "Couldn't send client initial packet")
+
+	err = inputAll(server)
+	assertNotError(t, err, "Error processing CI")
+
+	n, err := client.CheckTimer()
+	assertNotError(t, err, "Couldn't check timer on client")
+	assertEquals(t, n, 1)
+
+	err = inputAll(server)
+	assertNotError(t, err, "Error processing second CI")
+}
+
 func TestSendReceiveCISI(t *testing.T) {
 	cTrans, sTrans := newTestTransportPair(true)
 
