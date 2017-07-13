@@ -82,6 +82,7 @@ in ```MINQ_LOG=connection go test```. Valid values are:
     	logTypeUdp        = "udp"
     )
 
+Multiple log levels can be separated by commas.
 
 ## Mint
 
