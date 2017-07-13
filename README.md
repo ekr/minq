@@ -38,7 +38,8 @@ only be used for testing.
 ## Quick Start (untested but should be rightish)
 
 
-    cd ${GOPATH}
+    cd ${GOPATH}/src
+    # The following line will produce a complaint about mint.CipherSuiteParams. Ignore it.
     go get github.com/ekr/minq
     cd github.com/bifurcation/mint
     git remote add ekr https://www.github.com/ekr/mint
