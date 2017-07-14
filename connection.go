@@ -47,6 +47,10 @@ const (
 	kQuicGreaseVersion2 = VersionNumber(0x2a2a2a2a)
 )
 
+const (
+	kQuicALPNToken = "hq-04"
+)
+
 // Interface for the handler object which the Connection will call
 // to notify of events on the connection.
 type ConnectionHandler interface {
