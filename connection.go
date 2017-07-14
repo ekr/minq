@@ -7,6 +7,7 @@ https://quicwg.github.io/. Minq partly implements draft-04.
 package minq
 
 import (
+	"bytes"
 	"crypto/cipher"
 	"crypto/rand"
 	"encoding/hex"
@@ -41,7 +42,9 @@ const (
 type VersionNumber uint32
 
 const (
-	kQuicVersion = VersionNumber(0xff000004)
+	kQuicVersion        = VersionNumber(0xff000004)
+	kQuicGreaseVersion1 = VersionNumber(0x1a1a1a1a)
+	kQuicGreaseVersion2 = VersionNumber(0x2a2a2a2a)
 )
 
 // Interface for the handler object which the Connection will call
@@ -265,7 +268,90 @@ func (c *Connection) sendClientInitial() error {
 	return c.sendPacket(packetTypeClientInitial, queued)
 }
 
+func (c *Connection) sendPacketRaw(pt uint8, payload []byte) error {
+	logf(logTypeConnection, "%v: Sending packet of pt=%v len=%v", c.label(), pt, len(payload))
+	left := c.mtu
+
+	var connId ConnectionId
+	var aead cipher.AEAD
+	if c.writeProtected != nil {
+		aead = c.writeProtected.aead
+	}
+	connId = c.serverConnId
+
+	if c.role == RoleClient {
+		switch {
+		case pt == packetTypeClientInitial:
+			aead = c.writeClear
+			connId = c.clientConnId
+		case pt == packetTypeClientCleartext:
+			aead = c.writeClear
+		case pt == packetType0RTTProtected:
+			connId = c.clientConnId
+			aead = nil // This will cause a crash b/c 0-RTT doesn't work yet
+		}
+	} else {
+		if pt == packetTypeServerCleartext || pt == packetTypeVersionNegotiation {
+			aead = c.writeClear
+		}
+	}
+
+	left -= aead.Overhead()
+
+	// For now, just do the long header.
+	p := packet{
+		packetHeader{
+			pt | packetFlagLongHeader,
+			connId,
+			c.nextSendPacket,
+			c.version,
+		},
+		nil,
+	}
+	c.nextSendPacket++
+
+	// Encode the header so we know how long it is.
+	// TODO(ekr@rtfm.com): this is gross.
+	hdr, err := encode(&p.packetHeader)
+	if err != nil {
+		return err
+	}
+	left -= len(hdr)
+
+	assert(left >= len(payload))
+
+	p.payload = payload
+	protected := aead.Seal(nil, c.packetNonce(p.PacketNumber), p.payload, hdr)
+	packet := append(hdr, protected...)
+
+	logf(logTypeTrace, "Sending packet len=%d, len=%v", len(packet), hex.EncodeToString(packet))
+	c.transport.Send(packet)
+
+	return nil
+}
+
 func (c *Connection) sendPacket(pt uint8, tosend []frame) error {
+	logf(logTypeConnection, "%s: Sending packet of type %v. %v frames", c.label(), pt, len(tosend))
+	logf(logTypeTrace, "Sending packet of type %v. %v frames", pt, len(tosend))
+	sent := 0
+
+	payload := make([]byte, 0)
+
+	for _, f := range tosend {
+		_, err := f.length()
+		if err != nil {
+			return err
+		}
+
+		logf(logTypeTrace, "Frame=%v", hex.EncodeToString(f.encoded))
+		payload = append(payload, f.encoded...)
+		sent++
+	}
+
+	return c.sendPacketRaw(pt, payload)
+}
+
+func (c *Connection) sendFramesInPacket(pt uint8, tosend []frame) error {
 	logf(logTypeConnection, "%s: Sending packet of type %v. %v frames", c.label(), pt, len(tosend))
 	logf(logTypeTrace, "Sending packet of type %v. %v frames", pt, len(tosend))
 	left := c.mtu
@@ -522,6 +608,26 @@ func (c *Connection) Input(p []byte) error {
 	}
 	assert(int(hdrlen) <= len(p))
 
+	if hdr.Version != c.version {
+		if c.role == RoleServer {
+			logf(logTypeConnection, "%s: Received unsupported version %v, expected %v", c.label(), hdr.Version, c.version)
+			err = c.sendVersionNegotiation()
+			if err != nil {
+				return err
+			}
+			if c.state == StateWaitClientInitial {
+				return ErrorDestroyConnection
+			}
+			return nil
+		} else {
+			// If we're a client, choke on unknown versions, unless
+			// they come in version negotiation packets.
+			if hdr.getHeaderType() != packetTypeVersionNegotiation {
+				return fmt.Errorf("Received packet with unexpected version %v", hdr.Version)
+			}
+		}
+	}
+
 	aead := c.readClear
 	if hdr.isProtected() {
 		if c.readProtected == nil {
@@ -548,6 +654,23 @@ func (c *Connection) Input(p []byte) error {
 		return err
 	}
 
+	typ := hdr.getHeaderType()
+	if !isLongHeader(&hdr) {
+		// TODO(ekr@rtfm.com): We are using this for both types.
+		typ = packetType1RTTProtectedPhase0
+	}
+	logf(logTypeConnection, "Packet header %v, %d", hdr, typ)
+
+	// Process messages from the server that don't set up the connection
+	// first.
+	switch typ {
+	case packetTypeVersionNegotiation:
+		return c.processVersionNegotiation(&hdr, payload)
+	case packetTypeServerStatelessRetry:
+		logf(logTypeConnection, "Unsupported packet type %v", typ)
+		return fmt.Errorf("Unsupported packet type %v", typ)
+	}
+
 	if !c.recvd.initialized() {
 		c.recvd.init(hdr.PacketNumber)
 	}
@@ -557,12 +680,6 @@ func (c *Connection) Input(p []byte) error {
 	// it received.
 
 	c.recvd.packetSetReceived(hdr.PacketNumber, hdr.isProtected())
-	typ := hdr.getHeaderType()
-	if !isLongHeader(&hdr) {
-		// TODO(ekr@rtfm.com): We are using this for both types.
-		typ = packetType1RTTProtectedPhase0
-	}
-	logf(logTypeConnection, "Packet header %v, %d", hdr, typ)
 	switch typ {
 	case packetTypeClientInitial:
 		err = c.processClientInitial(&hdr, payload)
@@ -760,6 +877,43 @@ func (c *Connection) processCleartext(hdr *packetHeader, payload []byte) error {
 	}
 
 	return nil
+}
+
+func (c *Connection) sendVersionNegotiation() error {
+	p := newVersionNegotiationPacket([]VersionNumber{
+		c.version,
+		kQuicGreaseVersion1,
+	})
+	b, err := encode(p)
+	if err != nil {
+		return err
+	}
+
+	return c.sendPacketRaw(packetTypeVersionNegotiation, b)
+}
+
+func (c *Connection) processVersionNegotiation(hdr *packetHeader, payload []byte) error {
+	logf(logTypeConnection, "%s: Processing version negotiation packet", c.label())
+	if c.recvd.initialized() {
+		logf(logTypeConnection, "%s: Ignoring version negotiation after received another packet", c.label())
+	}
+
+	// TODO(ekr@rtfm.com): Ignore version negotiation after receiving
+	// a non-version-negotiation packet.
+	rdr := bytes.NewReader(payload)
+
+	for rdr.Len() > 0 {
+		u, err := uintDecodeInt(rdr, 4)
+		if err != nil {
+			return err
+		}
+		// Ignore the version we are already speaking.
+		if VersionNumber(u) == c.version {
+			return nil
+		}
+	}
+
+	return ErrorReceivedVersionNegotiation
 }
 
 func (c *Connection) processUnprotected(hdr *packetHeader, payload []byte) error {

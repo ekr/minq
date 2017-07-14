@@ -1,6 +1,8 @@
 package minq
 
-import ()
+import (
+	"bytes"
+)
 
 // Encode a QUIC packet.
 /*
@@ -90,7 +92,7 @@ func (p *packetHeader) isProtected() bool {
 	}
 
 	switch p.Type & 0x7f {
-	case packetTypeClientInitial, packetTypeClientCleartext, packetTypeServerCleartext:
+	case packetTypeClientInitial, packetTypeClientCleartext, packetTypeServerCleartext, packetTypeServerStatelessRetry, packetTypeVersionNegotiation:
 		return false
 	}
 	return true
@@ -143,6 +145,20 @@ func (p packetHeader) Version__length() uintptr {
 
 func (p *packetHeader) setLongHeaderType(typ byte) {
 	p.Type = packetFlagLongHeader | typ
+}
+
+type versionNegotiationPacket struct {
+	Versions []byte
+}
+
+func newVersionNegotiationPacket(versions []VersionNumber) *versionNegotiationPacket {
+	var buf bytes.Buffer
+
+	for _, v := range versions {
+		buf.Write(encodeArgs(v))
+	}
+
+	return &versionNegotiationPacket{buf.Bytes()}
 }
 
 /*

@@ -33,6 +33,7 @@ type ServerHandler interface {
 func (s *Server) Input(addr *net.UDPAddr, data []byte) (*Connection, error) {
 	logf(logTypeServer, "Received packet from %v", addr)
 	var hdr packetHeader
+	newConn := false
 
 	_, err := decode(&hdr, data)
 	if err != nil {
@@ -60,15 +61,23 @@ func (s *Server) Input(addr *net.UDPAddr, data []byte) (*Connection, error) {
 			return nil, err
 		}
 		conn = NewConnection(trans, RoleServer, s.tls, nil)
+		newConn = true
 		s.idTable[conn.serverConnId] = conn
 		s.addrTable[addr.String()] = conn
-
-		if s.handler != nil {
-			s.handler.NewConnection(conn)
-		}
 	}
 
-	return conn, conn.Input(data)
+	err = conn.Input(data)
+	if err == ErrorDestroyConnection {
+		delete(s.idTable, conn.serverConnId)
+		delete(s.addrTable, addr.String())
+		return nil, nil
+	}
+
+	if newConn && s.handler != nil {
+		s.handler.NewConnection(conn)
+	}
+
+	return conn, nil
 }
 
 // Create a new QUIC server with the provide TLS config.

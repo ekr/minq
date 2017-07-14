@@ -160,15 +160,7 @@ func encode(i interface{}) (ret []byte, err error) {
 	return ret, nil
 }
 
-func uintDecode(buf *bytes.Reader, v reflect.Value, encodingSize uintptr) (uintptr, error) {
-	size := v.Type().Size()
-	if encodingSize != codecDefaultSize {
-		if encodingSize > size {
-			return 0, fmt.Errorf("Requested a length longer than the native type")
-		}
-		size = encodingSize
-	}
-
+func uintDecodeInt(buf *bytes.Reader, size uintptr) (uint64, error) {
 	val := make([]byte, size)
 	rv, err := buf.Read(val)
 	if err != nil {
@@ -182,6 +174,23 @@ func uintDecode(buf *bytes.Reader, v reflect.Value, encodingSize uintptr) (uintp
 	for b := uintptr(0); b < size; b += 1 {
 		tmp = (tmp << 8) + uint64(val[b])
 	}
+	return tmp, nil
+}
+
+func uintDecode(buf *bytes.Reader, v reflect.Value, encodingSize uintptr) (uintptr, error) {
+	size := v.Type().Size()
+	if encodingSize != codecDefaultSize {
+		if encodingSize > size {
+			return 0, fmt.Errorf("Requested a length longer than the native type")
+		}
+		size = encodingSize
+	}
+
+	tmp, err := uintDecodeInt(buf, size)
+	if err != nil {
+		return 0, err
+	}
+
 	v.SetUint(tmp)
 
 	return size, nil

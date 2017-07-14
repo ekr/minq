@@ -273,3 +273,27 @@ func TestSendReceiveData(t *testing.T) {
 	assertNotError(t, err, "Read close")
 	assertEquals(t, pair.server.GetState(), StateClosed)
 }
+
+func TestVersionNegotiationPacket(t *testing.T) {
+	cTrans, sTrans := newTestTransportPair(true)
+
+	client := NewConnection(cTrans, RoleClient, TlsConfig{}, nil)
+	assertNotNil(t, client, "Couldn't make client")
+	// Set the client version to something bogus.
+	client.version = kQuicGreaseVersion2
+
+	server := NewConnection(sTrans, RoleServer, TlsConfig{}, nil)
+	assertNotNil(t, server, "Couldn't make server")
+
+	err := client.sendClientInitial()
+	assertNotError(t, err, "Couldn't send client initial packet")
+
+	err = inputAll(server)
+	assertError(t, err, "Expected version negotiation error")
+	assertEquals(t, err, ErrorDestroyConnection)
+
+	err = inputAll(client)
+	assertError(t, err, "Expected version negotiation error")
+	assertEquals(t, err, ErrorReceivedVersionNegotiation)
+
+}
