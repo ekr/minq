@@ -145,12 +145,12 @@ func (f connectionCloseFrame) ReasonPhrase__length() uintptr {
 	return uintptr(f.ReasonPhraseLength)
 }
 
-func newConnectionCloseFrame(errcode uint32, reason string) frame {
+func newConnectionCloseFrame(errcode ErrorCode, reason string) frame {
 	str := []byte(reason)
 
 	return frame{0, &connectionCloseFrame{
 		kFrameTypeConnectionClose,
-		errcode,
+		uint32(errcode),
 		uint16(len(str)),
 		str}, nil}
 }

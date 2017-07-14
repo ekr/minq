@@ -1236,11 +1236,15 @@ func (c *Connection) SetHandler(h ConnectionHandler) {
 	c.handler = h
 }
 
+func (c *Connection) close(code ErrorCode, reason string) {
+	f := newConnectionCloseFrame(code, reason)
+	c.sendPacket(packetType1RTTProtectedPhase0, []frame{f})
+}
+
 // Close a connection.
 func (c *Connection) Close() {
 	logf(logTypeConnection, "%v Close()", c.label())
-	f := newConnectionCloseFrame(0, "You don't have to go home but you can't stay here")
-	c.sendPacket(packetType1RTTProtectedPhase0, []frame{f})
+	c.close(kQuicErrorNoError, "You don't have to go home but you can't stay here")
 }
 
 func (c *Connection) isClosed() bool {
