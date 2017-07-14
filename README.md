@@ -5,7 +5,7 @@ minq -- A minimal QUIC stack
 Minq is a minimal implementation of QUIC, as documented at
 https://quicwg.github.io/. Minq partly implements draft-04
 (it advertises -04 but it's actually more like the editor's copy)
-with TLS 1.3 draft-21.
+with TLS 1.3 draft-20 or draft-21.
 
 Currently it will do:
 
@@ -109,4 +109,5 @@ Minq depends on Mint (https://www.github.com/bifurcation/mint) for TLS.
 There are some changes to Mint to support QUIC that haven't been
 merged yet, so in the meantime you will want the following branch:
 https://github.com/ekr/mint/tree/minq_draft_21
+(or https://github.com/ekr/mint/tree/minq_draft_20 for draft-20).
 
