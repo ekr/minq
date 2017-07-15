@@ -707,6 +707,17 @@ func (c *Connection) processClientInitial(hdr *packetHeader, payload []byte) err
 	// the stream processor.
 	var sf streamFrame
 
+	// Strip off any initial leading bytes.
+	i := int(0)
+	var b byte
+
+	for i, b = range payload {
+		if b != 0 {
+			break
+		}
+	}
+	payload = payload[i:]
+
 	n, err := decode(&sf, payload)
 	if err != nil {
 		logf(logTypeConnection, "Failure decoding initial stream frame in ClientInitial")
