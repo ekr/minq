@@ -3,7 +3,7 @@
 minq -- A minimal QUIC stack
 ============================
 Minq is a minimal implementation of QUIC, as documented at
-https://quicwg.github.io/. Minq partly implements draft-04
+https://quicwg.github.io/. Minq partly implements draft-05
 (it advertises -04 but it's actually more like the editor's copy)
 with TLS 1.3 draft-20 or draft-21.
 
@@ -17,8 +17,6 @@ Currently it will do:
 
 Important missing pieces for the first implementation draft include:
 
-- Version negotiation
-- ALPN
 - Handling ACK ranges
 - Real timeout and retransmission support
 

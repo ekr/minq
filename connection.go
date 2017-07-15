@@ -42,13 +42,14 @@ const (
 type VersionNumber uint32
 
 const (
-	kQuicVersion        = VersionNumber(0xff000004)
+	kQuicDraftVersion   = 5
+	kQuicVersion        = VersionNumber(0xff000000 | kQuicDraftVersion)
 	kQuicGreaseVersion1 = VersionNumber(0x1a1a1a1a)
 	kQuicGreaseVersion2 = VersionNumber(0x2a2a2a2a)
 )
 
 const (
-	kQuicALPNToken = "hq-04"
+	kQuicALPNToken = "hq-05"
 )
 
 // Interface for the handler object which the Connection will call
