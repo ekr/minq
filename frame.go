@@ -286,7 +286,7 @@ func (f ackFrame) NumBlocks__length() uintptr {
 }
 
 func ackFieldsLength(b byte) uintptr {
-	return []uintptr{1, 2, 4, 6}[b]
+	return []uintptr{1, 2, 4, 8}[b]
 }
 
 func (f ackFrame) LargestAcknowledged__length() uintptr {
