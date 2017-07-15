@@ -43,7 +43,7 @@ only be used for testing.
     cd github.com/bifurcation/mint
     git remote add ekr https://www.github.com/ekr/mint
     git fetch ekr
-    git checkout minq_head
+    git checkout minq_draft_21
     cd ../../ekr/minq
     go test
 
