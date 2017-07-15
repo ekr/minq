@@ -12,7 +12,7 @@ type TlsConfig struct {
 func (c TlsConfig) toMint() *mint.Config {
 	// TODO(ekr@rtfm.com): Provide a real config
 	return &mint.Config{
-		ServerName:  "example.com",
+		ServerName:  "localhost",
 		NonBlocking: true,
 		NextProtos:  []string{kQuicALPNToken},
 	}
