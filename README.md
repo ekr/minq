@@ -29,7 +29,7 @@ Other defects include:
 
 ## WARNING
 
-Minq is absolutely not ready for any kind of production use and should
+Minq is absolutely not suitable for any kind of production use and should
 only be used for testing.
 
 
