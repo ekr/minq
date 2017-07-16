@@ -31,12 +31,6 @@ func (h *connHandler) StreamReadable(s *minq.Stream) {
 	}
 	b = b[:n]
 
-	// Flip the case so we can distinguish echo
-	for i, _ := range b {
-		if b[i] > 0x40 {
-			b[i] ^= 0x20
-		}
-	}
 	os.Stdout.Write(b)
 }
 

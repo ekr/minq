@@ -57,6 +57,14 @@ func (h *connHandler) StreamReadable(s *minq.Stream) {
 	b = b[:n]
 
 	fmt.Printf("Read %v bytes from peer %x\n", n, b)
+
+	// Flip the case so we can distinguish echo
+	for i, _ := range b {
+		if b[i] > 0x40 {
+			b[i] ^= 0x20
+		}
+	}
+
 	s.Write(b)
 }
 
