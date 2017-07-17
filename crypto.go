@@ -17,7 +17,7 @@ func newCryptoState(t *tlsConn, label string) (*cryptoState, error) {
 	var st cryptoState
 	var err error
 
-	st.secret, err = t.tls.ComputeExporter(label, []byte{}, t.cs.Hash.Size())
+	st.secret, err = t.computeExporter(label)
 	if err != nil {
 		return nil, err
 	}

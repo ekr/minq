@@ -74,3 +74,7 @@ func (c *tlsConn) handshake(input []byte) ([]byte, error) {
 
 	return c.conn.getOutput(), nil
 }
+
+func (c *tlsConn) computeExporter(label string) ([]byte, error) {
+	return c.tls.ComputeExporter(label, []byte{}, c.cs.Hash.Size())
+}
