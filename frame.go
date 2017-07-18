@@ -310,7 +310,7 @@ func newAckFrame(rs []ackRange) (*frame, error) {
 
 	var f ackFrame
 
-	f.Type = kFrameTypeAck | 0xb
+	f.Type = kFrameTypeAck | 0xa
 	if len(rs) > 1 {
 		f.Type |= 0x10
 		f.NumBlocks = uint8(len(rs) - 1)
