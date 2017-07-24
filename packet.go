@@ -28,7 +28,7 @@ Long header
 Short Header
 
  0                   1                   2                   3
- 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+ 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 11
 +-+-+-+-+-+-+-+-+
 |0|C|K| Type (5)|
 +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
@@ -112,8 +112,11 @@ func (p *packetHeader) getHeaderType() byte {
 	if isLongHeader(p) {
 		return p.Type & 0x7f
 	}
-	panic("Can't parse short header yet")
-	return 0
+	// Short header.
+	if (p.Type & packetFlagK) != 0 {
+		return packetType1RTTProtectedPhase1
+	}
+	return packetType1RTTProtectedPhase0
 }
 
 func (p packetHeader) ConnectionID__length() uintptr {

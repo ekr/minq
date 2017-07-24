@@ -660,10 +660,6 @@ func (c *Connection) Input(p []byte) error {
 	}
 
 	typ := hdr.getHeaderType()
-	if !isLongHeader(&hdr) {
-		// TODO(ekr@rtfm.com): We are using this for both types.
-		typ = packetType1RTTProtectedPhase0
-	}
 	logf(logTypeConnection, "Packet header %v, %d", hdr, typ)
 
 	// Process messages from the server that don't set up the connection
