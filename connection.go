@@ -792,6 +792,8 @@ func (c *Connection) processCleartext(hdr *packetHeader, payload []byte) error {
 		payload = payload[n:]
 		nonAck := true
 		switch inner := f.f.(type) {
+		case *paddingFrame:
+			// Skip.
 		case *streamFrame:
 			// If this is duplicate data and if so early abort.
 			if inner.Offset+uint64(len(inner.Data)) <= c.streams[0].readOffset {
