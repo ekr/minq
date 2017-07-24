@@ -10,6 +10,7 @@ import (
 )
 
 var addr string
+var serverName string
 
 type connHandler struct {
 }
@@ -58,7 +59,17 @@ func readUDP(s *net.UDPConn) ([]byte, error) {
 
 func main() {
 	flag.StringVar(&addr, "addr", "localhost:4433", "[host:port]")
+	flag.StringVar(&serverName, "server-name", "", "SNI")
 	flag.Parse()
+
+	// Default to the host component of addr.
+	if serverName == "" {
+		host, _, err := net.SplitHostPort(addr)
+		if err != nil {
+			fmt.Println("Couldn't split host/port", err)
+		}
+		serverName = host
+	}
 
 	uaddr, err := net.ResolveUDPAddr("udp", addr)
 	if err != nil {
@@ -73,7 +84,8 @@ func main() {
 
 	utrans := minq.NewUdpTransport(usock, uaddr)
 
-	conn := minq.NewConnection(utrans, minq.RoleClient, minq.TlsConfig{}, &connHandler{})
+	conn := minq.NewConnection(utrans, minq.RoleClient,
+		minq.NewTlsConfig(serverName), &connHandler{})
 
 	// Start things off.
 	_, err = conn.CheckTimer()

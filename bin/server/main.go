@@ -9,6 +9,7 @@ import (
 )
 
 var addr string
+var serverName string
 
 type conn struct {
 	conn *minq.Connection
@@ -70,6 +71,7 @@ func (h *connHandler) StreamReadable(s *minq.Stream) {
 
 func main() {
 	flag.StringVar(&addr, "addr", "localhost:4433", "[host:port]")
+	flag.StringVar(&serverName, "server-name", "localhost", "[SNI]")
 	flag.Parse()
 
 	uaddr, err := net.ResolveUDPAddr("udp", addr)
@@ -84,7 +86,7 @@ func main() {
 		return
 	}
 
-	server := minq.NewServer(minq.NewUdpTransportFactory(usock), minq.TlsConfig{}, &serverHandler{})
+	server := minq.NewServer(minq.NewUdpTransportFactory(usock), minq.NewTlsConfig(serverName), &serverHandler{})
 
 	for {
 		b := make([]byte, 8192)
