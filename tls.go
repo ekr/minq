@@ -63,7 +63,7 @@ func (c *tlsConn) handshake(input []byte) ([]byte, error) {
 	switch alert {
 	case mint.AlertNoAlert:
 		logf(logTypeTls, "TLS handshake complete")
-		st := c.tls.GetConnectionState()
+		st := c.tls.State()
 		logf(logTypeTls, "Negotiated ALPN = %v", st.NextProto)
 		// TODO(ekr@rtfm.com): Abort on ALPN mismatch when others do.
 		if st.NextProto != kQuicALPNToken {
