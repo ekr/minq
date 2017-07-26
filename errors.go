@@ -4,10 +4,85 @@ import (
 	"fmt"
 )
 
+// Errors which don't necesarily cause connection teardown.
+type intError struct {
+	err   string
+	sub   string
+	fatal bool
+}
+
+func (e intError) Error() string {
+	return e.err
+}
+
+func fatalError(format string, args ...interface{}) error {
+	return intError{
+		fmt.Sprintf(format, args...),
+		"",
+		true,
+	}
+}
+
+func internalError(format string, args ...interface{}) error {
+	str := fmt.Sprintf(format, args...)
+	if debug {
+		panic("Internal error: " + str)
+	}
+
+	return intError{
+		str,
+		"",
+		true,
+	}
+}
+
+func nonFatalError(format string, args ...interface{}) error {
+	return intError{
+		fmt.Sprintf(format, args...),
+		"",
+		false,
+	}
+}
+
+func err2string(err interface{}) string {
+	switch e := err.(type) {
+	case error:
+		return e.Error()
+	case string:
+		return e
+	default:
+		panic("Bogus argument to err2string")
+	}
+}
+
+func wrapE(err interface{}, sub interface{}) error {
+	return intError{
+		err2string(err),
+		err2string(sub),
+		isFatalError(err),
+	}
+}
+
+// An error is fatal if either.
+//
+// It's a regular error (i.e., not an intError)
+// e.fatal is true
+func isFatalError(e interface{}) bool {
+	i, ok := e.(intError)
+	if !ok {
+		return true
+	}
+
+	return i.fatal
+}
+
 // Return codes.
-var ErrorWouldBlock = fmt.Errorf("Would have blocked")
-var ErrorDestroyConnection = fmt.Errorf("Terminate connection")
-var ErrorReceivedVersionNegotiation = fmt.Errorf("Received a version negotiation packet advertising a different version than ours")
+var ErrorWouldBlock = nonFatalError("Would have blocked")
+var ErrorDestroyConnection = fatalError("Terminate connection")
+var ErrorReceivedVersionNegotiation = fatalError("Received a version negotiation packet advertising a different version than ours")
+var ErrorConnIsClosed = fatalError("Connection is closed")
+var ErrorStreamIsClosed = fatalError("Stream is closed")
+var ErrorInvalidPacket = nonFatalError("Could not decode packet")
 
 // Protocol errors
 type ErrorCode uint32
