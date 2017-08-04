@@ -1128,7 +1128,7 @@ func (p *recvdPackets) prepareAckRange(protected bool) []ackRange {
 	ranges := make([]ackRange, 0)
 	for i := len(ps.r) - 1; i >= 0; i-- {
 		pn = uint64(i) + ps.min
-		needs_ack := ps.r[i] && !p.acked2.r[i]
+		needs_ack := ps.r[i] && (i >= (len(p.acked2.r)) || !p.acked2.r[i])
 		if inrange != needs_ack {
 			if inrange {
 				// This is the end of a range.
