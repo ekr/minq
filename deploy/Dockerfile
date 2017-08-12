@@ -2,7 +2,6 @@ FROM golang
 
 RUN go get github.com/bifurcation/mint
 RUN go get github.com/ekr/minq
-#ADD . /go/src/github.com/ekr/minq
 
 RUN go install github.com/ekr/minq/bin/server
 
