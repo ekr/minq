@@ -21,7 +21,6 @@ func (c *TlsConfig) init() {
 
 func (c *TlsConfig) toMint() *mint.Config {
 	if c.mintConfig == nil {
-		fmt.Println("Generating config")
 		// TODO(ekr@rtfm.com): Provide a real config
 		config := mint.Config{
 			ServerName:  c.ServerName,
