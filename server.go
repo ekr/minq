@@ -82,11 +82,13 @@ func (s *Server) Input(addr *net.UDPAddr, data []byte) (*Connection, error) {
 
 // Create a new QUIC server with the provide TLS config.
 func NewServer(factory TransportFactory, tls TlsConfig, handler ServerHandler) *Server {
-	return &Server{
+	s := Server{
 		handler,
 		factory,
 		tls,
 		make(map[string]*Connection),
 		make(map[ConnectionId]*Connection),
 	}
+	s.tls.init()
+	return &s
 }

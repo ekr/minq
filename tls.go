@@ -12,26 +12,36 @@ type TlsConfig struct {
 	ServerName       string
 	CertificateChain []*x509.Certificate
 	Key              crypto.Signer
+	mintConfig       *mint.Config
 }
 
-func (c TlsConfig) toMint() *mint.Config {
-	// TODO(ekr@rtfm.com): Provide a real config
-	config := mint.Config{
-		ServerName:  c.ServerName,
-		NonBlocking: true,
-		NextProtos:  []string{kQuicALPNToken},
-	}
+func (c *TlsConfig) init() {
+	_ = c.toMint()
+}
 
-	if c.CertificateChain != nil && c.Key != nil {
-		config.Certificates =
-			[]*mint.Certificate{
-				&mint.Certificate{
-					Chain:      c.CertificateChain,
-					PrivateKey: c.Key,
-				},
-			}
+func (c *TlsConfig) toMint() *mint.Config {
+	if c.mintConfig == nil {
+		fmt.Println("Generating config")
+		// TODO(ekr@rtfm.com): Provide a real config
+		config := mint.Config{
+			ServerName:  c.ServerName,
+			NonBlocking: true,
+			NextProtos:  []string{kQuicALPNToken},
+		}
+
+		if c.CertificateChain != nil && c.Key != nil {
+			config.Certificates =
+				[]*mint.Certificate{
+					&mint.Certificate{
+						Chain:      c.CertificateChain,
+						PrivateKey: c.Key,
+					},
+				}
+		}
+		config.Init(false)
+		c.mintConfig = &config
 	}
-	return &config
+	return c.mintConfig
 }
 
 func NewTlsConfig(serverName string) TlsConfig {

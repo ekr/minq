@@ -135,7 +135,6 @@ func main() {
 	}
 
 	server := minq.NewServer(minq.NewUdpTransportFactory(usock), config, &serverHandler{})
-
 	for {
 		b := make([]byte, 8192)
 
