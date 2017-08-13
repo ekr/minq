@@ -1,15 +1,21 @@
 package main
 
 import (
+	"crypto"
+	"crypto/x509"
 	"flag"
 	"fmt"
+	"github.com/cloudflare/cfssl/helpers"
 	"github.com/ekr/minq"
+	"io/ioutil"
 	"net"
 	"time"
 )
 
 var addr string
 var serverName string
+var keyFile string
+var certFile string
 
 type conn struct {
 	conn *minq.Connection
@@ -72,7 +78,49 @@ func (h *connHandler) StreamReadable(s *minq.Stream) {
 func main() {
 	flag.StringVar(&addr, "addr", "localhost:4433", "[host:port]")
 	flag.StringVar(&serverName, "server-name", "localhost", "[SNI]")
+	flag.StringVar(&keyFile, "key", "", "Key file")
+	flag.StringVar(&certFile, "cert", "", "Cert file")
 	flag.Parse()
+	var key crypto.Signer
+	var certChain []*x509.Certificate
+
+	config := minq.NewTlsConfig(serverName)
+
+	if keyFile != "" && certFile == "" {
+		fmt.Println("Can't specify -key without -cert")
+		return
+	}
+
+	if keyFile == "" && certFile != "" {
+		fmt.Println("Can't specify -cert without -key")
+		return
+	}
+
+	if keyFile != "" && certFile != "" {
+		keyPEM, err := ioutil.ReadFile(keyFile)
+		if err != nil {
+			fmt.Printf("Couldn't open keyFile %v err=%v", keyFile, err)
+			return
+		}
+		key, err = helpers.ParsePrivateKeyPEM(keyPEM)
+		if err != nil {
+			fmt.Println("Couldn't parse private key: ", err)
+			return
+		}
+
+		certPEM, err := ioutil.ReadFile(certFile)
+		if err != nil {
+			fmt.Printf("Couldn't open certFile %v err=%v", certFile, err)
+			return
+		}
+		certChain, err = helpers.ParseCertificatesPEM(certPEM)
+		if err != nil {
+			fmt.Println("Couldn't parse certificates: ", err)
+			return
+		}
+		config.CertificateChain = certChain
+		config.Key = key
+	}
 
 	uaddr, err := net.ResolveUDPAddr("udp", addr)
 	if err != nil {
@@ -86,7 +134,7 @@ func main() {
 		return
 	}
 
-	server := minq.NewServer(minq.NewUdpTransportFactory(usock), minq.NewTlsConfig(serverName), &serverHandler{})
+	server := minq.NewServer(minq.NewUdpTransportFactory(usock), config, &serverHandler{})
 
 	for {
 		b := make([]byte, 8192)

@@ -1,27 +1,42 @@
 package minq
 
 import (
+	"crypto"
+	"crypto/x509"
 	"encoding/hex"
 	"fmt"
 	"github.com/bifurcation/mint"
 )
 
 type TlsConfig struct {
-	ServerName string
+	ServerName       string
+	CertificateChain []*x509.Certificate
+	Key              crypto.Signer
 }
 
 func (c TlsConfig) toMint() *mint.Config {
 	// TODO(ekr@rtfm.com): Provide a real config
-	return &mint.Config{
+	config := mint.Config{
 		ServerName:  c.ServerName,
 		NonBlocking: true,
 		NextProtos:  []string{kQuicALPNToken},
 	}
+
+	if c.CertificateChain != nil && c.Key != nil {
+		config.Certificates =
+			[]*mint.Certificate{
+				&mint.Certificate{
+					Chain:      c.CertificateChain,
+					PrivateKey: c.Key,
+				},
+			}
+	}
+	return &config
 }
 
 func NewTlsConfig(serverName string) TlsConfig {
 	return TlsConfig{
-		serverName,
+		ServerName: serverName,
 	}
 }
 
