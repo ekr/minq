@@ -1,8 +1,8 @@
 FROM golang
 
 RUN go get github.com/bifurcation/mint
+RUN go get github.com/cloudflare/cfssl/helpers
 RUN go get github.com/ekr/minq
-
 RUN go install github.com/ekr/minq/bin/server
 
 ARG SERVERNAME=localhost
