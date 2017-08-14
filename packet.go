@@ -143,7 +143,7 @@ func (p packetHeader) Version__length() uintptr {
 	if isLongHeader(&p) {
 		return 4
 	}
-	return codecDefaultSize
+	return 0
 }
 
 func (p *packetHeader) setLongHeaderType(typ byte) {

@@ -613,7 +613,7 @@ func (c *Connection) Input(p []byte) error {
 	}
 	assert(int(hdrlen) <= len(p))
 
-	if hdr.Version != c.version {
+	if isLongHeader(&hdr) && hdr.Version != c.version {
 		if c.role == RoleServer {
 			logf(logTypeConnection, "%s: Received unsupported version %v, expected %v", c.label(), hdr.Version, c.version)
 			err = c.sendVersionNegotiation()
