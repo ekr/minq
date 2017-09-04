@@ -61,6 +61,7 @@ func (s *Server) Input(addr *net.UDPAddr, data []byte) (*Connection, error) {
 			return nil, err
 		}
 		conn = NewConnection(trans, RoleServer, s.tls, nil)
+		conn.clientConnId = hdr.ConnectionID
 		newConn = true
 		s.idTable[conn.serverConnId] = conn
 		s.addrTable[addr.String()] = conn
