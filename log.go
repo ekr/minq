@@ -60,3 +60,7 @@ func logf(tag string, format string, args ...interface{}) {
 		logFunction(fullFormat, args...)
 	}
 }
+
+func SetLogOutput(f func(string, ...interface{})) {
+	logFunction = f
+}
