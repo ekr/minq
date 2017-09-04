@@ -12,4 +12,5 @@ ENTRYPOINT ["/bin/sh","/go/src/github.com/ekr/minq/deploy/run-looped.sh"]
 CMD [$SNAME]
 
 EXPOSE 4433/udp
+EXPOSE 3000/tcp
        
