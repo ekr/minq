@@ -4,6 +4,11 @@ RUN go get github.com/bifurcation/mint
 RUN go get github.com/cloudflare/cfssl/helpers
 RUN go get github.com/ekr/minq
 RUN go install github.com/ekr/minq/bin/server
+RUN apt-get update
+RUN apt-get install -y tcpdump
+RUN apt-get install -y node
+RUN apt-get install -y npm
+RUN (cd /go/src/github.com/ekr/minq/deploy/logserver; npm install)
 
 ARG SERVERNAME=localhost
 ENV SNAME=$SERVERNAME

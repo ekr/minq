@@ -1,3 +1,3 @@
 #!/bin/sh
-docker build -f deploy/Dockerfile -t minq --build-arg SERVERNAME=localhost .
+docker build --no-cache -f deploy/Dockerfile -t minq --build-arg SERVERNAME=localhost .
 

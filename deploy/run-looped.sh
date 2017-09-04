@@ -1,5 +1,5 @@
 #!/bin/sh
-node deploy/logserver/server.js /tmp/minq.log &
+nodejs /go/src/github.com/ekr/minq/deploy/logserver/server.js /tmp/minq.log &
 while true; do
     echo -n "Starting server as "
     echo ${SNAME}
