@@ -24,7 +24,8 @@ app.get('/:connid', function(request, response) {
     var match = 'Conn: ' + connid + ":";
     var data = "<pre>";
     const rl = readline.createInterface({
-        input: fs.createReadStream(file)
+        input: fs.createReadStream(file),
+        terminal: false
     });
     rl.on('line', function(l) {
         if (l.search(match) != -1) {
