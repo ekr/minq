@@ -39,5 +39,6 @@ app.get('/:connid', function(request, response) {
 });
 
 app.listen(port, function() {
-  console.log("Listening on " + port);
+    console.log("Listening on " + port);
+    console.log("Logfile = " + file);
 });

@@ -1244,7 +1244,7 @@ func generateRand64() (uint64, error) {
 }
 
 func (c *Connection) log(tag string, format string, args ...interface{}) {
-	fullFormat := fmt.Sprintf("Conn: %x:%x: %s", c.clientConnId, c.serverConnId, format)
+	fullFormat := fmt.Sprintf("Conn: %.16x:%.16x: %s", c.clientConnId, c.serverConnId, format)
 	logf(tag, fullFormat, args...)
 }
 
