@@ -9,6 +9,7 @@ import (
 	"github.com/ekr/minq"
 	"io/ioutil"
 	"net"
+	"os"
 	"time"
 )
 
@@ -16,6 +17,8 @@ var addr string
 var serverName string
 var keyFile string
 var certFile string
+var logFile string
+var logOut *os.File
 
 type conn struct {
 	conn *minq.Connection
@@ -75,11 +78,18 @@ func (h *connHandler) StreamReadable(s *minq.Stream) {
 	s.Write(b)
 }
 
+func logFunc(format string, args ...interface{}) {
+	fmt.Fprintf(logOut, format, args...)
+	fmt.Fprintf(logOut, "\n")
+	logOut.Sync()
+}
+
 func main() {
 	flag.StringVar(&addr, "addr", "localhost:4433", "[host:port]")
 	flag.StringVar(&serverName, "server-name", "localhost", "[SNI]")
 	flag.StringVar(&keyFile, "key", "", "Key file")
 	flag.StringVar(&certFile, "cert", "", "Cert file")
+	flag.StringVar(&logFile, "log", "", "Log file")
 	flag.Parse()
 	var key crypto.Signer
 	var certChain []*x509.Certificate
@@ -122,6 +132,15 @@ func main() {
 		config.Key = key
 	}
 
+	if logFile != "" {
+		var err error
+		logOut, err = os.OpenFile(logFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		if err != nil {
+			fmt.Println("Couldn't open file")
+			return
+		}
+		minq.SetLogOutput(logFunc)
+	}
 	uaddr, err := net.ResolveUDPAddr("udp", addr)
 	if err != nil {
 		fmt.Println("Invalid UDP addr: ", err)
