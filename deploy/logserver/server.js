@@ -1,7 +1,7 @@
 var express = require('express');
 var fs = require('fs');
 var readline = require('readline');
-var connid_regex = /[0-9a-f]+$/;
+var connid_regex = /[0-9a-fA-F]+$/;
 
 var app = express();
 
@@ -16,11 +16,18 @@ console.log(file);
 
 app.get('/:connid', function(request, response) {
     var connid = request.params.connid;
-    if (!connid.match(connid_regex) || connid.length != 16) {
-        response.status(400).send("Bogus connid");
+    if (!connid.match(connid_regex)) {
+        response.status(400).send("Bogus connid (non-hex characters)");
         return;
     }
 
+    if(connid.length != 16) {
+        response.status(400).send("Bogus connid (wrong length)");
+        return;
+    }
+
+    connid = connid.toLowerCase();
+    
     var match = 'Conn: ' + connid + ":";
     var data = "<pre>";
     const rl = readline.createInterface({
