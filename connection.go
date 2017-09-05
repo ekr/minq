@@ -274,6 +274,27 @@ func (c *Connection) sendClientInitial() error {
 	return c.sendPacket(packetTypeClientInitial, queued)
 }
 
+func (c *Connection) sendSpecialClearPacket(pt uint8, connId ConnectionId, pn uint64, version VersionNumber, payload []byte) error {
+	c.log(logTypeConnection, "Sending special clear packet type=%v", pt)
+	p := packet{
+		packetHeader{
+			pt | packetFlagLongHeader,
+			connId,
+			pn,
+			version,
+		},
+		payload,
+	}
+
+	packet, err := encode(&p.packetHeader)
+	if err != nil {
+		return err
+	}
+	packet = append(packet, payload...)
+	c.transport.Send(packet)
+	return nil
+}
+
 func (c *Connection) sendPacketRaw(pt uint8, payload []byte) error {
 	c.log(logTypeConnection, "%v: Sending packet of pt=%v len=%v", c.label(), pt, len(payload))
 	left := c.mtu
@@ -617,7 +638,7 @@ func (c *Connection) Input(p []byte) error {
 	if isLongHeader(&hdr) && hdr.Version != c.version {
 		if c.role == RoleServer {
 			c.log(logTypeConnection, "%s: Received unsupported version %v, expected %v", c.label(), hdr.Version, c.version)
-			err = c.sendVersionNegotiation()
+			err = c.sendVersionNegotiation(hdr.ConnectionID, hdr.PacketNumber, hdr.Version)
 			if err != nil {
 				return err
 			}
@@ -632,6 +653,19 @@ func (c *Connection) Input(p []byte) error {
 				return fmt.Errorf("Received packet with unexpected version %v", hdr.Version)
 			}
 		}
+	}
+
+	typ := hdr.getHeaderType()
+	c.log(logTypeConnection, "Packet header %v, %d", hdr, typ)
+
+	// Process messages from the server that don't set up the connection
+	// first.
+	switch typ {
+	case packetTypeVersionNegotiation:
+		return c.processVersionNegotiation(&hdr, p[hdrlen:])
+	case packetTypeServerStatelessRetry:
+		c.log(logTypeConnection, "Unsupported packet type %v", typ)
+		return fmt.Errorf("Unsupported packet type %v", typ)
 	}
 
 	aead := c.readClear
@@ -658,19 +692,6 @@ func (c *Connection) Input(p []byte) error {
 	if err != nil {
 		c.log(logTypeConnection, "Could not unprotect packet")
 		return err
-	}
-
-	typ := hdr.getHeaderType()
-	c.log(logTypeConnection, "Packet header %v, %d", hdr, typ)
-
-	// Process messages from the server that don't set up the connection
-	// first.
-	switch typ {
-	case packetTypeVersionNegotiation:
-		return c.processVersionNegotiation(&hdr, payload)
-	case packetTypeServerStatelessRetry:
-		c.log(logTypeConnection, "Unsupported packet type %v", typ)
-		return fmt.Errorf("Unsupported packet type %v", typ)
 	}
 
 	if !c.recvd.initialized() {
@@ -895,7 +916,7 @@ func (c *Connection) processCleartext(hdr *packetHeader, payload []byte) error {
 	return nil
 }
 
-func (c *Connection) sendVersionNegotiation() error {
+func (c *Connection) sendVersionNegotiation(connId ConnectionId, pn uint64, version VersionNumber) error {
 	p := newVersionNegotiationPacket([]VersionNumber{
 		c.version,
 		kQuicGreaseVersion1,
@@ -905,7 +926,7 @@ func (c *Connection) sendVersionNegotiation() error {
 		return err
 	}
 
-	return c.sendPacketRaw(packetTypeVersionNegotiation, b)
+	return c.sendSpecialClearPacket(packetTypeVersionNegotiation, connId, pn, version, b)
 }
 
 func (c *Connection) processVersionNegotiation(hdr *packetHeader, payload []byte) error {
@@ -914,6 +935,7 @@ func (c *Connection) processVersionNegotiation(hdr *packetHeader, payload []byte
 		c.log(logTypeConnection, "%s: Ignoring version negotiation after received another packet", c.label())
 	}
 
+	// TODO(ekr@rtfm.com): Check the version negotiation fields.
 	// TODO(ekr@rtfm.com): Ignore version negotiation after receiving
 	// a non-version-negotiation packet.
 	rdr := bytes.NewReader(payload)

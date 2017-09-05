@@ -95,6 +95,29 @@ func inputAll(c *Connection) error {
 	}
 }
 
+func inputAllCapture(c *Connection) ([][]byte, error) {
+	ret := make([][]byte, 0)
+
+	t := c.transport.(*testTransport)
+
+	for {
+		p, err := t.Recv()
+		if err != nil && err != ErrorWouldBlock {
+			return ret, err
+		}
+
+		if p == nil {
+			return ret, nil
+		}
+
+		ret = append(ret, p)
+		err = c.Input(p)
+		if err != nil {
+			return ret, err
+		}
+	}
+}
+
 var testTlsConfig = NewTlsConfig("localhost")
 
 type csPair struct {
@@ -294,8 +317,14 @@ func TestVersionNegotiationPacket(t *testing.T) {
 	assertError(t, err, "Expected version negotiation error")
 	assertEquals(t, err, ErrorDestroyConnection)
 
-	err = inputAll(client)
+	cap, err := inputAllCapture(client)
 	assertError(t, err, "Expected version negotiation error")
 	assertEquals(t, err, ErrorReceivedVersionNegotiation)
 
+	var hdr packetHeader
+	_, err = decode(&hdr, cap[0])
+	assertNotError(t, err, "Couldn't decode VN")
+	// Check the error.
+	assertEquals(t, hdr.Version, kQuicGreaseVersion2)
+	assertEquals(t, hdr.ConnectionID, client.clientConnId)
 }
