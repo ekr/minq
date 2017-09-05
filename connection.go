@@ -11,6 +11,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"time"
 )
 
 const (
@@ -121,6 +122,8 @@ type Connection struct {
 	clientInitial  []byte
 	recvd          *recvdPackets
 	sentAcks       map[uint64][]ackRange
+	lastInput      time.Time
+	idleTimeout    uint16
 }
 
 // Create a new QUIC connection. Should only be used with role=RoleClient,
@@ -146,6 +149,8 @@ func NewConnection(trans Transport, role uint8, tls TlsConfig, handler Connectio
 		nil,
 		nil,
 		make(map[uint64][]ackRange, 0),
+		time.Now(),
+		10, // Very short idle timeout.
 	}
 
 	c.recvd = newRecvdPackets(&c)
@@ -624,6 +629,8 @@ func (c *Connection) Input(p []byte) error {
 	if c.isClosed() {
 		return fmt.Errorf("Connection is closed")
 	}
+
+	c.lastInput = time.Now()
 
 	var hdr packetHeader
 
@@ -1178,6 +1185,12 @@ func (p *recvdPackets) prepareAckRange(protected bool) []ackRange {
 // expired in the meantime. This includes sending retransmits, etc.
 func (c *Connection) CheckTimer() (int, error) {
 	c.log(logTypeConnection, "Checking timer")
+
+	if time.Now().After(c.lastInput.Add(time.Second * time.Duration(c.idleTimeout))) {
+		c.log(logTypeHandshake, "Connection is idle for more than %v", c.idleTimeout)
+		return 0, ErrorDestroyConnection
+	}
+
 	// Right now just re-send everything we might need to send.
 
 	// Special case the client's first message.

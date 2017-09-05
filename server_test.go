@@ -3,6 +3,7 @@ package minq
 import (
 	"net"
 	"testing"
+	"time"
 )
 
 // fake TransportFactory that comes populated with
@@ -89,4 +90,35 @@ func TestServer(t *testing.T) {
 
 	assertX(t, s1 != s3, "Got the same server connection back with a different address")
 	assertEquals(t, 2, len(server.addrTable))
+}
+
+func TestServerIdleTimeout(t *testing.T) {
+	// Have the client and server do a handshake.
+	u, _ := net.ResolveUDPAddr("udp", "127.0.0.1:4443") // Just a fixed address
+
+	cTrans, sTrans := newTestTransportPair(true)
+	factory := &testTransportFactory{make(map[string]*testTransport)}
+	factory.addTransport(u, sTrans)
+
+	server := NewServer(factory, testTlsConfig, nil)
+	assertNotNil(t, server, "Couldn't make server")
+
+	client := NewConnection(cTrans, RoleClient, testTlsConfig, nil)
+	assertNotNil(t, client, "Couldn't make client")
+
+	n, err := client.CheckTimer()
+	assertEquals(t, 1, n)
+	assertNotError(t, err, "Couldn't send client initial")
+
+	_, err = serverInputAll(t, sTrans, server, *u)
+	assertNotError(t, err, "Couldn't consume client initial")
+
+	assertEquals(t, 1, server.ConnectionCount())
+
+	// Now wait 15 seconds to make sure that the connection
+	// gets garbage collected.
+
+	time.Sleep(time.Second * 15)
+	server.CheckTimer()
+	assertEquals(t, 1, server.ConnectionCount())
 }

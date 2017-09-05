@@ -183,9 +183,7 @@ func main() {
 			}
 		}
 
-		// Check all the timers
-		for _, c := range conns {
-			c.checkTimer()
-		}
+		// Check the timers.
+		server.CheckTimer()
 	}
 }

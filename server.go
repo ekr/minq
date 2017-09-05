@@ -81,6 +81,19 @@ func (s *Server) Input(addr *net.UDPAddr, data []byte) (*Connection, error) {
 	return conn, nil
 }
 
+// Check the server timers.
+func (s *Server) CheckTimer() error {
+	for _, conn := range s.idTable {
+		conn.CheckTimer()
+	}
+	return nil
+}
+
+// How many connections do we have?
+func (s *Server) ConnectionCount() int {
+	return len(s.idTable)
+}
+
 // Create a new QUIC server with the provide TLS config.
 func NewServer(factory TransportFactory, tls TlsConfig, handler ServerHandler) *Server {
 	s := Server{
