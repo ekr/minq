@@ -749,6 +749,7 @@ func (c *Connection) processClientInitial(hdr *packetHeader, payload []byte) err
 	c.streams[0].readOffset = uint64(len(sf.Data))
 	sflt, err := c.tls.handshake(sf.Data)
 	if err != nil {
+		c.log(logTypeConnection, "TLS connection error: %v", err)
 		return err
 	}
 
