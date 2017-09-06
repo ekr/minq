@@ -223,7 +223,9 @@ func stateName(state State) string {
 	case StateEstablished:
 		return "StateEstablished"
 	case StateClosed:
-		return "Closed"
+		return "StateClosed"
+	case StateError:
+		return "StateError"
 	default:
 		return "Unknown state"
 	}
