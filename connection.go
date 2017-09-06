@@ -636,7 +636,7 @@ func (c *Connection) Input(p []byte) error {
 }
 
 func (c *Connection) input(p []byte) error {
-	if c.isDead() {
+	if c.isClosed() {
 		return ErrorConnIsClosed
 	}
 
@@ -1195,7 +1195,7 @@ func (p *recvdPackets) prepareAckRange(protected bool) []ackRange {
 // Check the connection's timer and process any events whose time has
 // expired in the meantime. This includes sending retransmits, etc.
 func (c *Connection) CheckTimer() (int, error) {
-	if c.isDead() {
+	if c.isClosed() {
 		return 0, ErrorConnIsClosed
 	}
 
