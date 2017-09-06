@@ -29,6 +29,7 @@ const (
 	StateWaitClientSecondFlight = State(4)
 	StateEstablished            = State(5)
 	StateClosed                 = State(6)
+	StateError                  = State(7)
 )
 
 const (
@@ -625,9 +626,14 @@ func (c *Connection) outstandingQueuedBytes() (n int) {
 // Provide a packet to the connection.
 //
 // TODO(ekr@rtfm.com): when is error returned?
+
 func (c *Connection) Input(p []byte) error {
-	if c.isClosed() {
-		return fmt.Errorf("Connection is closed")
+	return c.handleError(c.input(p))
+}
+
+func (c *Connection) input(p []byte) error {
+	if c.isDead() {
+		return ErrorConnIsClosed
 	}
 
 	c.lastInput = time.Now()
@@ -638,7 +644,7 @@ func (c *Connection) Input(p []byte) error {
 	hdrlen, err := decode(&hdr, p)
 	if err != nil {
 		c.log(logTypeConnection, "Could not decode packet")
-		return err
+		return wrapE(ErrorInvalidPacket, err)
 	}
 	assert(int(hdrlen) <= len(p))
 
@@ -692,13 +698,13 @@ func (c *Connection) Input(p []byte) error {
 		c.label(), hdr.PacketNumber, hdr.getHeaderType())
 	if c.recvd.initialized() && !c.recvd.packetNotReceived(hdr.PacketNumber) {
 		c.log(logTypeConnection, "Discarding duplicate packet")
-		return fmt.Errorf("Duplicate packet")
+		return nonFatalError("Duplicate packet")
 	}
 
 	payload, err := aead.Open(nil, c.packetNonce(hdr.PacketNumber), p[hdrlen:], p[:hdrlen])
 	if err != nil {
 		c.log(logTypeConnection, "Could not unprotect packet")
-		return err
+		return wrapE(ErrorInvalidPacket, err)
 	}
 
 	if !c.recvd.initialized() {
@@ -719,7 +725,7 @@ func (c *Connection) Input(p []byte) error {
 		err = c.processUnprotected(&hdr, payload)
 	default:
 		c.log(logTypeConnection, "Unsupported packet type %v", typ)
-		err = fmt.Errorf("Unsupported packet type %v", typ)
+		err = internalError("Unsupported packet type %v", typ)
 	}
 
 	return err
@@ -750,16 +756,16 @@ func (c *Connection) processClientInitial(hdr *packetHeader, payload []byte) err
 	}
 
 	if sf.StreamId != 0 {
-		return fmt.Errorf("Received ClientInitial with stream id != 0")
+		return nonFatalError("Received ClientInitial with stream id != 0")
 	}
 
 	if sf.Offset != 0 {
-		return fmt.Errorf("Received ClientInitial with offset != 0")
+		return nonFatalError("Received ClientInitial with offset != 0")
 	}
 
 	if c.state != StateWaitClientInitial {
 		if uint64(len(sf.Data)) > c.streams[0].readOffset {
-			return fmt.Errorf("Received second ClientInitial which seems to be too long, offset=%v len=%v", c.streams[0].readOffset, n)
+			return nonFatalError("Received second ClientInitial which seems to be too long, offset=%v len=%v", c.streams[0].readOffset, n)
 		}
 		return nil
 	}
@@ -770,7 +776,7 @@ func (c *Connection) processClientInitial(hdr *packetHeader, payload []byte) err
 	c.log(logTypeTrace, "Expecting %d bytes of padding", len(payload))
 	for _, b := range payload {
 		if b != 0 {
-			return fmt.Errorf("ClientInitial has non-padding after ClientHello")
+			return nonFatalError("ClientInitial has non-padding after ClientHello")
 		}
 	}
 
@@ -811,7 +817,7 @@ func (c *Connection) processCleartext(hdr *packetHeader, payload []byte) error {
 		n, f, err := decodeFrame(payload)
 		if err != nil {
 			c.log(logTypeConnection, "Couldn't decode frame %v", err)
-			return err
+			return wrapE(ErrorInvalidPacket, err)
 		}
 		c.log(logTypeHandshake, "Frame type %v", f.f.getType())
 
@@ -858,7 +864,7 @@ func (c *Connection) processCleartext(hdr *packetHeader, payload []byte) error {
 			}
 
 			if inner.StreamId != 0 {
-				return fmt.Errorf("Received cleartext with stream id != 0")
+				return nonFatalError("Received cleartext with stream id != 0")
 			}
 
 			c.streams[0].newFrameData(inner.Offset, inner.Data)
@@ -897,7 +903,7 @@ func (c *Connection) processCleartext(hdr *packetHeader, payload []byte) error {
 
 		default:
 			c.log(logTypeConnection, "Received unexpected frame type")
-			fmt.Errorf("Unexpected frame type")
+			return fatalError("Unexpected frame type: %v", f.f.getType())
 		}
 		if nonAck {
 			otherThanAck = true
@@ -1184,13 +1190,16 @@ func (p *recvdPackets) prepareAckRange(protected bool) []ackRange {
 // Check the connection's timer and process any events whose time has
 // expired in the meantime. This includes sending retransmits, etc.
 func (c *Connection) CheckTimer() (int, error) {
-	c.log(logTypeConnection, "Checking timer")
+	if c.isDead() {
+		return 0, ErrorConnIsClosed
+	}
 
 	if time.Now().After(c.lastInput.Add(time.Second * time.Duration(c.idleTimeout))) {
 		c.log(logTypeHandshake, "Connection is idle for more than %v", c.idleTimeout)
 		return 0, ErrorDestroyConnection
 	}
 
+	logf(logTypeConnection, "Checking timer")
 	// Right now just re-send everything we might need to send.
 
 	// Special case the client's first message.
@@ -1200,7 +1209,8 @@ func (c *Connection) CheckTimer() (int, error) {
 		return 1, err
 	}
 
-	return c.sendQueued(false)
+	n, err := c.sendQueued(false)
+	return n, c.handleError(err)
 }
 
 // Called when the handshake is complete.
@@ -1300,8 +1310,12 @@ func (c *Connection) Close() {
 	c.close(kQuicErrorNoError, "You don't have to go home but you can't stay here")
 }
 
+func (c *Connection) isDead() bool {
+	return c.state == StateError
+}
+
 func (c *Connection) isClosed() bool {
-	return c.state == StateClosed
+	return c.state == StateError || c.state == StateClosed
 }
 
 // Get the current state of a connection.
@@ -1314,4 +1328,20 @@ func (c *Connection) GetState() State {
 // been received.
 func (c *Connection) Id() ConnectionId {
 	return c.serverConnId
+}
+
+func (c *Connection) handleError(e error) error {
+	if e == nil {
+		return nil
+	}
+
+	if !isFatalError(e) {
+		return e
+	}
+
+	// Connection has failed.
+	logf(logTypeConnection, "%v: failed with Error=%v", c.label(), e.Error())
+	c.setState(StateError)
+
+	return e
 }
