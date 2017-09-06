@@ -221,6 +221,8 @@ func stateName(state State) string {
 		return "StateWaitClientSecondFlight"
 	case StateEstablished:
 		return "StateEstablished"
+	case StateClosed:
+		return "Closed"
 	default:
 		return "Unknown state"
 	}
@@ -1185,7 +1187,6 @@ func (p *recvdPackets) prepareAckRange(protected bool) []ackRange {
 // expired in the meantime. This includes sending retransmits, etc.
 func (c *Connection) CheckTimer() (int, error) {
 	c.log(logTypeConnection, "Checking timer")
-
 	if time.Now().After(c.lastInput.Add(time.Second * time.Duration(c.idleTimeout))) {
 		c.log(logTypeHandshake, "Connection is idle for more than %v", c.idleTimeout)
 		return 0, ErrorDestroyConnection
