@@ -87,6 +87,7 @@ var ErrorReceivedVersionNegotiation = fatalError("Received a version negotiation
 var ErrorConnIsClosed = fatalError("Connection is closed")
 var ErrorStreamIsClosed = fatalError("Stream is closed")
 var ErrorInvalidPacket = nonFatalError("Could not decode packet")
+var ErrorConnectionTimedOut = fatalError("Connection timed out")
 
 // Protocol errors
 type ErrorCode uint32

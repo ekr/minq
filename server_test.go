@@ -120,5 +120,5 @@ func TestServerIdleTimeout(t *testing.T) {
 
 	time.Sleep(time.Second * 15)
 	server.CheckTimer()
-	assertEquals(t, 1, server.ConnectionCount())
+	assertEquals(t, 0, server.ConnectionCount())
 }

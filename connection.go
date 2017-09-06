@@ -1199,11 +1199,11 @@ func (c *Connection) CheckTimer() (int, error) {
 		return 0, ErrorConnIsClosed
 	}
 
-	logf(logTypeConnection, "Checking timer")
+	c.log(logTypeConnection, "Checking timer")
 
 	if time.Now().After(c.lastInput.Add(time.Second * time.Duration(c.idleTimeout))) {
-		c.log(logTypeHandshake, "Connection is idle for more than %v", c.idleTimeout)
-		return 0, ErrorDestroyConnection
+		c.log(logTypeConnection, "Connection is idle for more than %v", c.idleTimeout)
+		return 0, ErrorConnectionTimedOut
 	}
 
 	// Right now just re-send everything we might need to send.

@@ -69,7 +69,7 @@ func (s *Server) Input(addr *net.UDPAddr, data []byte) (*Connection, error) {
 
 	err = conn.Input(data)
 	if isFatalError(err) {
-		logf(logTypeServer, "Fatal Error %v killing connection %v", err, conn.serverConnId)
+		logf(logTypeServer, "Fatal Error %v killing connection %.16x", err, conn.serverConnId)
 		delete(s.idTable, conn.serverConnId)
 		delete(s.addrTable, addr.String())
 		return nil, nil
@@ -85,7 +85,12 @@ func (s *Server) Input(addr *net.UDPAddr, data []byte) (*Connection, error) {
 // Check the server timers.
 func (s *Server) CheckTimer() error {
 	for _, conn := range s.idTable {
-		conn.CheckTimer()
+		_, err := conn.CheckTimer()
+		if isFatalError(err) {
+			logf(logTypeServer, "Fatal Error %v killing connection %.16x", err, conn.serverConnId)
+			delete(s.idTable, conn.serverConnId)
+			// TODO(ekr@rtfm.com): Delete this from the addr table.
+		}
 	}
 	return nil
 }
