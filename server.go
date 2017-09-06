@@ -68,7 +68,8 @@ func (s *Server) Input(addr *net.UDPAddr, data []byte) (*Connection, error) {
 	}
 
 	err = conn.Input(data)
-	if err == ErrorDestroyConnection {
+	if isFatalError(err) {
+		logf(logTypeServer, "Fatal Error %v killing connection %v", err, conn.serverConnId)
 		delete(s.idTable, conn.serverConnId)
 		delete(s.addrTable, addr.String())
 		return nil, nil

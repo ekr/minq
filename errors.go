@@ -68,6 +68,10 @@ func wrapE(err interface{}, sub interface{}) error {
 // It's a regular error (i.e., not an intError)
 // e.fatal is true
 func isFatalError(e interface{}) bool {
+	if e == nil {
+		return false
+	}
+
 	i, ok := e.(intError)
 	if !ok {
 		return true

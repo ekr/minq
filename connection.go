@@ -904,6 +904,7 @@ func (c *Connection) processCleartext(hdr *packetHeader, payload []byte) error {
 		case *connectionCloseFrame:
 			c.log(logTypeConnection, "Received frame close")
 			c.setState(StateClosed)
+			return fatalError("Connection closed")
 
 		default:
 			c.log(logTypeConnection, "Received unexpected frame type")
