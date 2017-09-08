@@ -72,6 +72,10 @@ func newTlsConn(conf TlsConfig, role uint8) *tlsConn {
 	}
 }
 
+func (c *tlsConn) setTransportParametersHandler(h *transportParametersHandler) {
+	c.tls.SetExtensionHandler(h)
+}
+
 func (c *tlsConn) handshake(input []byte) ([]byte, error) {
 	logf(logTypeTls, "TLS handshake input len=%v", len(input))
 	logf(logTypeTrace, "TLS handshake input = %v", hex.EncodeToString(input))

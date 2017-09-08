@@ -22,13 +22,15 @@ func uintEncode(buf *bytes.Buffer, v reflect.Value, encodingSize uintptr) error 
 		size = encodingSize
 	}
 
-	val := v.Uint()
+	uintEncodeInt(buf, v.Uint(), size)
+	return nil
+}
+
+func uintEncodeInt(buf *bytes.Buffer, val uint64, size uintptr) {
 	// Now encode the low-order bytes of the value.
 	for b := size; b > 0; b -= 1 {
 		buf.WriteByte(byte(val >> ((b - 1) * 8)))
 	}
-
-	return nil
 }
 
 func arrayEncode(buf *bytes.Buffer, v reflect.Value) error {

@@ -125,6 +125,7 @@ type Connection struct {
 	sentAcks       map[uint64][]ackRange
 	lastInput      time.Time
 	idleTimeout    uint16
+	tpHandler      *transportParametersHandler
 }
 
 // Create a new QUIC connection. Should only be used with role=RoleClient,
@@ -152,7 +153,12 @@ func NewConnection(trans Transport, role uint8, tls TlsConfig, handler Connectio
 		make(map[uint64][]ackRange, 0),
 		time.Now(),
 		10, // Very short idle timeout.
+		newTransportParametersHandler(role, kQuicVersion),
 	}
+
+	// TODO(ekr@rtfm.com): This isn't generic, but rather tied to
+	// Mint.
+	c.tls.setTransportParametersHandler(c.tpHandler)
 
 	c.recvd = newRecvdPackets(&c)
 	tmp, err := generateRand64()
