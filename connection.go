@@ -119,7 +119,7 @@ type Connection struct {
 	readProtected  *cryptoState
 	nextSendPacket uint64
 	mtu            int
-	streams        []Stream
+	streams        []*Stream
 	maxStream      uint32
 	clientInitial  []byte
 	recvd          *recvdPackets
@@ -235,11 +235,31 @@ func stateName(state State) string {
 
 func (c *Connection) ensureStream(id uint32) *Stream {
 	// TODO(ekr@rtfm.com): this is not really done, because we never clean up
-	// TODO(ekr@rtfm.com): Only create streams with the same parity.
-	for i := uint32(len(c.streams)); i <= id; i++ {
-		c.streams = append(c.streams, Stream{id: id, c: c})
+	// Resize to fit.
+	needed := id - uint32(len(c.streams)) + 1
+	c.streams = append(c.streams, make([]*Stream, needed)...)
+	// Now make all the streams in the same direction
+	i := id
+
+	for {
+		if c.streams[i] != nil {
+			break
+		}
+
+		if (i & 1) == (id & 1) {
+			c.streams[id] = &Stream{id: id, c: c}
+		}
+
+		if i == 0 {
+			break
+		}
+		i--
 	}
-	return &c.streams[id]
+	if id > c.maxStream {
+		c.maxStream = id
+	}
+
+	return c.streams[id]
 }
 
 func (c *Connection) sendClientInitial() error {
@@ -567,7 +587,7 @@ func (c *Connection) sendStreamPacket(pt uint8, frames []frame, acks []ackRange)
 }
 
 // Send all the queued data on a set of streams with packet type |pt|
-func (c *Connection) sendQueuedStreams(pt uint8, streams []Stream, protected bool, bareAcks bool) (int, error) {
+func (c *Connection) sendQueuedStreams(pt uint8, streams []*Stream, protected bool, bareAcks bool) (int, error) {
 	c.log(logTypeConnection, "%v: sendQueuedStreams pt=%v, protected=%v, bareAcks=%v",
 		c.label(), pt, protected, bareAcks)
 	left := c.mtu
@@ -1058,8 +1078,7 @@ func (c *Connection) processAckFrame(f *ackFrame) error {
 			//    rather than the iterator because we want to modify
 			//    the stream.
 			for i, _ := range c.streams {
-				st := &(c.streams[i])
-				st.removeAckedChunks(pn)
+				c.streams[i].removeAckedChunks(pn)
 			}
 
 			// 2. Mark all the packets that were ACKed in this packet as double-acked.
@@ -1286,7 +1305,7 @@ func (c *Connection) GetStream(id uint32) *Stream {
 		return nil
 	}
 
-	return &c.streams[iid]
+	return c.streams[iid]
 }
 
 func generateRand64() (uint64, error) {

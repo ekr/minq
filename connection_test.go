@@ -290,6 +290,12 @@ func TestSendReceiveData(t *testing.T) {
 	assertNotNil(t, b2, "Read data from client")
 	assertByteEquals(t, b, b2)
 
+	// Check that we only create streams in one direction
+	cs = pair.client.CreateStream()
+	assertEquals(t, uint32(3), cs.Id())
+	assertNotNil(t, pair.client.GetStream(3), "Stream 3 should exist")
+	assertX(t, pair.client.GetStream(2) == nil, "Stream 2 should not exist")
+
 	// Close the client.
 	pair.client.Close()
 
