@@ -127,16 +127,20 @@ func (p packetHeader) ConnectionID__length() uintptr {
 }
 
 func (p packetHeader) PacketNumber__length() uintptr {
-	logf(logTypeTrace, "PacketNumber__length()")
+	logf(logTypeTrace, "PacketNumber__length() Type=%v", p.Type)
 	if isLongHeader(&p) {
 		return 4
 	}
 
-	switch p.Type {
-	case 1, 2, 3:
-		return 1 << p.Type
-	default:
+	switch p.Type & 0xf {
+	case 1:
+		return 1
+	case 2:
+		return 2
+	case 3:
 		return 4
+	default:
+		return 4 // TODO(ekr@rtfm.com): This is actually currently an error.
 	}
 }
 func (p packetHeader) Version__length() uintptr {

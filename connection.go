@@ -81,10 +81,11 @@ type recvdPacketsInt struct {
 }
 
 type recvdPackets struct {
-	c      *Connection
-	clear  recvdPacketsInt
-	all    recvdPacketsInt
-	acked2 recvdPacketsInt // Acks that have been ACKed.
+	c           *Connection
+	maxReceived uint64
+	clear       recvdPacketsInt
+	all         recvdPacketsInt
+	acked2      recvdPacketsInt // Acks that have been ACKed.
 }
 
 /*
@@ -184,11 +185,6 @@ func NewConnection(trans Transport, role uint8, tls TlsConfig, handler Connectio
 func (c *Connection) zeroRttAllowed() bool {
 	// Placeholder
 	return false
-}
-
-func (c *Connection) expandPacketNumber(pn uint64) uint64 {
-	// Placeholder
-	return pn
 }
 
 func (c *Connection) start() error {
@@ -704,35 +700,40 @@ func (c *Connection) input(p []byte) error {
 	// TODO(ekr@rtfm.com): this dup detection doesn't work right if you
 	// get a cleartext packet that has the same PN as a ciphertext or vice versa.
 	// Need to fix.
-	c.log(logTypeConnection, "%s: Received (unverified) packet with PN=%v PT=%v",
+	c.log(logTypeConnection, "%s: Received (unverified) packet with PN=%x PT=%v",
 		c.label(), hdr.PacketNumber, hdr.getHeaderType())
-	if c.recvd.initialized() && !c.recvd.packetNotReceived(hdr.PacketNumber) {
-		c.log(logTypeConnection, "Discarding duplicate packet")
+
+	packetNumber := c.expandPacketNumber(hdr.PacketNumber, int(hdr.PacketNumber__length()))
+	c.log(logTypeConnection, "Reconstructed packet number %x", packetNumber)
+
+	if c.recvd.initialized() && !c.recvd.packetNotReceived(packetNumber) {
+		c.log(logTypeConnection, "Discarding duplicate packet %x", packetNumber)
 		return nonFatalError("Duplicate packet")
 	}
 
-	payload, err := aead.Open(nil, c.packetNonce(hdr.PacketNumber), p[hdrlen:], p[:hdrlen])
+	payload, err := aead.Open(nil, c.packetNonce(packetNumber), p[hdrlen:], p[:hdrlen])
 	if err != nil {
 		c.log(logTypeConnection, "Could not unprotect packet")
+		c.log(logTypeTrace, "Packet %h", p)
 		return wrapE(ErrorInvalidPacket, err)
 	}
 
 	if !c.recvd.initialized() {
-		c.recvd.init(hdr.PacketNumber)
+		c.recvd.init(packetNumber)
 	}
 	// TODO(ekr@rtfm.com): Reject unprotected packets once we are established.
 
 	// We have now verified that this is a valid packet, so mark
 	// it received.
 
-	c.recvd.packetSetReceived(hdr.PacketNumber, hdr.isProtected())
+	c.recvd.packetSetReceived(packetNumber, hdr.isProtected())
 	switch typ {
 	case packetTypeClientInitial:
 		err = c.processClientInitial(&hdr, payload)
 	case packetTypeServerCleartext, packetTypeClientCleartext:
 		err = c.processCleartext(&hdr, payload)
 	case packetType1RTTProtectedPhase0, packetType1RTTProtectedPhase1:
-		err = c.processUnprotected(&hdr, payload)
+		err = c.processUnprotected(&hdr, packetNumber, payload)
 	default:
 		c.log(logTypeConnection, "Unsupported packet type %v", typ)
 		err = internalError("Unsupported packet type %v", typ)
@@ -900,7 +901,7 @@ func (c *Connection) processCleartext(hdr *packetHeader, payload []byte) error {
 			}
 
 		case *ackFrame:
-			c.log(logTypeConnection, "Received ACK, first range=%v-%v", inner.LargestAcknowledged-inner.FirstAckBlockLength, inner.LargestAcknowledged)
+			c.log(logTypeConnection, "Received ACK, first range=%v-%v", inner.LargestAcknowledged-inner.AckBlockLength, inner.LargestAcknowledged)
 
 			err = c.processAckFrame(inner)
 			if err != nil {
@@ -978,7 +979,7 @@ func (c *Connection) processVersionNegotiation(hdr *packetHeader, payload []byte
 	return ErrorReceivedVersionNegotiation
 }
 
-func (c *Connection) processUnprotected(hdr *packetHeader, payload []byte) error {
+func (c *Connection) processUnprotected(hdr *packetHeader, packetNumber uint64, payload []byte) error {
 	c.log(logTypeHandshake, "Reading unprotected data in state %v", c.state)
 	otherThanAck := false
 	for len(payload) > 0 {
@@ -1010,7 +1011,7 @@ func (c *Connection) processUnprotected(hdr *packetHeader, payload []byte) error
 				c.handler.StreamReadable(s)
 			}
 		case *ackFrame:
-			c.log(logTypeConnection, "Received ACK, first range=%v-%v", inner.LargestAcknowledged-inner.FirstAckBlockLength, inner.LargestAcknowledged)
+			c.log(logTypeConnection, "Received ACK, first range=%v-%v", inner.LargestAcknowledged-inner.AckBlockLength, inner.LargestAcknowledged)
 
 			err = c.processAckFrame(inner)
 			if err != nil {
@@ -1032,7 +1033,7 @@ func (c *Connection) processUnprotected(hdr *packetHeader, payload []byte) error
 	// double-acked so we don't send ACKs for it.
 	if !otherThanAck {
 		c.log(logTypeAck, "Packet just contained ACKs")
-		c.recvd.packetSetAcked2(hdr.PacketNumber)
+		c.recvd.packetSetAcked2(packetNumber)
 	}
 
 	return nil
@@ -1040,7 +1041,7 @@ func (c *Connection) processUnprotected(hdr *packetHeader, payload []byte) error
 
 func (c *Connection) processAckFrame(f *ackFrame) error {
 	end := f.LargestAcknowledged
-	start := end - f.FirstAckBlockLength
+	start := end - f.AckBlockLength
 
 	// Go through all the ACK blocks and process everything.
 	for {
@@ -1050,7 +1051,7 @@ func (c *Connection) processAckFrame(f *ackFrame) error {
 		for {
 			// TODO(ekr@rtfm.com): properly filter for ACKed packets which are in the
 			// wrong key phase.
-			c.log(logTypeConnection, "%s: processing ACK for PN=%v", c.label(), pn)
+			c.log(logTypeConnection, "%s: processing ACK for PN=%x", c.label(), pn)
 
 			// 1. Go through each stream and remove the chunks. This is not
 			//    efficient but fine for now. Note, use of array index
@@ -1102,7 +1103,7 @@ func (p *recvdPacketsInt) init(min uint64) {
 
 func (p *recvdPacketsInt) packetNotReceived(pn uint64) bool {
 	if pn < p.min {
-		logf(logTypeTrace, "Packet %v < min=%v", pn, p.min)
+		logf(logTypeTrace, "Packet %x < min=%x", pn, p.min)
 		return false // We're not sure.
 	}
 
@@ -1131,6 +1132,7 @@ func (p *recvdPacketsInt) packetSetReceived(pn uint64) {
 func newRecvdPackets(c *Connection) *recvdPackets {
 	return &recvdPackets{
 		c,
+		0,
 		newRecvdPacketsInt(),
 		newRecvdPacketsInt(),
 		newRecvdPacketsInt()}
@@ -1152,6 +1154,9 @@ func (p *recvdPackets) packetNotReceived(pn uint64) bool {
 }
 
 func (p *recvdPackets) packetSetReceived(pn uint64, protected bool) {
+	if pn > p.maxReceived {
+		p.maxReceived = pn
+	}
 	p.c.log(logTypeAck, "Setting packet received=%v", pn)
 	if !protected {
 		p.clear.packetSetReceived(pn)
@@ -1356,4 +1361,65 @@ func (c *Connection) handleError(e error) error {
 	c.setState(StateError)
 
 	return e
+}
+
+// S 5.8:
+//   A packet number is decoded by finding the packet number value that is
+//   closest to the next expected packet.  The next expected packet is the
+//   highest received packet number plus one.  For example, if the highest
+//   successfully authenticated packet had a packet number of 0xaa82f30e,
+//   then a packet containing a 16-bit value of 0x1f94 will be decoded as
+//   0xaa831f94.
+//
+//
+// The expected sequence number is composed of:
+//   EHi || ELo
+//
+// We get |pn|, which is the same length as ELo, so the possible values
+// are:
+//
+// if pn > ELo, then either EHi || pn  or  EHi - 1 || pn  (wrapped downward)
+// if Pn == Elo then Ei || pn
+// if Pn < Elo  then either EHi || on  or  EHi + 1 || pn  (wrapped upward)
+//   EHi - 1 || pn  if pn > ELo (
+//   EHi     || pn
+//   EHi + 1 || pn
+//
+func (c *Connection) expandPacketNumber(pn uint64, size int) uint64 {
+	if size == 8 {
+		return pn
+	}
+
+	expected := c.recvd.maxReceived + 1
+	c.log(logTypeTrace, "Expanding packet number, pn=%x size=%d expected=%x", pn, size, expected)
+
+	// Mask off the top of the expected sequence number
+	mask := uint64(1)
+	mask = (mask << (uint8(size) * 8)) - 1
+	expectedLow := mask & expected
+	high := ^mask & expected
+	match := high | pn
+
+	// Exact match
+	if expectedLow == pn {
+		return match
+	}
+
+	if pn > expectedLow {
+		if high == 0 {
+			return match
+		}
+		wrap := (high - 1) | pn
+		if (expected - wrap) <= (match - expected) {
+			return wrap
+		}
+		return match
+	}
+
+	// expectedLow > pn
+	wrap := (high + 1) | pn
+	if (expected - match) <= (wrap - expected) {
+		return match
+	}
+	return wrap
 }

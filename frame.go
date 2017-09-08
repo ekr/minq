@@ -91,7 +91,7 @@ func decodeFrame(data []byte) (uintptr, *frame, error) {
 		inner = &streamFrame{}
 	default:
 		logf(logTypeConnection, "Unknown frame type %v", t)
-		return 0, nil, fmt.Errorf("Received unknwon frame type: %v", t)
+		return 0, nil, fmt.Errorf("Received unknown frame type: %v", t)
 	}
 
 	n, err := decode(inner, data)
@@ -269,7 +269,7 @@ type ackFrame struct {
 	NumTS               uint8
 	LargestAcknowledged uint64
 	AckDelay            uint16
-	FirstAckBlockLength uint64
+	AckBlockLength      uint64
 	AckBlockSection     []byte
 	TimestampSection    []byte
 }
@@ -293,12 +293,12 @@ func (f ackFrame) LargestAcknowledged__length() uintptr {
 	return ackFieldsLength((byte(f.Type) >> 2) & 0x3)
 }
 
-func (f ackFrame) FirstAckBlockLength__length() uintptr {
+func (f ackFrame) AckBlockLength__length() uintptr {
 	return ackFieldsLength(byte(f.Type) & 0x3)
 }
 
 func (f ackFrame) AckBlockSection__length() uintptr {
-	return uintptr(f.NumBlocks) * (1 + f.LargestAcknowledged__length())
+	return uintptr(f.NumBlocks) * (1 + f.AckBlockLength__length())
 }
 
 func (f ackFrame) TimestampSection__length() uintptr {
@@ -316,8 +316,8 @@ func newAckFrame(rs []ackRange) (*frame, error) {
 		f.NumBlocks = uint8(len(rs) - 1)
 	}
 	f.LargestAcknowledged = rs[0].lastPacket
-	f.FirstAckBlockLength = rs[0].count - 1
-	last := f.LargestAcknowledged - f.FirstAckBlockLength
+	f.AckBlockLength = rs[0].count - 1
+	last := f.LargestAcknowledged - f.AckBlockLength
 	// TODO(ekr@rtfm.com): Fill in any of the timestamp stuff.
 	f.AckDelay = 0
 	f.NumTS = 0
