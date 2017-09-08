@@ -305,6 +305,55 @@ func TestSendReceiveData(t *testing.T) {
 	assertEquals(t, pair.server.GetState(), StateClosed)
 }
 
+func TestSendReceiveRetransmit(t *testing.T) {
+	testString := []byte("abcdef")
+	pair := newCsPair(t)
+
+	pair.handshake(t)
+
+	// Force the client to get the ACK from the server
+	pair.server.CheckTimer()
+	err := inputAll(pair.client)
+
+	// Write data C->S
+	cs := pair.client.CreateStream()
+	assertNotNil(t, cs, "Failed to create a stream")
+	cs.Write(testString)
+
+	// Check the timer (forcing retransmit)
+	pair.client.CheckTimer()
+	pair.client.CheckTimer()
+
+	// Read data C->S
+	err = inputAll(pair.server)
+	assertNotError(t, err, "Couldn't read input packets")
+	ss := pair.server.GetStream(1)
+	b := make([]byte, 1024)
+	n, err := ss.Read(b)
+	assertNotError(t, err, "Error reading")
+	b = b[:n]
+	assertByteEquals(t, []byte(testString), b)
+
+	// Write data S->C
+	for i, _ := range b {
+		b[i] ^= 0xff
+	}
+	ss.Write(b)
+
+	// Force potential retransmit.
+	pair.server.CheckTimer()
+
+	// Now read the data
+	b2 := make([]byte, 1024)
+	err = inputAll(pair.client)
+	assertNotError(t, err, "Couldn't read input packets")
+	n, err = cs.Read(b2)
+	assertNotError(t, err, "Error reading")
+	b2 = b2[:n]
+	assertByteEquals(t, b2, b)
+
+}
+
 func TestVersionNegotiationPacket(t *testing.T) {
 	cTrans, sTrans := newTestTransportPair(true)
 

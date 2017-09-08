@@ -26,6 +26,7 @@ const (
 	logTypeTrace      = "trace"
 	logTypeServer     = "server"
 	logTypeUdp        = "udp"
+	logTypeStream     = "stream"
 )
 
 var (
