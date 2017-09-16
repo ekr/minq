@@ -62,6 +62,15 @@ func logf(tag string, format string, args ...interface{}) {
 	}
 }
 
+type loggingFunction func(string, string, ...interface{})
+
 func SetLogOutput(f func(string, ...interface{})) {
 	logFunction = f
+}
+
+func newConnectionLogger(c *Connection) loggingFunction {
+	return func(tag string, format string, args ...interface{}) {
+		fullFormat := fmt.Sprintf("Conn: %.16x:%.16x: %s", c.clientConnId, c.serverConnId, format)
+		logf(tag, fullFormat, args...)
+	}
 }

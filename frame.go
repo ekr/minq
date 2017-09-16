@@ -24,7 +24,7 @@ const (
 )
 
 const (
-	kFrameTypeFlagF = frameType(0x40)
+	kFrameTypeFlagF = frameType(0x20)
 	kFrameTypeFlagD = frameType(0x01)
 )
 
@@ -127,6 +127,14 @@ type rstStreamFrame struct {
 
 func (f rstStreamFrame) getType() frameType {
 	return kFrameTypeRstStream
+}
+
+func newRstStreamFrame(streamId uint32, errorCode ErrorCode, finalOffset uint64) frame {
+	return frame{streamId, &rstStreamFrame{
+		kFrameTypeRstStream,
+		streamId,
+		uint32(errorCode),
+		finalOffset}, nil}
 }
 
 // CONNECTION_CLOSE
@@ -383,16 +391,27 @@ func (f streamFrame) Data__length() uintptr {
 	return uintptr(f.DataLength)
 }
 
-func newStreamFrame(stream uint32, offset uint64, data []byte) frame {
+func (f streamFrame) hasFin() bool {
+	if f.Typ&kFrameTypeFlagF == 0 {
+		return false
+	}
+	return true
+}
+
+func newStreamFrame(stream uint32, offset uint64, data []byte, last bool) frame {
 	logf(logTypeFrame, "Creating stream frame with data length=%d", len(data))
 	assert(len(data) <= 65535)
+	// TODO(ekr@tfm.com): One might want to allow non
+	// D bit, but not for now.
+	// Set all of SSOO to 1
+	typ := kFrameTypeStream | 0x1e | kFrameTypeFlagD
+	if last {
+		typ |= kFrameTypeFlagF
+	}
 	return frame{
 		stream,
 		&streamFrame{
-			// TODO(ekr@tfm.com): One might want to allow non
-			// D bit, but not for now.
-			// Set all of SSOO to 1
-			kFrameTypeStream | 0x1e | kFrameTypeFlagD,
+			typ,
 			uint32(stream),
 			offset,
 			uint16(len(data)),

@@ -354,6 +354,78 @@ func TestSendReceiveRetransmit(t *testing.T) {
 
 }
 
+func TestSendReceiveStreamFin(t *testing.T) {
+	testString := []byte("abcdef")
+	pair := newCsPair(t)
+
+	pair.handshake(t)
+
+	// Force the client to get the ACK from the server
+	pair.server.CheckTimer()
+	err := inputAll(pair.client)
+
+	// Write data C->S
+	cs := pair.client.CreateStream()
+	assertNotNil(t, cs, "Failed to create a stream")
+	cs.Write(testString)
+
+	// Now close the stream.
+	cs.Close()
+
+	// Verify that we cannot write.
+	n, err := cs.Write(testString)
+	assertEquals(t, ErrorStreamIsClosed, err)
+	assertEquals(t, 0, n)
+
+	// Read data C->S
+	err = inputAll(pair.server)
+	assertNotError(t, err, "Couldn't read input packets")
+	ss := pair.server.GetStream(1)
+	b := make([]byte, 1024)
+	n, err = ss.Read(b)
+	assertNotError(t, err, "Couldn't read from client")
+	b = b[:n]
+	assertByteEquals(t, []byte(testString), b)
+
+	b = make([]byte, 1024)
+	n, err = ss.Read(b)
+	assertEquals(t, err, ErrorStreamIsClosed)
+	assertEquals(t, 0, n)
+}
+
+func TestSendReceiveStreamRst(t *testing.T) {
+	testString := []byte("abcdef")
+	pair := newCsPair(t)
+
+	pair.handshake(t)
+
+	// Force the client to get the ACK from the server
+	pair.server.CheckTimer()
+	err := inputAll(pair.client)
+
+	// Write data C->S
+	cs := pair.client.CreateStream()
+	assertNotNil(t, cs, "Failed to create a stream")
+	cs.Write(testString)
+
+	// Now reset the stream.
+	cs.Reset(kQuicErrorNoError)
+
+	// Verify that we cannot write.
+	n, err := cs.Write(testString)
+	assertEquals(t, ErrorStreamIsClosed, err)
+	assertEquals(t, 0, n)
+
+	// Read data C->S. Should result in no data.
+	err = inputAll(pair.server)
+	assertNotError(t, err, "Couldn't read input packets")
+	ss := pair.server.GetStream(1)
+	b := make([]byte, 1024)
+	n, err = ss.Read(b)
+	assertEquals(t, err, ErrorStreamIsClosed)
+	assertEquals(t, 0, n)
+}
+
 func TestVersionNegotiationPacket(t *testing.T) {
 	cTrans, sTrans := newTestTransportPair(true)
 

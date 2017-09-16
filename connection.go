@@ -127,6 +127,7 @@ type Connection struct {
 	lastInput      time.Time
 	idleTimeout    uint16
 	tpHandler      *transportParametersHandler
+	log            loggingFunction
 }
 
 // Create a new QUIC connection. Should only be used with role=RoleClient,
@@ -155,7 +156,10 @@ func NewConnection(trans Transport, role uint8, tls TlsConfig, handler Connectio
 		time.Now(),
 		10, // Very short idle timeout.
 		newTransportParametersHandler(role, kQuicVersion),
+		nil,
 	}
+
+	c.log = newConnectionLogger(&c)
 
 	// TODO(ekr@rtfm.com): This isn't generic, but rather tied to
 	// Mint.
@@ -178,7 +182,7 @@ func NewConnection(trans Transport, role uint8, tls TlsConfig, handler Connectio
 		return nil
 	}
 	c.nextSendPacket = tmp & 0x7fffffff
-	c.ensureStream(0)
+	c.ensureStream(0).openMaybe()
 	return &c
 }
 
@@ -247,7 +251,7 @@ func (c *Connection) ensureStream(id uint32) *Stream {
 		}
 
 		if (i & 1) == (id & 1) {
-			c.streams[id] = &Stream{id: id, c: c}
+			c.streams[i] = newStream(c, i, kStreamStateIdle)
 		}
 
 		if i == 0 {
@@ -274,7 +278,7 @@ func (c *Connection) sendClientInitial() error {
 		}
 	}
 
-	f := newStreamFrame(0, 0, c.clientInitial)
+	f := newStreamFrame(0, 0, c.clientInitial, false)
 	// Encode this so we know how much room it is going to take up.
 	l, err := f.length()
 	if err != nil {
@@ -295,7 +299,7 @@ func (c *Connection) sendClientInitial() error {
 	// Enqueue the frame for transmission.
 	queued = append(queued, f)
 
-	c.streams[0].writeOffset = uint64(len(c.clientInitial))
+	c.streams[0].send.setOffset(uint64(len(c.clientInitial)))
 
 	for i := 0; i < topad; i++ {
 		queued = append(queued, newPaddingFrame(0))
@@ -389,6 +393,13 @@ func (c *Connection) sendPacketRaw(pt uint8, payload []byte) error {
 	return nil
 }
 
+// Send a packet with whatever PT seems appropriate now.
+func (c *Connection) sendPacketNow(tosend []frame) error {
+	// Right now this is just 1-RTT 0-phase
+	return c.sendPacket(packetType1RTTProtectedPhase0, tosend)
+}
+
+// Send a packet with a specific PT.
 func (c *Connection) sendPacket(pt uint8, tosend []frame) error {
 	c.log(logTypeConnection, "%s: Sending packet of type %v. %v frames", c.label(), pt, len(tosend))
 	c.log(logTypeTrace, "Sending packet of type %v. %v frames", pt, len(tosend))
@@ -488,13 +499,14 @@ func (c *Connection) sendFramesInPacket(pt uint8, tosend []frame) error {
 func (c *Connection) sendOnStream(streamId uint32, data []byte) error {
 	c.log(logTypeConnection, "%v: sending %v bytes on stream %v", c.label(), len(data), streamId)
 	stream := c.ensureStream(streamId)
+	stream.openMaybe()
 
 	for len(data) > 0 {
 		tocpy := 1024
 		if tocpy > len(data) {
 			tocpy = len(data)
 		}
-		stream.send(data[:tocpy])
+		stream.queue(data[:tocpy])
 
 		data = data[tocpy:]
 	}
@@ -596,14 +608,13 @@ func (c *Connection) sendQueuedStreams(pt uint8, streams []*Stream, protected bo
 	acks := c.recvd.prepareAckRange(protected)
 
 	for _, str := range streams {
-		for i, chunk := range str.out {
-			c.log(logTypeConnection, "Sending chunk of offset=%v len %v", chunk.offset, len(chunk.data))
-			f := newStreamFrame(str.id, chunk.offset, chunk.data)
+		for i, chunk := range str.send.chunks {
+			c.log(logTypeStream, "%v Sending chunk of offset=%v len %v", str.label(), chunk.offset, len(chunk.data))
+			f := newStreamFrame(str.Id(), chunk.offset, chunk.data, chunk.last)
 			l, err := f.length()
 			if err != nil {
 				return 0, err
 			}
-
 			if left < l {
 				asent, err := c.sendStreamPacket(pt, frames, acks)
 				if err != nil {
@@ -619,7 +630,7 @@ func (c *Connection) sendQueuedStreams(pt uint8, streams []*Stream, protected bo
 			frames = append(frames, f)
 			left -= l
 			// Record that we send this chunk in the current
-			str.out[i].pns = append(str.out[i].pns, c.nextSendPacket)
+			str.send.chunks[i].pns = append(str.send.chunks[i].pns, c.nextSendPacket)
 		}
 	}
 
@@ -716,7 +727,6 @@ func (c *Connection) input(p []byte) error {
 		aead = c.readProtected.aead
 	}
 
-	// TODO(ekr@rtfm.com): Reconstruct the packet number
 	// TODO(ekr@rtfm.com): this dup detection doesn't work right if you
 	// get a cleartext packet that has the same PN as a ciphertext or vice versa.
 	// Need to fix.
@@ -795,8 +805,8 @@ func (c *Connection) processClientInitial(hdr *packetHeader, payload []byte) err
 	}
 
 	if c.state != StateWaitClientInitial {
-		if uint64(len(sf.Data)) > c.streams[0].readOffset {
-			return nonFatalError("Received second ClientInitial which seems to be too long, offset=%v len=%v", c.streams[0].readOffset, n)
+		if uint64(len(sf.Data)) > c.streams[0].recv.offset {
+			return nonFatalError("Received second ClientInitial which seems to be too long, offset=%v len=%v", c.streams[0].recv.offset, n)
 		}
 		return nil
 	}
@@ -811,7 +821,7 @@ func (c *Connection) processClientInitial(hdr *packetHeader, payload []byte) err
 		}
 	}
 
-	c.streams[0].readOffset = uint64(len(sf.Data))
+	c.streams[0].recv.setOffset(uint64(len(sf.Data)))
 	sflt, err := c.tls.handshake(sf.Data)
 	if err != nil {
 		c.log(logTypeConnection, "TLS connection error: %v", err)
@@ -857,9 +867,16 @@ func (c *Connection) processCleartext(hdr *packetHeader, payload []byte) error {
 		switch inner := f.f.(type) {
 		case *paddingFrame:
 			// Skip.
+		case *rstStreamFrame:
+			// TODO(ekr@rtfm.com): Don't let the other side initiate
+			// streams that are the wrong parity.
+			c.log(logTypeStream, "Received RST_STREAM on stream %v", inner.StreamId)
+			s := c.ensureStream(inner.StreamId)
+			s.closeRecv()
+
 		case *streamFrame:
 			// If this is duplicate data and if so early abort.
-			if inner.Offset+uint64(len(inner.Data)) <= c.streams[0].readOffset {
+			if inner.Offset+uint64(len(inner.Data)) <= c.streams[0].recv.offset {
 				continue
 			}
 
@@ -879,7 +896,7 @@ func (c *Connection) processCleartext(hdr *packetHeader, payload []byte) error {
 				// 2. Set the outgoing stream offset accordingly
 				// 3. Remember the connection ID
 				if len(c.clientInitial) > 0 {
-					c.streams[0].writeOffset = uint64(len(c.clientInitial))
+					c.streams[0].send.setOffset(uint64(len(c.clientInitial)))
 					c.clientInitial = nil
 					c.serverConnId = hdr.ConnectionID
 				}
@@ -898,7 +915,7 @@ func (c *Connection) processCleartext(hdr *packetHeader, payload []byte) error {
 				return nonFatalError("Received cleartext with stream id != 0")
 			}
 
-			c.streams[0].newFrameData(inner.Offset, inner.Data)
+			c.streams[0].newFrameData(inner.Offset, inner.hasFin(), inner.Data)
 			available := c.streams[0].readAll()
 			out, err := c.tls.handshake(available)
 			if err != nil {
@@ -1009,25 +1026,35 @@ func (c *Connection) processUnprotected(hdr *packetHeader, packetNumber uint64, 
 			c.log(logTypeConnection, "Couldn't decode frame %v", err)
 			return err
 		}
-		c.log(logTypeHandshake, "Frame type %v", f.f.getType())
+		c.log(logTypeConnection, "Frame type %v", f.f.getType())
 
 		payload = payload[n:]
 		nonAck := true
 		switch inner := f.f.(type) {
+		case *paddingFrame:
+			// Skip.
+		case *rstStreamFrame:
+			// TODO(ekr@rtfm.com): Don't let the other side initiate
+			// streams that are the wrong parity.
+			c.log(logTypeStream, "Received RST_STREAM on stream %v", inner.StreamId)
+			s := c.ensureStream(inner.StreamId)
+			s.closeRecv()
+
 		case *streamFrame:
 			c.log(logTypeConnection, "Received data on stream %v len=%v", inner.StreamId, len(inner.Data))
 			c.log(logTypeTrace, "Received on stream %v %x", inner.StreamId, inner.Data)
-
+			// TODO(ekr@rtfm.com): Report error on empty non-FIN frame
 			notifyCreated := false
 			s := c.GetStream(inner.StreamId)
 			if s == nil {
 				notifyCreated = true
 			}
 			s = c.ensureStream(inner.StreamId)
+			s.openMaybe()
 			if notifyCreated && c.handler != nil {
 				c.handler.NewStream(s)
 			}
-			if s.newFrameData(inner.Offset, inner.Data) && c.handler != nil {
+			if s.newFrameData(inner.Offset, inner.hasFin(), inner.Data) && c.handler != nil {
 				c.handler.StreamReadable(s)
 			}
 		case *ackFrame:
@@ -1293,7 +1320,9 @@ func (c *Connection) CreateStream() *Stream {
 		}
 	}
 
-	return c.ensureStream(nextStream)
+	s := c.ensureStream(nextStream)
+	s.openMaybe()
+	return s
 }
 
 // Get the stream with stream id |id|. Returns nil if no such
@@ -1323,11 +1352,6 @@ func generateRand64() (uint64, error) {
 	}
 
 	return ret, nil
-}
-
-func (c *Connection) log(tag string, format string, args ...interface{}) {
-	fullFormat := fmt.Sprintf("Conn: %.16x:%.16x: %s", c.clientConnId, c.serverConnId, format)
-	logf(tag, fullFormat, args...)
 }
 
 // Set the handler class for a given connection.
@@ -1400,10 +1424,6 @@ func (c *Connection) handleError(e error) error {
 // if pn > ELo, then either EHi || pn  or  EHi - 1 || pn  (wrapped downward)
 // if Pn == Elo then Ei || pn
 // if Pn < Elo  then either EHi || on  or  EHi + 1 || pn  (wrapped upward)
-//   EHi - 1 || pn  if pn > ELo (
-//   EHi     || pn
-//   EHi + 1 || pn
-//
 func (c *Connection) expandPacketNumber(pn uint64, size int) uint64 {
 	if size == 8 {
 		return pn
