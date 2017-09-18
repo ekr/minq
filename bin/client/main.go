@@ -26,7 +26,7 @@ func (h *connHandler) StreamReadable(s *minq.Stream) {
 	b := make([]byte, 1024)
 
 	n, err := s.Read(b)
-	if err != nil {
+	if err != nil && err != minq.ErrorWouldBlock {
 		fmt.Println("Error reading")
 		return
 	}
