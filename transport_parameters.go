@@ -2,6 +2,7 @@ package minq
 
 import (
 	"bytes"
+	"crypto/rand"
 	"fmt"
 	"github.com/bifurcation/mint"
 	"github.com/bifurcation/mint/syntax"
@@ -20,6 +21,7 @@ const (
 	kTpIdIdleTimeout           = TransportParameterId(0x0003)
 	kTpIdOmitConnectionId      = TransportParameterId(0x0004)
 	kTpIdMaxPacketSize         = TransportParameterId(0x0005)
+	kTpIdStatelessResetToken   = TransportParameterId(0x0006)
 )
 
 type tpDef struct {
@@ -65,6 +67,14 @@ func (tp *TransportParameterList) addUintParameter(id TransportParameterId, val 
 	*tp = append(*tp, transportParameter{
 		id,
 		buf.Bytes(),
+	})
+	return nil
+}
+
+func (tp *TransportParameterList) addOpaqueParameter(id TransportParameterId, b []byte) error {
+	*tp = append(*tp, transportParameter{
+		id,
+		b,
 	})
 	return nil
 }
@@ -198,7 +208,15 @@ func (h *transportParametersHandler) createEncryptedExtensionsTransportParameter
 		return nil, err
 	}
 
-	b, err := syntax.Marshal(eetp)
+	b := make([]byte, 16)
+	_, err = rand.Read(b)
+	if err != nil {
+		return nil, err
+	}
+
+	eetp.Parameters.addOpaqueParameter(kTpIdStatelessResetToken, b)
+
+	b, err = syntax.Marshal(eetp)
 	if err != nil {
 		return nil, err
 	}
