@@ -115,3 +115,17 @@ func TestStreamInputChunk1FinChunk2(t *testing.T) {
 	assertX(t, !readable, "Stream not be readable")
 	f.readExpectError(ErrorStreamIsClosed)
 }
+
+func TestStreamFullCloseA(t *testing.T) {
+	f := newTestStreamFixture(t)
+	f.s.closeSend()
+	f.s.closeRecv()
+	assertEquals(t, kStreamStateClosed, f.s.state)
+}
+
+func TestStreamFullCloseB(t *testing.T) {
+	f := newTestStreamFixture(t)
+	f.s.closeRecv()
+	f.s.closeSend()
+	assertEquals(t, kStreamStateClosed, f.s.state)
+}
