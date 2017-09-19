@@ -39,7 +39,7 @@ func (h *connHandler) StreamReadable(s *minq.Stream) {
 func main() {
 	flag.StringVar(&infile, "infile", "input", "input file")
 	flag.StringVar(&serverName, "server-name", "", "SNI")
-	flag.BoolVar(&dehex, "hex", true, "file is in hex")
+	flag.BoolVar(&dehex, "hex", false, "file is in hex")
 	flag.Parse()
 
 	in, err := ioutil.ReadFile(infile)

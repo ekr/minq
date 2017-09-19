@@ -11,6 +11,7 @@ import (
 
 var addr string
 var serverName string
+var doHttp string
 
 type connHandler struct {
 }
@@ -26,12 +27,19 @@ func (h *connHandler) StreamReadable(s *minq.Stream) {
 	b := make([]byte, 1024)
 
 	n, err := s.Read(b)
-	if err != nil && err != minq.ErrorWouldBlock {
-		fmt.Println("Error reading")
+	switch err {
+	case nil:
+		break
+	case minq.ErrorWouldBlock:
+		return
+	case minq.ErrorStreamIsClosed, minq.ErrorConnIsClosed:
+		fmt.Println("<CLOSED>")
+		return
+	default:
+		fmt.Println("Error: ", err)
 		return
 	}
 	b = b[:n]
-
 	os.Stdout.Write(b)
 }
 
@@ -60,6 +68,7 @@ func readUDP(s *net.UDPConn) ([]byte, error) {
 func main() {
 	flag.StringVar(&addr, "addr", "localhost:4433", "[host:port]")
 	flag.StringVar(&serverName, "server-name", "", "SNI")
+	flag.StringVar(&doHttp, "http", "", "Do HTTP/0.9 with provided URL")
 	flag.Parse()
 
 	// Default to the host component of addr.
@@ -132,19 +141,25 @@ func main() {
 		}
 	}()
 
-	// Read from stdin.
-	go func() {
-		for {
-			b := make([]byte, 1024)
-			n, err := os.Stdin.Read(b)
-			if err != nil {
-				stdin <- nil
-				return
+	if doHttp == "" {
+		// Read from stdin.
+		go func() {
+			for {
+				b := make([]byte, 1024)
+				n, err := os.Stdin.Read(b)
+				if err != nil {
+					stdin <- nil
+					return
+				}
+				b = b[:n]
+				stdin <- b
 			}
-			b = b[:n]
-			stdin <- b
-		}
-	}()
+		}()
+	} else {
+		req := "GET " + doHttp + "\r\n"
+		fmt.Println(req)
+		str.Write([]byte(req))
+	}
 
 	for {
 		select {

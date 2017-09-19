@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto"
 	"crypto/x509"
 	"flag"
@@ -10,6 +11,8 @@ import (
 	"io/ioutil"
 	"net"
 	"os"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -19,7 +22,9 @@ var keyFile string
 var certFile string
 var logFile string
 var logOut *os.File
+var doHttp bool
 
+// Shared data structures.
 type conn struct {
 	conn *minq.Connection
 	last time.Time
@@ -35,33 +40,42 @@ func (c *conn) checkTimer() {
 
 var conns = make(map[minq.ConnectionId]*conn)
 
-type serverHandler struct {
+// An echo server.
+type echoServerHandler struct {
 }
 
-func (h *serverHandler) NewConnection(c *minq.Connection) {
+func (h *echoServerHandler) NewConnection(c *minq.Connection) {
 	fmt.Println("New connection")
-	c.SetHandler(&connHandler{})
+	c.SetHandler(&echoConnHandler{})
 	conns[c.Id()] = &conn{c, time.Now()}
 }
 
-type connHandler struct {
+type echoConnHandler struct {
 }
 
-func (h *connHandler) StateChanged(s minq.State) {
+func (h *echoConnHandler) StateChanged(s minq.State) {
 	fmt.Println("State changed to ", s)
 }
 
-func (h *connHandler) NewStream(s *minq.Stream) {
+func (h *echoConnHandler) NewStream(s *minq.Stream) {
 	fmt.Println("Created new stream id=", s.Id())
 }
 
-func (h *connHandler) StreamReadable(s *minq.Stream) {
+func (h *echoConnHandler) StreamReadable(s *minq.Stream) {
 	fmt.Println("Ready to read for stream id=", s.Id())
 	b := make([]byte, 1024)
 
 	n, err := s.Read(b)
-	if err != nil {
-		fmt.Println("Error reading")
+	switch err {
+	case nil:
+		break
+	case minq.ErrorWouldBlock:
+		return
+	case minq.ErrorStreamIsClosed, minq.ErrorConnIsClosed:
+		fmt.Println("<CLOSED>")
+		return
+	default:
+		fmt.Println("Error: ", err)
 		return
 	}
 	b = b[:n]
@@ -78,6 +92,114 @@ func (h *connHandler) StreamReadable(s *minq.Stream) {
 	s.Write(b)
 }
 
+// An HTTP 0.9 Handler
+type httpServerHandler struct {
+}
+
+func (h *httpServerHandler) NewConnection(c *minq.Connection) {
+	fmt.Println("New connection")
+	c.SetHandler(&httpConnHandler{make(map[uint32]*httpStream, 0)})
+	conns[c.Id()] = &conn{c, time.Now()}
+}
+
+type httpStream struct {
+	s      *minq.Stream
+	buf    []byte
+	closed bool
+}
+
+type httpConnHandler struct {
+	streams map[uint32]*httpStream
+}
+
+func (h *httpConnHandler) StateChanged(s minq.State) {
+	fmt.Println("State changed to ", s)
+}
+
+func (h *httpConnHandler) NewStream(s *minq.Stream) {
+	h.streams[s.Id()] = &httpStream{s, nil, false}
+}
+
+func (h *httpStream) Respond(val []byte) {
+	h.s.Write(val)
+	h.s.Close()
+	h.closed = true
+}
+
+func (h *httpStream) Error(err string) {
+	h.Respond([]byte(err))
+}
+
+// We expect the URL to be one of two things:
+//
+// A number, in which case we respond with that number of
+// Xs, up to 10,000
+// A non-number, in which case we respond with 10 repetitions
+// of that value.
+func (h *httpConnHandler) StreamReadable(s *minq.Stream) {
+	fmt.Println("Ready to read for stream id=", s.Id())
+	st := h.streams[s.Id()]
+	if st.closed {
+		return
+	}
+
+	b := make([]byte, 1024)
+	n, err := s.Read(b)
+	if err != nil && err != minq.ErrorWouldBlock {
+		fmt.Println("Error reading")
+		return
+	}
+	b = b[:n]
+	fmt.Printf("Read %v bytes from peer %x\n", n, b)
+
+	st.buf = append(st.buf, b...)
+
+	// See if we received a complete LF
+	str := string(st.buf)
+	idx := strings.IndexRune(str, '\n')
+	if idx == -1 {
+		return
+	}
+	str = str[:idx]
+
+	// OK, we have a complete line.
+	toks := strings.Split(str, " ")
+	if toks[0] != "GET" {
+		st.Error(fmt.Sprintf("Bogus method: %v", toks[0]))
+		return
+	}
+	if len(toks) < 2 {
+		st.Error("No resource")
+		return
+	}
+
+	val := strings.TrimSpace(toks[1])
+
+	if val[0] != '/' {
+		st.Error(fmt.Sprintf("Bad value: %v", val))
+		return
+	}
+	val = val[1:]
+
+	count, err := strconv.ParseUint(val, 10, 32)
+	var rsp []byte
+	if err == nil {
+		if count > 10000 {
+			count = 10000
+		}
+		rsp = bytes.Repeat([]byte{'X'}, int(count))
+	} else {
+		rspstr := ""
+		for i := 0; i < 10; i++ {
+			rspstr += val
+			rspstr += "--"
+		}
+		rspstr += "\n"
+		rsp = []byte(rspstr)
+	}
+	st.Respond(rsp)
+}
+
 func logFunc(format string, args ...interface{}) {
 	fmt.Fprintf(logOut, format, args...)
 	fmt.Fprintf(logOut, "\n")
@@ -90,7 +212,9 @@ func main() {
 	flag.StringVar(&keyFile, "key", "", "Key file")
 	flag.StringVar(&certFile, "cert", "", "Cert file")
 	flag.StringVar(&logFile, "log", "", "Log file")
+	flag.BoolVar(&doHttp, "http", false, "Do HTTP/0.9")
 	flag.Parse()
+
 	var key crypto.Signer
 	var certChain []*x509.Certificate
 
@@ -153,7 +277,13 @@ func main() {
 		return
 	}
 
-	server := minq.NewServer(minq.NewUdpTransportFactory(usock), config, &serverHandler{})
+	var handler minq.ServerHandler
+	if doHttp {
+		handler = &httpServerHandler{}
+	} else {
+		handler = &echoServerHandler{}
+	}
+	server := minq.NewServer(minq.NewUdpTransportFactory(usock), config, handler)
 	for {
 		b := make([]byte, 8192)
 
