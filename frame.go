@@ -109,6 +109,10 @@ type paddingFrame struct {
 	Typ frameType
 }
 
+func (f paddingFrame) String() string {
+	return "PADDING"
+}
+
 func (f paddingFrame) getType() frameType {
 	return kFrameTypePadding
 }
@@ -123,6 +127,10 @@ type rstStreamFrame struct {
 	StreamId    uint32
 	ErrorCode   uint32
 	FinalOffset uint64
+}
+
+func (f rstStreamFrame) String() string {
+	return fmt.Sprintf("RST_STREAM stream=%x errorCode=%d finalOffset=%x", f.StreamId, f.ErrorCode, f.FinalOffset)
 }
 
 func (f rstStreamFrame) getType() frameType {
@@ -143,6 +151,10 @@ type connectionCloseFrame struct {
 	ErrorCode          uint32
 	ReasonPhraseLength uint16
 	ReasonPhrase       []byte
+}
+
+func (f connectionCloseFrame) String() string {
+	return fmt.Sprintf("CONNECTION_CLOSE errorCode=%d", f.ErrorCode)
 }
 
 func (f connectionCloseFrame) getType() frameType {
@@ -170,6 +182,10 @@ type goawayFrame struct {
 	LargestServerStreamId uint32
 }
 
+func (f goawayFrame) String() string {
+	return "GO_AWAY"
+}
+
 func (f goawayFrame) getType() frameType {
 	return kFrameTypeGoaway
 }
@@ -187,6 +203,10 @@ type maxDataFrame struct {
 	MaximumData uint64
 }
 
+func (f maxDataFrame) String() string {
+	return fmt.Sprintf("MAX_DATA %d", f.MaximumData)
+}
+
 func (f maxDataFrame) getType() frameType {
 	return kFrameTypeMaxData
 }
@@ -196,6 +216,10 @@ type maxStreamDataFrame struct {
 	Type              frameType
 	StreamId          uint32
 	MaximumStreamData uint64
+}
+
+func (f maxStreamDataFrame) String() string {
+	return fmt.Sprintf("MAX_STREAM_DATA stream=%d %d", f.StreamId, f.MaximumStreamData)
 }
 
 func (f maxStreamDataFrame) getType() frameType {
@@ -208,6 +232,10 @@ type maxStreamIdFrame struct {
 	MaximumStreamId uint32
 }
 
+func (f maxStreamIdFrame) String() string {
+	return fmt.Sprintf("MAX_STREAM_ID %d", f.MaximumStreamId)
+}
+
 func (f maxStreamIdFrame) getType() frameType {
 	return kFrameTypeMaxStreamId
 }
@@ -217,6 +245,10 @@ type pingFrame struct {
 	Type frameType
 }
 
+func (f pingFrame) String() string {
+	return "PING"
+}
+
 func (f pingFrame) getType() frameType {
 	return kFrameTypePing
 }
@@ -224,6 +256,10 @@ func (f pingFrame) getType() frameType {
 // BLOCKED
 type blockedFrame struct {
 	Type frameType
+}
+
+func (f blockedFrame) String() string {
+	return "BLOCKED"
 }
 
 func (f blockedFrame) getType() frameType {
@@ -236,6 +272,10 @@ type streamBlockedFrame struct {
 	StreamId uint32
 }
 
+func (f streamBlockedFrame) String() string {
+	return "STREAM_BLOCKED"
+}
+
 func (f streamBlockedFrame) getType() frameType {
 	return kFrameTypeStreamBlocked
 }
@@ -243,6 +283,10 @@ func (f streamBlockedFrame) getType() frameType {
 // STREAM_ID_NEEDED
 type streamIdNeededFrame struct {
 	Type frameType
+}
+
+func (f streamIdNeededFrame) String() string {
+	return "STREAM_ID_NEEDED"
 }
 
 func (f streamIdNeededFrame) getType() frameType {
@@ -254,6 +298,10 @@ type newConnectionIdFrame struct {
 	Type         frameType
 	Sequence     uint16
 	ConnectionId uint64
+}
+
+func (f newConnectionIdFrame) String() string {
+	return "NEW_CONNECTION_ID"
 }
 
 func (f newConnectionIdFrame) getType() frameType {
@@ -280,6 +328,10 @@ type ackFrame struct {
 	AckBlockLength      uint64
 	AckBlockSection     []byte
 	TimestampSection    []byte
+}
+
+func (f ackFrame) String() string {
+	return fmt.Sprintf("ACK numBlocks=%d numTS=%d largestAck=%x", f.NumBlocks, f.NumTS, f.LargestAcknowledged)
 }
 
 func (f ackFrame) getType() frameType {
@@ -357,6 +409,10 @@ type streamFrame struct {
 	Offset     uint64
 	DataLength uint16
 	Data       []byte
+}
+
+func (f streamFrame) String() string {
+	return fmt.Sprintf("STREAM stream=%d offset=%x len=%d FIN=%v", f.StreamId, f.Offset, f.Data, f.hasFin())
 }
 
 func (f streamFrame) getType() frameType {

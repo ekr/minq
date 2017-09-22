@@ -2,7 +2,7 @@
 Package minq is a minimal implementation of QUIC, as documented at
 https://quicwg.github.io/. Minq partly implements draft-04.
 
-*/
+n*/
 package minq
 
 import (
@@ -78,21 +78,6 @@ type ackRange struct {
 }
 
 type ackRanges []ackRange
-
-// Internal structure indicating packets we have
-// received
-type recvdPacketsInt struct {
-	r   []bool
-	min uint64
-}
-
-type recvdPackets struct {
-	c           *Connection
-	maxReceived uint64
-	clear       recvdPacketsInt
-	all         recvdPacketsInt
-	acked2      recvdPacketsInt // Acks that have been ACKed.
-}
 
 /*
 Connection represents a QUIC connection. Clients can make
@@ -173,7 +158,7 @@ func NewConnection(trans Transport, role uint8, tls TlsConfig, handler Connectio
 	// Mint.
 	c.tls.setTransportParametersHandler(c.tpHandler)
 
-	c.recvd = newRecvdPackets(&c)
+	c.recvd = newRecvdPackets(c.log)
 	tmp, err := generateRand64()
 	if err != nil {
 		return nil
@@ -340,7 +325,7 @@ func (c *Connection) sendSpecialClearPacket(pt uint8, connId ConnectionId, pn ui
 }
 
 func (c *Connection) sendPacketRaw(pt uint8, payload []byte) error {
-	c.log(logTypeConnection, "%v: Sending packet of pt=%v len=%v", c.label(), pt, len(payload))
+	c.log(logTypeConnection, "%v: Sending packet PN=%x pt=%v len=%v", c.label(), c.nextSendPacket, pt, len(payload))
 	left := c.mtu
 
 	var connId ConnectionId
@@ -425,6 +410,8 @@ func (c *Connection) sendPacket(pt uint8, tosend []frame) error {
 		payload = append(payload, f.encoded...)
 		sent++
 	}
+
+	c.log(logTypeConnection, "Packet=%v", dumpPacket(payload))
 
 	return c.sendPacketRaw(pt, payload)
 }
@@ -558,9 +545,6 @@ func (c *Connection) sendQueued(bareAcks bool) (int, error) {
 	sent += s
 
 	// Now send other streams if we are in encrypted mode.
-	// TODO(ekr@rtfm.com): In the special case where there
-	// is no data and the ACK is a duplicate, just don't send
-	// it.
 	if c.state == StateEstablished {
 		s, err := c.sendQueuedStreams(packetType1RTTProtectedPhase0, c.streams[1:], true, bareAcks)
 		if err != nil {
@@ -608,12 +592,12 @@ func (c *Connection) sendStreamPacket(pt uint8, frames []frame, acks ackRanges) 
 
 // Send all the queued data on a set of streams with packet type |pt|
 func (c *Connection) sendQueuedStreams(pt uint8, streams []*Stream, protected bool, bareAcks bool) (int, error) {
-	c.log(logTypeConnection, "%v: sendQueuedStreams pt=%v, protected=%v, bareAcks=%v",
-		c.label(), pt, protected, bareAcks)
+	c.log(logTypeConnection, "%v: sendQueuedStreams pt=%v, protected=%v",
+		c.label(), pt, protected)
 	left := c.mtu
 	frames := make([]frame, 0)
 	sent := int(0)
-	acks := c.recvd.prepareAckRange(protected)
+	acks := c.recvd.prepareAckRange(protected, false)
 	now := time.Now()
 	txAge := time.Duration(c.retransmitTime) * time.Millisecond
 	for _, str := range streams {
@@ -654,7 +638,7 @@ func (c *Connection) sendQueuedStreams(pt uint8, streams []*Stream, protected bo
 	// Send the remainder, plus any ACKs that are left.
 	c.log(logTypeConnection, "%s: Remainder to send? sent=%v frames=%v acks=%v",
 		c.label(), sent, len(frames), len(acks))
-	if len(frames) > 0 || ((len(acks) > 0) && bareAcks) {
+	if len(frames) > 0 || (len(acks) > 0 && bareAcks) {
 		_, err := c.sendStreamPacket(pt, frames, acks)
 		if err != nil {
 			return 0, err
@@ -775,17 +759,27 @@ func (c *Connection) input(p []byte) error {
 	// We have now verified that this is a valid packet, so mark
 	// it received.
 
-	c.recvd.packetSetReceived(packetNumber, hdr.isProtected())
+	naf := true
 	switch typ {
 	case packetTypeClientInitial:
 		err = c.processClientInitial(&hdr, payload)
 	case packetTypeServerCleartext, packetTypeClientCleartext:
-		err = c.processCleartext(&hdr, payload)
+		err = c.processCleartext(&hdr, payload, &naf)
 	case packetType1RTTProtectedPhase0, packetType1RTTProtectedPhase1:
-		err = c.processUnprotected(&hdr, packetNumber, payload)
+		err = c.processUnprotected(&hdr, packetNumber, payload, &naf)
 	default:
 		c.log(logTypeConnection, "Unsupported packet type %v", typ)
 		err = internalError("Unsupported packet type %v", typ)
+	}
+	c.recvd.packetSetReceived(packetNumber, hdr.isProtected(), naf)
+
+	// TODO(ekr@rtfm.com): Check for more on stream 0, but we need to properly handle
+	// encrypted NST.
+
+	// Now flush our output buffers.
+	_, err = c.sendQueued(true)
+	if err != nil {
+		return err
 	}
 
 	return err
@@ -856,11 +850,12 @@ func (c *Connection) processClientInitial(hdr *packetHeader, payload []byte) err
 
 	c.setState(StateWaitClientSecondFlight)
 
-	_, err = c.sendQueued(true)
+	_, err = c.sendQueued(false)
 	return err
 }
 
-func (c *Connection) processCleartext(hdr *packetHeader, payload []byte) error {
+func (c *Connection) processCleartext(hdr *packetHeader, payload []byte, naf *bool) error {
+	*naf = false
 	c.log(logTypeHandshake, "Reading cleartext in state %v", c.state)
 	// TODO(ekr@rtfm.com): Need clearer state checks.
 	/*
@@ -871,7 +866,6 @@ func (c *Connection) processCleartext(hdr *packetHeader, payload []byte) error {
 			return nil
 		}*/
 
-	otherThanAck := false
 	for len(payload) > 0 {
 		c.log(logTypeConnection, "%s: payload bytes left %d", c.label(), len(payload))
 		n, f, err := decodeFrame(payload)
@@ -974,24 +968,8 @@ func (c *Connection) processCleartext(hdr *packetHeader, payload []byte) error {
 			return fatalError("Unexpected frame type: %v", f.f.getType())
 		}
 		if nonAck {
-			otherThanAck = true
+			*naf = true
 		}
-	}
-
-	// If this is just an ACK packet, set it as if it was
-	// double-acked so we don't send ACKs for it.
-	if !otherThanAck {
-		c.log(logTypeAck, "Packet just contained ACKs")
-		c.recvd.packetSetAcked2(hdr.PacketNumber)
-	}
-
-	// TODO(ekr@rtfm.com): Check for more on stream 0, but we need to properly handle
-	// encrypted NST.
-
-	// Now flush our output buffers.
-	_, err := c.sendQueued(true)
-	if err != nil {
-		return err
 	}
 
 	return nil
@@ -1035,9 +1013,10 @@ func (c *Connection) processVersionNegotiation(hdr *packetHeader, payload []byte
 	return ErrorReceivedVersionNegotiation
 }
 
-func (c *Connection) processUnprotected(hdr *packetHeader, packetNumber uint64, payload []byte) error {
+func (c *Connection) processUnprotected(hdr *packetHeader, packetNumber uint64, payload []byte, naf *bool) error {
 	c.log(logTypeHandshake, "Reading unprotected data in state %v", c.state)
-	otherThanAck := false
+	c.log(logTypeConnection, "Packet=%v", dumpPacket(payload))
+	*naf = false
 	for len(payload) > 0 {
 		c.log(logTypeConnection, "%s: payload bytes left %d", c.label(), len(payload))
 		n, f, err := decodeFrame(payload)
@@ -1091,15 +1070,8 @@ func (c *Connection) processUnprotected(hdr *packetHeader, packetNumber uint64, 
 			c.log(logTypeConnection, "Received unexpected frame type")
 		}
 		if nonAck {
-			otherThanAck = true
+			*naf = true
 		}
-	}
-
-	// If this is just an ACK packet, set it as if it was
-	// double-acked so we don't send ACKs for it.
-	if !otherThanAck {
-		c.log(logTypeAck, "Packet just contained ACKs")
-		c.recvd.packetSetAcked2(packetNumber)
 	}
 
 	return nil
@@ -1151,138 +1123,6 @@ func (c *Connection) processAckFrame(f *ackFrame) error {
 	// TODO(ekr@rtfm.com): Process the ACK timestamps.
 
 	return nil
-}
-
-func newRecvdPacketsInt() recvdPacketsInt {
-	return recvdPacketsInt{nil, 0}
-}
-
-func (p *recvdPacketsInt) initialized() bool {
-	return p.r != nil
-}
-
-func (p *recvdPacketsInt) init(min uint64) {
-	p.min = min
-	p.r = make([]bool, 10)
-}
-
-func (p *recvdPacketsInt) packetNotReceived(pn uint64) bool {
-	if pn < p.min {
-		logf(logTypeTrace, "Packet %x < min=%x", pn, p.min)
-		return false // We're not sure.
-	}
-
-	if pn >= p.min+uint64(len(p.r)) {
-		return true // We extend forward as needed.
-	}
-
-	return !p.r[pn-p.min]
-}
-
-func (p *recvdPacketsInt) packetSetReceived(pn uint64) {
-	assert(pn >= p.min)
-	logf(logTypeAck, "Setting received for pn=%v min=%v", pn, p.min)
-	if pn >= p.min+uint64(len(p.r)) {
-		grow := (pn - p.min) - uint64(len(p.r))
-		if grow < 10 {
-			grow = 10
-		}
-
-		logf(logTypeAck, "Growing received packet window by %v", grow)
-		p.r = append(p.r, make([]bool, grow)...)
-	}
-	p.r[pn-p.min] = true
-}
-
-func newRecvdPackets(c *Connection) *recvdPackets {
-	return &recvdPackets{
-		c,
-		0,
-		newRecvdPacketsInt(),
-		newRecvdPacketsInt(),
-		newRecvdPacketsInt()}
-}
-
-func (p *recvdPackets) initialized() bool {
-	return p.clear.initialized()
-}
-
-func (p *recvdPackets) init(pn uint64) {
-	p.c.log(logTypeAck, "Initializing received packet start=%v", pn)
-	p.clear.init(pn)
-	p.all.init(pn)
-	p.acked2.init(pn)
-}
-
-func (p *recvdPackets) packetNotReceived(pn uint64) bool {
-	return p.clear.packetNotReceived(pn) && p.all.packetNotReceived(pn)
-}
-
-func (p *recvdPackets) packetSetReceived(pn uint64, protected bool) {
-	if pn > p.maxReceived {
-		p.maxReceived = pn
-	}
-	p.c.log(logTypeAck, "Setting packet received=%v", pn)
-	if !protected {
-		p.clear.packetSetReceived(pn)
-	}
-	p.all.packetSetReceived(pn)
-}
-
-func (p *recvdPackets) packetSetAcked2(pn uint64) {
-	p.c.log(logTypeAck, "Setting packet acked2=%v", pn)
-	p.acked2.packetSetReceived(pn)
-}
-
-func (r *ackRange) String() string {
-	return fmt.Sprintf("%x(%d)", r.lastPacket, r.count)
-}
-
-func (r *ackRanges) String() string {
-	rsp := ""
-	for _, s := range *r {
-		if rsp != "" {
-			rsp += ", "
-		}
-		rsp += s.String()
-	}
-	return rsp
-}
-
-// Prepare a list of the ACK ranges, starting at the highest
-func (p *recvdPackets) prepareAckRange(protected bool) ackRanges {
-	var inrange = false
-	var last uint64
-	var pn uint64
-	ps := &p.all
-	if !protected {
-		ps = &p.clear
-	}
-	p.c.log(logTypeAck, "Preparing ACK range recvd=%v acked2=%v protected=%v", ps, p.acked2, protected)
-	ranges := make(ackRanges, 0)
-	for i := len(ps.r) - 1; i >= 0; i-- {
-		pn = uint64(i) + ps.min
-		needs_ack := ps.r[i] && (i >= (len(p.acked2.r)) || !p.acked2.r[i])
-		if inrange != needs_ack {
-			if inrange {
-				// This is the end of a range.
-				ranges = append(ranges, ackRange{last, last - pn})
-			} else {
-				last = pn
-			}
-			inrange = needs_ack
-		}
-	}
-	if inrange {
-		p.c.log(logTypeTrace, "EKR: appending final range")
-		ranges = append(ranges, ackRange{last, last - pn + 1})
-	}
-
-	p.c.log(logTypeAck, "%v ACK ranges to send", len(ranges))
-	for i, r := range ranges {
-		p.c.log(logTypeAck, "  %d = %v", i, r.String())
-	}
-	return ranges
 }
 
 // Check the connection's timer and process any events whose time has

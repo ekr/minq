@@ -70,7 +70,7 @@ func SetLogOutput(f func(string, ...interface{})) {
 
 func newConnectionLogger(c *Connection) loggingFunction {
 	return func(tag string, format string, args ...interface{}) {
-		fullFormat := fmt.Sprintf("Conn: %.16x:%.16x: %s", c.clientConnId, c.serverConnId, format)
+		fullFormat := fmt.Sprintf("Conn: %.16x:%.16x: %s: %s", c.clientConnId, c.serverConnId, c.label(), format)
 		logf(tag, fullFormat, args...)
 	}
 }
