@@ -53,6 +53,10 @@ const (
 	kQuicALPNToken = "hq-05"
 )
 
+const (
+	kDefaultInitialRtt = uint32(100)
+)
+
 // Interface for the handler object which the Connection will call
 // to notify of events on the connection.
 type ConnectionHandler interface {
@@ -67,11 +71,13 @@ type ConnectionHandler interface {
 	StreamReadable(s *Stream)
 }
 
-// Internal structure indicating ranges to ACK
+// Internal structures indicating ranges to ACK
 type ackRange struct {
 	lastPacket uint64
 	count      uint64
 }
+
+type ackRanges []ackRange
 
 // Internal structure indicating packets we have
 // received
@@ -123,11 +129,12 @@ type Connection struct {
 	maxStream      uint32
 	clientInitial  []byte
 	recvd          *recvdPackets
-	sentAcks       map[uint64][]ackRange
+	sentAcks       map[uint64]ackRanges
 	lastInput      time.Time
 	idleTimeout    uint16
 	tpHandler      *transportParametersHandler
 	log            loggingFunction
+	retransmitTime uint32
 }
 
 // Create a new QUIC connection. Should only be used with role=RoleClient,
@@ -152,11 +159,12 @@ func NewConnection(trans Transport, role uint8, tls TlsConfig, handler Connectio
 		0,
 		nil,
 		nil,
-		make(map[uint64][]ackRange, 0),
+		make(map[uint64]ackRanges, 0),
 		time.Now(),
 		10, // Very short idle timeout.
 		newTransportParametersHandler(role, kQuicVersion),
 		nil,
+		kDefaultInitialRtt,
 	}
 
 	c.log = newConnectionLogger(&c)
@@ -514,7 +522,7 @@ func (c *Connection) sendOnStream(streamId uint32, data []byte) error {
 	return nil
 }
 
-func (c *Connection) makeAckFrame(acks []ackRange, maxlength int) (*frame, int, error) {
+func (c *Connection) makeAckFrame(acks ackRanges, maxlength int) (*frame, int, error) {
 	maxacks := (maxlength - 16) / 5 // We are using 32-byte values for all the variable-lengths
 
 	if len(acks) > maxacks {
@@ -565,7 +573,7 @@ func (c *Connection) sendQueued(bareAcks bool) (int, error) {
 }
 
 // Send a packet of stream frames, plus whatever acks fit.
-func (c *Connection) sendStreamPacket(pt uint8, frames []frame, acks []ackRange) (int, error) {
+func (c *Connection) sendStreamPacket(pt uint8, frames []frame, acks ackRanges) (int, error) {
 	left := c.mtu
 	asent := int(0)
 	var err error
@@ -606,10 +614,19 @@ func (c *Connection) sendQueuedStreams(pt uint8, streams []*Stream, protected bo
 	frames := make([]frame, 0)
 	sent := int(0)
 	acks := c.recvd.prepareAckRange(protected)
-
+	now := time.Now()
+	txAge := time.Duration(c.retransmitTime) * time.Millisecond
 	for _, str := range streams {
-		for i, chunk := range str.send.chunks {
-			c.log(logTypeStream, "%v Sending chunk of offset=%v len %v", str.label(), chunk.offset, len(chunk.data))
+		for i, _ := range str.send.chunks {
+			chunk := &str.send.chunks[i]
+			c.log(logTypeStream, "Stream %v examining chunk of offset=%v len %v", str.label(), chunk.offset, len(chunk.data))
+			cAge := now.Sub(chunk.time)
+			if cAge < txAge {
+				c.log(logTypeStream, "Skipping chunk because sent too recently")
+				continue
+			}
+			c.log(logTypeStream, "Sending chunk, age = %v", cAge)
+			chunk.time = now
 			f := newStreamFrame(str.Id(), chunk.offset, chunk.data, chunk.last)
 			l, err := f.length()
 			if err != nil {
@@ -644,6 +661,8 @@ func (c *Connection) sendQueuedStreams(pt uint8, streams []*Stream, protected bo
 		}
 
 		sent++
+	} else if len(acks) > 0 {
+		c.log(logTypeAck, "Acks to send, but suppressing bare acks")
 	}
 
 	return sent, nil
@@ -938,7 +957,7 @@ func (c *Connection) processCleartext(hdr *packetHeader, payload []byte) error {
 			}
 
 		case *ackFrame:
-			c.log(logTypeConnection, "Received ACK, first range=%v-%v", inner.LargestAcknowledged-inner.AckBlockLength, inner.LargestAcknowledged)
+			c.log(logTypeAck, "Received ACK, first range=%x-%x", inner.LargestAcknowledged-inner.AckBlockLength, inner.LargestAcknowledged)
 
 			err = c.processAckFrame(inner)
 			if err != nil {
@@ -1092,7 +1111,7 @@ func (c *Connection) processAckFrame(f *ackFrame) error {
 
 	// Go through all the ACK blocks and process everything.
 	for {
-		c.log(logTypeAck, "%s: processing ACK range %v-%v", c.label(), start, end)
+		c.log(logTypeAck, "%s: processing ACK range %x-%x", c.label(), start, end)
 		// Unusual loop structure to avoid weirdness at 2^64-1
 		pn := start
 		for {
@@ -1215,8 +1234,23 @@ func (p *recvdPackets) packetSetAcked2(pn uint64) {
 	p.acked2.packetSetReceived(pn)
 }
 
+func (r *ackRange) String() string {
+	return fmt.Sprintf("%x(%d)", r.lastPacket, r.count)
+}
+
+func (r *ackRanges) String() string {
+	rsp := ""
+	for _, s := range *r {
+		if rsp != "" {
+			rsp += ", "
+		}
+		rsp += s.String()
+	}
+	return rsp
+}
+
 // Prepare a list of the ACK ranges, starting at the highest
-func (p *recvdPackets) prepareAckRange(protected bool) []ackRange {
+func (p *recvdPackets) prepareAckRange(protected bool) ackRanges {
 	var inrange = false
 	var last uint64
 	var pn uint64
@@ -1225,7 +1259,7 @@ func (p *recvdPackets) prepareAckRange(protected bool) []ackRange {
 		ps = &p.clear
 	}
 	p.c.log(logTypeAck, "Preparing ACK range recvd=%v acked2=%v protected=%v", ps, p.acked2, protected)
-	ranges := make([]ackRange, 0)
+	ranges := make(ackRanges, 0)
 	for i := len(ps.r) - 1; i >= 0; i-- {
 		pn = uint64(i) + ps.min
 		needs_ack := ps.r[i] && (i >= (len(p.acked2.r)) || !p.acked2.r[i])
@@ -1245,7 +1279,9 @@ func (p *recvdPackets) prepareAckRange(protected bool) []ackRange {
 	}
 
 	p.c.log(logTypeAck, "%v ACK ranges to send", len(ranges))
-	p.c.log(logTypeAck, "ACK ranges = %v", ranges)
+	for i, r := range ranges {
+		p.c.log(logTypeAck, "  %d = %v", i, r.String())
+	}
 	return ranges
 }
 

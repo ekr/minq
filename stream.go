@@ -3,6 +3,7 @@ package minq
 import (
 	"encoding/hex"
 	"fmt"
+	"time"
 )
 
 type streamChunk struct {
@@ -10,6 +11,7 @@ type streamChunk struct {
 	last   bool
 	data   []byte
 	pns    []uint64 // The packet numbers where we sent this.
+	time   time.Time
 }
 
 type streamState byte
@@ -60,9 +62,9 @@ func (h *streamHalf) label() string {
 // is the last one, either because we have lost one chunk or because
 // we are writing.
 func (h *streamHalf) insertSortedChunk(offset uint64, last bool, payload []byte) {
-	h.log(logTypeStream, "%s stream %v with offset=%v, length=%v (current offset=%v) last=%v", h.label(), h.s.id, offset, len(payload), h.offset, last)
+	h.log(logTypeStream, "chunk insert %s stream %v with offset=%v, length=%v (current offset=%v) last=%v", h.label(), h.s.id, offset, len(payload), h.offset, last)
 	h.log(logTypeTrace, "Stream payload %v", hex.EncodeToString(payload))
-	c := streamChunk{offset, last, dup(payload), nil}
+	c := streamChunk{offset, last, dup(payload), nil, time.Unix(0, 0)}
 
 	var i int
 	for i = 0; i < len(h.chunks); i++ {
@@ -145,11 +147,12 @@ func (s *stream) setReadOffset(offset uint64) {
 }
 
 func (s *stream) removeAckedChunks(pn uint64) {
-	s.log(logTypeStream, "Removing ACKed chunks for stream %v, PN=%v, currently %v chunks", s.id, pn, len(s.send.chunks))
+	s.log(logTypeStream, "Removing ACKed chunks for stream %v, PN=%x, currently %v chunks", s.id, pn, len(s.send.chunks))
 
 	for i := int(0); i < len(s.send.chunks); {
 		remove := false
 		ch := s.send.chunks[i]
+		s.log(logTypeStream, "Examining chunk offset=%v, length=%v pns=%x", ch.offset, len(ch.data), ch.pns)
 		for _, p := range ch.pns {
 			if pn == p {
 				remove = true

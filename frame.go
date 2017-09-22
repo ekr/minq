@@ -313,7 +313,7 @@ func (f ackFrame) TimestampSection__length() uintptr {
 	return uintptr(f.NumTS * 5)
 }
 
-func newAckFrame(rs []ackRange) (*frame, error) {
+func newAckFrame(rs ackRanges) (*frame, error) {
 	logf(logTypeFrame, "Making ACK frame %v", rs)
 
 	var f ackFrame
