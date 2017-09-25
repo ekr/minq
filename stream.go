@@ -192,13 +192,6 @@ func (s *stream) setState(state streamState) *stream {
 	return s
 }
 
-func (s *stream) openMaybe() *stream {
-	if s.state == kStreamStateIdle {
-		s.setState(kStreamStateOpen)
-	}
-	return s
-}
-
 func newStreamInt(id uint32, state streamState, log loggingFunction) stream {
 	s := stream{
 		state: state,

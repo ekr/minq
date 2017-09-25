@@ -175,7 +175,10 @@ func NewConnection(trans Transport, role uint8, tls TlsConfig, handler Connectio
 		return nil
 	}
 	c.nextSendPacket = tmp & 0x7fffffff
-	c.ensureStream(0).openMaybe()
+	s, newframe := c.ensureStream(0)
+	if newframe {
+		s.setState(kStreamStateOpen)
+	}
 	return &c
 }
 
@@ -230,12 +233,12 @@ func stateName(state State) string {
 	}
 }
 
-func (c *Connection) ensureStream(id uint32) *Stream {
+func (c *Connection) ensureStream(id uint32) (*Stream, bool) {
 	c.log(logTypeTrace, "Ensuring stream %d exists", id)
 	// TODO(ekr@rtfm.com): this is not really done, because we never clean up
 	// Resize to fit.
 	if uint32(len(c.streams)) >= id+1 {
-		return c.streams[id]
+		return c.streams[id], false
 	}
 	needed := id - uint32(len(c.streams)) + 1
 	c.log(logTypeTrace, "Needed=%d", needed)
@@ -249,7 +252,16 @@ func (c *Connection) ensureStream(id uint32) *Stream {
 		}
 
 		if (i & 1) == (id & 1) {
-			c.streams[i] = newStream(c, i, kStreamStateIdle)
+			s := newStream(c, i, kStreamStateIdle)
+			c.streams[i] = s
+			if id != i {
+				// Any lower-numbered streams start in open, so set the
+				// state and notify.
+				s.setState(kStreamStateOpen)
+				if c.handler != nil {
+					c.handler.NewStream(s)
+				}
+			}
 		}
 
 		if i == 0 {
@@ -261,7 +273,7 @@ func (c *Connection) ensureStream(id uint32) *Stream {
 		c.maxStream = id
 	}
 
-	return c.streams[id]
+	return c.streams[id], true
 }
 
 func (c *Connection) sendClientInitial() error {
@@ -498,8 +510,10 @@ func (c *Connection) sendFramesInPacket(pt uint8, tosend []frame) error {
 
 func (c *Connection) sendOnStream(streamId uint32, data []byte) error {
 	c.log(logTypeConnection, "%v: sending %v bytes on stream %v", c.label(), len(data), streamId)
-	stream := c.ensureStream(streamId)
-	stream.openMaybe()
+	stream, newStream := c.ensureStream(streamId)
+	if newStream {
+		stream.setState(kStreamStateOpen)
+	}
 
 	for len(data) > 0 {
 		tocpy := 1024
@@ -888,12 +902,6 @@ func (c *Connection) processCleartext(hdr *packetHeader, payload []byte, naf *bo
 		switch inner := f.f.(type) {
 		case *paddingFrame:
 			// Skip.
-		case *rstStreamFrame:
-			// TODO(ekr@rtfm.com): Don't let the other side initiate
-			// streams that are the wrong parity.
-			c.log(logTypeStream, "Received RST_STREAM on stream %v", inner.StreamId)
-			s := c.ensureStream(inner.StreamId)
-			s.closeRecv()
 
 		case *streamFrame:
 			// If this is duplicate data and if so early abort.
@@ -1043,25 +1051,18 @@ func (c *Connection) processUnprotected(hdr *packetHeader, packetNumber uint64, 
 			// TODO(ekr@rtfm.com): Don't let the other side initiate
 			// streams that are the wrong parity.
 			c.log(logTypeStream, "Received RST_STREAM on stream %v", inner.StreamId)
-			s := c.ensureStream(inner.StreamId)
+			s, notifyCreated := c.ensureStream(inner.StreamId)
 			s.closeRecv()
-
+			if notifyCreated && c.handler != nil {
+				c.handler.NewStream(s)
+			}
 		case *streamFrame:
 			c.log(logTypeConnection, "Received data on stream %v len=%v", inner.StreamId, len(inner.Data))
 			c.log(logTypeTrace, "Received on stream %v %x", inner.StreamId, inner.Data)
-			// TODO(ekr@rtfm.com): Report error on empty non-FIN frame
-			notifyCreated := false
-			s := c.GetStream(inner.StreamId)
-			c.log(logTypeTrace, "EKR")
-			if s == nil {
-				notifyCreated = true
-			}
-			s = c.ensureStream(inner.StreamId)
-			c.log(logTypeTrace, "EKR2")
-			s.openMaybe()
-			c.log(logTypeTrace, "EKR")
+			s, notifyCreated := c.ensureStream(inner.StreamId)
 			if notifyCreated && c.handler != nil {
 				c.log(logTypeTrace, "Notifying of stream creation")
+				s.setState(kStreamStateOpen)
 				c.handler.NewStream(s)
 			}
 			if s.newFrameData(inner.Offset, inner.hasFin(), inner.Data) && c.handler != nil {
@@ -1209,8 +1210,8 @@ func (c *Connection) CreateStream() *Stream {
 		}
 	}
 
-	s := c.ensureStream(nextStream)
-	s.openMaybe()
+	s, _ := c.ensureStream(nextStream)
+	s.setState(kStreamStateOpen)
 	return s
 }
 
