@@ -1056,6 +1056,32 @@ func (c *Connection) processUnprotected(hdr *packetHeader, packetNumber uint64, 
 			if notifyCreated && c.handler != nil {
 				c.handler.NewStream(s)
 			}
+		case *connectionCloseFrame:
+			c.setState(StateClosed)
+
+		case *maxStreamDataFrame:
+			s, notifyCreated := c.ensureStream(inner.StreamId)
+			if notifyCreated && c.handler != nil {
+				s.setState(kStreamStateOpen)
+				c.handler.NewStream(s)
+			}
+
+		case *ackFrame:
+			c.log(logTypeConnection, "Received ACK, first range=%v-%v", inner.LargestAcknowledged-inner.AckBlockLength, inner.LargestAcknowledged)
+
+			err = c.processAckFrame(inner)
+			if err != nil {
+				return err
+			}
+			nonAck = false
+
+		case *streamBlockedFrame:
+			s, notifyCreated := c.ensureStream(inner.StreamId)
+			if notifyCreated && c.handler != nil {
+				s.setState(kStreamStateOpen)
+				c.handler.NewStream(s)
+			}
+
 		case *streamFrame:
 			c.log(logTypeConnection, "Received data on stream %v len=%v", inner.StreamId, len(inner.Data))
 			c.log(logTypeTrace, "Received on stream %v %x", inner.StreamId, inner.Data)
@@ -1068,17 +1094,7 @@ func (c *Connection) processUnprotected(hdr *packetHeader, packetNumber uint64, 
 			if s.newFrameData(inner.Offset, inner.hasFin(), inner.Data) && c.handler != nil {
 				c.handler.StreamReadable(s)
 			}
-		case *ackFrame:
-			c.log(logTypeConnection, "Received ACK, first range=%v-%v", inner.LargestAcknowledged-inner.AckBlockLength, inner.LargestAcknowledged)
 
-			err = c.processAckFrame(inner)
-			if err != nil {
-				return err
-			}
-			nonAck = false
-		case *connectionCloseFrame:
-			c.log(logTypeConnection, "Received close frame")
-			c.setState(StateClosed)
 		default:
 			c.log(logTypeConnection, "Received unexpected frame type")
 		}
