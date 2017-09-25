@@ -3,6 +3,7 @@ package minq
 import (
 	"bytes"
 	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"github.com/bifurcation/mint"
 	"github.com/bifurcation/mint/syntax"
@@ -39,11 +40,18 @@ var (
 	}
 )
 
+type transportParameters struct {
+	maxStreamsData uint32
+	maxData        uint32
+	maxStreamId    uint32
+	idleTimeout    uint16
+}
+
 type TransportParameterList []transportParameter
 
 type transportParameter struct {
-	parameter TransportParameterId
-	value     []byte `tls:"head=2"`
+	Parameter TransportParameterId
+	Value     []byte `tls:"head=2"`
 }
 
 type clientHelloTransportParameters struct {
@@ -58,7 +66,7 @@ type encryptedExtensionsTransportParameters struct {
 }
 
 type newSessionTicketTransportParameters struct {
-	Parameters []transportParameter `tls:"head=2"`
+	Parameters TransportParameterList `tls:"head=2"`
 }
 
 func (tp *TransportParameterList) addUintParameter(id TransportParameterId, val uint32, size uintptr) error {
@@ -69,6 +77,36 @@ func (tp *TransportParameterList) addUintParameter(id TransportParameterId, val 
 		buf.Bytes(),
 	})
 	return nil
+}
+
+func (tp *TransportParameterList) getParameter(id TransportParameterId) []byte {
+	for _, ex := range *tp {
+		if ex.Parameter == id {
+			return ex.Value
+		}
+	}
+	return nil
+}
+
+func (tp *TransportParameterList) getUintParameter(id TransportParameterId, size uintptr) (uint32, error) {
+	assert(size <= 4)
+
+	b := tp.getParameter(id)
+	if b == nil {
+		return 0, ErrorMissingValue
+	}
+
+	if len(b) != int(size) {
+		return 0, ErrorInvalidEncoding
+	}
+
+	buf := bytes.NewReader(b)
+	tmp, err := uintDecodeInt(buf, size)
+	if err != nil {
+		return 0, err
+	}
+
+	return uint32(tmp), nil
 }
 
 func (tp *TransportParameterList) addOpaqueParameter(id TransportParameterId, b []byte) error {
@@ -103,19 +141,20 @@ func (t transportParametersXtnBody) Marshal() ([]byte, error) {
 	return t.body, nil
 }
 
-func (t transportParametersXtnBody) Unmarshal(data []byte) (int, error) {
+func (t *transportParametersXtnBody) Unmarshal(data []byte) (int, error) {
 	t.body = data
 	return len(t.body), nil
 }
 
 type transportParametersHandler struct {
-	role     uint8
-	version  VersionNumber
-	peerBody *transportParametersXtnBody
+	log        loggingFunction
+	role       uint8
+	version    VersionNumber
+	peerParams *transportParameters
 }
 
-func newTransportParametersHandler(role uint8, version VersionNumber) *transportParametersHandler {
-	return &transportParametersHandler{role, version, nil}
+func newTransportParametersHandler(log loggingFunction, role uint8, version VersionNumber) *transportParametersHandler {
+	return &transportParametersHandler{log, role, version, nil}
 }
 
 func (h *transportParametersHandler) Send(hs mint.HandshakeType, el *mint.ExtensionList) error {
@@ -128,11 +167,12 @@ func (h *transportParametersHandler) Send(hs mint.HandshakeType, el *mint.Extens
 		if err != nil {
 			return err
 		}
-		el.Add(transportParametersXtnBody{b})
+		h.log(logTypeTrace, "ClientHelloTransportParameters=%s", hex.EncodeToString(b))
+		el.Add(&transportParametersXtnBody{b})
 		return nil
 	}
 
-	if h.peerBody == nil {
+	if h.peerParams == nil {
 		return nil
 	}
 
@@ -145,33 +185,97 @@ func (h *transportParametersHandler) Send(hs mint.HandshakeType, el *mint.Extens
 	if err != nil {
 		return err
 	}
-	el.Add(transportParametersXtnBody{b})
+	el.Add(&transportParametersXtnBody{b})
 	return nil
 }
 
 func (h *transportParametersHandler) Receive(hs mint.HandshakeType, el *mint.ExtensionList) error {
-	logf(logTypeHandshake, "Received transport parameters")
+	logf(logTypeHandshake, "TransportParametersHandler message=%d", hs)
 	// First see if the other side sent the extension.
 	var body transportParametersXtnBody
 	ok := el.Find(&body)
 
-	// TODO(ekr@rtfm.com): In future, require this.
-	if !ok {
-		return nil
-	}
-
-	h.peerBody = &body
+	h.log(logTypeTrace, "Retrieved transport parameters len=%d %v", len(body.body), hex.EncodeToString(body.body))
+	var params *TransportParameterList
 
 	if h.role == RoleClient {
-		if hs != mint.HandshakeTypeEncryptedExtensions && hs != mint.HandshakeTypeNewSessionTicket {
-			return fmt.Errorf("Received quic_transport_parameters in inappropriate message %v", hs)
+		if hs == mint.HandshakeTypeEncryptedExtensions {
+			if !ok {
+				h.log(logTypeHandshake, "Missing transport parameters")
+				return fmt.Errorf("Missing transport parameters")
+			}
+			var eeParams encryptedExtensionsTransportParameters
+			_, err := syntax.Unmarshal(body.body, &eeParams)
+			if err != nil {
+				return err
+			}
+			params = &eeParams.Parameters
+			// TODO(ekr@rtfm.com): Process version #s
+		} else if hs == mint.HandshakeTypeNewSessionTicket {
+			if !ok {
+				h.log(logTypeHandshake, "Missing transport parameters")
+				return fmt.Errorf("Missing transport parameters")
+			}
+			var nstParams newSessionTicketTransportParameters
+			_, err := syntax.Unmarshal(body.body, &nstParams)
+			if err != nil {
+				return err
+			}
+			params = &nstParams.Parameters
+		} else {
+			if ok {
+				return fmt.Errorf("Received quic_transport_parameters in inappropriate message %v", hs)
+			}
+			return nil
 		}
 	} else {
-		if hs != mint.HandshakeTypeClientHello {
-			return fmt.Errorf("Received quic_transport_parameters in inappropriate message %v", hs)
+		if hs == mint.HandshakeTypeClientHello {
+			if !ok {
+				h.log(logTypeHandshake, "Missing transport parameters")
+				return fmt.Errorf("Missing transport parameters")
+			}
+
+			// TODO(ekr@rtfm.com): Process version #s
+			var chParams clientHelloTransportParameters
+			_, err := syntax.Unmarshal(body.body, &chParams)
+			if err != nil {
+				h.log(logTypeHandshake, "Couldn't unmarshal %v", err)
+				return err
+			}
+			params = &chParams.Parameters
+		} else {
+			if ok {
+				return fmt.Errorf("Received quic_transport_parameters in inappropriate message %v", hs)
+			}
+			return nil
 		}
 	}
-	// TODO(ekr@rtfm.com): Actually do something with the extension
+
+	// Now try to process each param.
+	// TODO(ekr@rtfm.com): Enforce that each param appears only once.
+	var tp transportParameters
+	var err error
+	h.log(logTypeHandshake, "Reading transport parameters values")
+	tp.maxStreamsData, err = params.getUintParameter(kTpIdInitialMaxStreamsData, 4)
+	if err != nil {
+		return err
+	}
+	tp.maxData, err = params.getUintParameter(kTpIdInitialMaxData, 4)
+	if err != nil {
+		return err
+	}
+	tp.maxStreamId, err = params.getUintParameter(kTpIdInitialMaxStreamId, 4)
+	if err != nil {
+		return err
+	}
+	var tmp uint32
+	tmp, err = params.getUintParameter(kTpIdIdleTimeout, 2)
+	if err != nil {
+		return err
+	}
+	tp.idleTimeout = uint16(tmp)
+
+	h.peerParams = &tp
 
 	return nil
 }

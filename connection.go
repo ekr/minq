@@ -147,7 +147,7 @@ func NewConnection(trans Transport, role uint8, tls TlsConfig, handler Connectio
 		make(map[uint64]ackRanges, 0),
 		time.Now(),
 		10, // Very short idle timeout.
-		newTransportParametersHandler(role, kQuicVersion),
+		nil,
 		nil,
 		kDefaultInitialRtt,
 	}
@@ -156,6 +156,7 @@ func NewConnection(trans Transport, role uint8, tls TlsConfig, handler Connectio
 
 	// TODO(ekr@rtfm.com): This isn't generic, but rather tied to
 	// Mint.
+	c.tpHandler = newTransportParametersHandler(c.log, role, kQuicVersion)
 	c.tls.setTransportParametersHandler(c.tpHandler)
 
 	c.recvd = newRecvdPackets(c.log)
