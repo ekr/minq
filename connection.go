@@ -231,9 +231,14 @@ func stateName(state State) string {
 }
 
 func (c *Connection) ensureStream(id uint32) *Stream {
+	c.log(logTypeTrace, "Ensuring stream %d exists", id)
 	// TODO(ekr@rtfm.com): this is not really done, because we never clean up
 	// Resize to fit.
+	if uint32(len(c.streams)) >= id+1 {
+		return c.streams[id]
+	}
 	needed := id - uint32(len(c.streams)) + 1
+	c.log(logTypeTrace, "Needed=%d", needed)
 	c.streams = append(c.streams, make([]*Stream, needed)...)
 	// Now make all the streams in the same direction
 	i := id
@@ -601,6 +606,9 @@ func (c *Connection) sendQueuedStreams(pt uint8, streams []*Stream, protected bo
 	now := time.Now()
 	txAge := time.Duration(c.retransmitTime) * time.Millisecond
 	for _, str := range streams {
+		if str == nil {
+			continue
+		}
 		for i, _ := range str.send.chunks {
 			chunk := &str.send.chunks[i]
 			c.log(logTypeStream, "Stream %v examining chunk of offset=%v len %v", str.label(), chunk.offset, len(chunk.data))
@@ -1044,12 +1052,16 @@ func (c *Connection) processUnprotected(hdr *packetHeader, packetNumber uint64, 
 			// TODO(ekr@rtfm.com): Report error on empty non-FIN frame
 			notifyCreated := false
 			s := c.GetStream(inner.StreamId)
+			c.log(logTypeTrace, "EKR")
 			if s == nil {
 				notifyCreated = true
 			}
 			s = c.ensureStream(inner.StreamId)
+			c.log(logTypeTrace, "EKR2")
 			s.openMaybe()
+			c.log(logTypeTrace, "EKR")
 			if notifyCreated && c.handler != nil {
+				c.log(logTypeTrace, "Notifying of stream creation")
 				c.handler.NewStream(s)
 			}
 			if s.newFrameData(inner.Offset, inner.hasFin(), inner.Data) && c.handler != nil {
@@ -1092,11 +1104,12 @@ func (c *Connection) processAckFrame(f *ackFrame) error {
 			c.log(logTypeConnection, "%s: processing ACK for PN=%x", c.label(), pn)
 
 			// 1. Go through each stream and remove the chunks. This is not
-			//    efficient but fine for now. Note, use of array index
-			//    rather than the iterator because we want to modify
-			//    the stream.
-			for i, _ := range c.streams {
-				c.streams[i].removeAckedChunks(pn)
+			//    efficient but fine for now.
+			for _, str := range c.streams {
+				if str == nil {
+					continue
+				}
+				str.removeAckedChunks(pn)
 			}
 
 			// 2. Mark all the packets that were ACKed in this packet as double-acked.

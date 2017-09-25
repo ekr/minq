@@ -12,6 +12,7 @@ import (
 var addr string
 var serverName string
 var doHttp string
+var httpCount int
 
 type connHandler struct {
 }
@@ -69,6 +70,7 @@ func main() {
 	flag.StringVar(&addr, "addr", "localhost:4433", "[host:port]")
 	flag.StringVar(&serverName, "server-name", "", "SNI")
 	flag.StringVar(&doHttp, "http", "", "Do HTTP/0.9 with provided URL")
+	flag.IntVar(&httpCount, "httpCount", 1, "Number of parallel HTTP requests to start")
 	flag.Parse()
 
 	// Default to the host component of addr.
@@ -121,7 +123,11 @@ func main() {
 
 	fmt.Println("Connection established")
 
-	str := conn.CreateStream()
+	// Make all the streams we need
+	streams := make([]*minq.Stream, httpCount)
+	for i := 0; i < httpCount; i++ {
+		streams[i] = conn.CreateStream()
+	}
 
 	udpin := make(chan []byte)
 	stdin := make(chan []byte)
@@ -157,8 +163,9 @@ func main() {
 		}()
 	} else {
 		req := "GET " + doHttp + "\r\n"
-		fmt.Println(req)
-		str.Write([]byte(req))
+		for _, str := range streams {
+			str.Write([]byte(req))
+		}
 	}
 
 	for {
@@ -178,7 +185,7 @@ func main() {
 				conn.Close()
 				return
 			}
-			str.Write(i)
+			streams[0].Write(i)
 			if err != nil {
 				fmt.Println("Error", err)
 				return

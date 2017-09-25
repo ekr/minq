@@ -123,6 +123,7 @@ func (s *stream) readAll() []byte {
 
 // Add data to a stream. Return true if this is readable now.
 func (s *stream) newFrameData(offset uint64, last bool, payload []byte) bool {
+	s.log(logTypeStream, "New data on stream %d, offset=%d, len=%d", s.id, offset, len(payload))
 	if s.recv.closed {
 		return false
 	}
