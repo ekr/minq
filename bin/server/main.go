@@ -203,7 +203,6 @@ func (h *httpConnHandler) StreamReadable(s *minq.Stream) {
 func logFunc(format string, args ...interface{}) {
 	fmt.Fprintf(logOut, format, args...)
 	fmt.Fprintf(logOut, "\n")
-	logOut.Sync()
 }
 
 func main() {

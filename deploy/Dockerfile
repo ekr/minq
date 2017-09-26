@@ -12,7 +12,7 @@ RUN (cd /go/src/github.com/ekr/minq/deploy/logserver; npm install)
 
 ARG SERVERNAME=localhost
 ENV SNAME=$SERVERNAME
-ENV MINQ_LOG='connection,handshake,tls,stream,ack'
+ENV MINQ_LOG='connection,handshake,stream'
 ENTRYPOINT ["/bin/sh","/go/src/github.com/ekr/minq/deploy/run-looped.sh"]
 CMD [$SNAME]
 
