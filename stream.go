@@ -213,18 +213,26 @@ func newStream(c *Connection, id uint32, state streamState) *Stream {
 
 // Write bytes to a stream. This function always succeeds, though the
 // bytes may end up being buffered.
-func (s *Stream) Write(b []byte) (int, error) {
+func (s *Stream) Write(data []byte) (int, error) {
 	if s.c.isClosed() {
 		return 0, ErrorConnIsClosed
 	}
 
-	err := s.queue(b)
-	if err != nil {
-		return 0, err
+	for len(data) > 0 {
+		tocpy := 1024
+		if tocpy > len(data) {
+			tocpy = len(data)
+		}
+		err := s.queue(data[:tocpy])
+		if err != nil {
+			return 0, err
+		}
+
+		data = data[tocpy:]
 	}
 
 	s.c.sendQueued(false)
-	return len(b), nil
+	return len(data), nil
 }
 
 func (s *stream) closeRecv() {

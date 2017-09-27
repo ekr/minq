@@ -412,7 +412,7 @@ type streamFrame struct {
 }
 
 func (f streamFrame) String() string {
-	return fmt.Sprintf("STREAM stream=%d offset=%x len=%d FIN=%v", f.StreamId, f.Offset, f.Data, f.hasFin())
+	return fmt.Sprintf("STREAM stream=%d offset=%x len=%d FIN=%v", f.StreamId, f.Offset, len(f.Data), f.hasFin())
 }
 
 func (f streamFrame) getType() frameType {

@@ -392,6 +392,10 @@ func (c *Connection) sendPacketRaw(pt uint8, payload []byte) error {
 	}
 	left -= len(hdr)
 
+	if left < len(payload) {
+		fmt.Printf("EKR: payload too big %d\n", len(payload))
+	}
+
 	assert(left >= len(payload))
 
 	p.payload = payload
@@ -516,17 +520,8 @@ func (c *Connection) sendOnStream(streamId uint32, data []byte) error {
 		stream.setState(kStreamStateOpen)
 	}
 
-	for len(data) > 0 {
-		tocpy := 1024
-		if tocpy > len(data) {
-			tocpy = len(data)
-		}
-		stream.queue(data[:tocpy])
-
-		data = data[tocpy:]
-	}
-
-	return nil
+	_, err := stream.Write(data)
+	return err
 }
 
 func (c *Connection) makeAckFrame(acks ackRanges, maxlength int) (*frame, int, error) {
