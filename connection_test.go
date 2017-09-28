@@ -305,6 +305,68 @@ func TestSendReceiveData(t *testing.T) {
 	assertEquals(t, pair.server.GetState(), StateClosed)
 }
 
+type testReceiveHandler struct {
+	t    *testing.T
+	buf  []byte
+	done bool
+}
+
+func newTestReceiveHandler(t *testing.T) *testReceiveHandler {
+	return &testReceiveHandler{t: t}
+}
+
+func (h *testReceiveHandler) StateChanged(s State) {
+}
+
+func (h *testReceiveHandler) NewStream(s *Stream) {
+}
+
+func (h *testReceiveHandler) StreamReadable(s *Stream) {
+	b := make([]byte, 1024)
+
+	n, err := s.Read(b)
+	switch err {
+	case nil:
+		break
+	case ErrorWouldBlock:
+		return
+	case ErrorStreamIsClosed, ErrorConnIsClosed:
+		h.done = true
+		return
+	default:
+		assertX(h.t, false, "Unknown error")
+		return
+	}
+	b = b[:n]
+	h.buf = append(h.buf, b...)
+}
+
+func TestSendReceiveBigData(t *testing.T) {
+	pair := newCsPair(t)
+	pair.handshake(t)
+	buf := make([]byte, 100000)
+
+	for i, _ := range buf {
+		buf[i] = byte(i & 0xff)
+	}
+
+	handler := newTestReceiveHandler(t)
+	pair.server.SetHandler(handler)
+
+	// Write data C->S
+	cs := pair.client.CreateStream()
+	cs.Write(buf)
+	cs.Close()
+
+	// Now read all the data
+	for !handler.done {
+		inputAll(pair.server)
+	}
+
+	// Now check it.
+	assertByteEquals(t, buf, handler.buf)
+}
+
 func TestSendReceiveRetransmit(t *testing.T) {
 	testString := []byte("abcdef")
 	pair := newCsPair(t)
