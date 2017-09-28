@@ -2,7 +2,7 @@
 Package minq is a minimal implementation of QUIC, as documented at
 https://quicwg.github.io/. Minq partly implements draft-04.
 
-n*/
+*/
 package minq
 
 import (
@@ -96,30 +96,32 @@ The application provides a handler object which the Connection
 calls to notify it of various events.
 */
 type Connection struct {
-	handler        ConnectionHandler
-	role           uint8
-	state          State
-	version        VersionNumber
-	clientConnId   ConnectionId
-	serverConnId   ConnectionId
-	transport      Transport
-	tls            *tlsConn
-	writeClear     cipher.AEAD
-	readClear      cipher.AEAD
-	writeProtected *cryptoState
-	readProtected  *cryptoState
-	nextSendPacket uint64
-	mtu            int
-	streams        []*Stream
-	maxStream      uint32
-	clientInitial  []byte
-	recvd          *recvdPackets
-	sentAcks       map[uint64]ackRanges
-	lastInput      time.Time
-	idleTimeout    uint16
-	tpHandler      *transportParametersHandler
-	log            loggingFunction
-	retransmitTime uint32
+	handler          ConnectionHandler
+	role             uint8
+	state            State
+	version          VersionNumber
+	clientConnId     ConnectionId
+	serverConnId     ConnectionId
+	transport        Transport
+	tls              *tlsConn
+	writeClear       cipher.AEAD
+	readClear        cipher.AEAD
+	writeProtected   *cryptoState
+	readProtected    *cryptoState
+	nextSendPacket   uint64
+	mtu              int
+	streams          []*Stream
+	maxStream        uint32
+	outputClearQ     []frame // For stream 0
+	outputProtectedQ []frame // For stream >= 0
+	clientInitial    []byte
+	recvd            *recvdPackets
+	sentAcks         map[uint64]ackRanges
+	lastInput        time.Time
+	idleTimeout      uint16
+	tpHandler        *transportParametersHandler
+	log              loggingFunction
+	retransmitTime   uint32
 }
 
 // Create a new QUIC connection. Should only be used with role=RoleClient,
@@ -142,6 +144,8 @@ func NewConnection(trans Transport, role uint8, tls TlsConfig, handler Connectio
 		kInitialMTU,
 		nil,
 		0,
+		nil,
+		nil,
 		nil,
 		nil,
 		make(map[uint64]ackRanges, 0),
@@ -247,13 +251,21 @@ func (c *Connection) ensureStream(id uint32) (*Stream, bool) {
 	// Now make all the streams in the same direction
 	i := id
 
+	var initialMax uint64
+	if c.tpHandler.peerParams != nil {
+		initialMax = uint64(c.tpHandler.peerParams.maxStreamsData)
+	} else {
+		assert(id == 0)
+		initialMax = 1280
+	}
+
 	for {
 		if c.streams[i] != nil {
 			break
 		}
 
 		if (i & 1) == (id & 1) {
-			s := newStream(c, i, kStreamStateIdle)
+			s := newStream(c, i, initialMax, kStreamStateIdle)
 			c.streams[i] = s
 			if id != i {
 				// Any lower-numbered streams start in open, so set the
@@ -343,7 +355,7 @@ func (c *Connection) sendSpecialClearPacket(pt uint8, connId ConnectionId, pn ui
 }
 
 func (c *Connection) sendPacketRaw(pt uint8, payload []byte) error {
-	c.log(logTypeConnection, "%v: Sending packet PN=%x pt=%v len=%v", c.label(), c.nextSendPacket, pt, len(payload))
+	c.log(logTypeConnection, "Sending packet PT=%v PN=%x: %s", pt, c.nextSendPacket, dumpPacket(payload))
 	left := c.mtu
 
 	var connId ConnectionId
@@ -392,10 +404,6 @@ func (c *Connection) sendPacketRaw(pt uint8, payload []byte) error {
 	}
 	left -= len(hdr)
 
-	if left < len(payload) {
-		fmt.Printf("EKR: payload too big %d\n", len(payload))
-	}
-
 	assert(left >= len(payload))
 
 	p.payload = payload
@@ -416,24 +424,29 @@ func (c *Connection) sendPacketNow(tosend []frame) error {
 
 // Send a packet with a specific PT.
 func (c *Connection) sendPacket(pt uint8, tosend []frame) error {
-	c.log(logTypeConnection, "%s: Sending packet of type %v. %v frames", c.label(), pt, len(tosend))
-	c.log(logTypeTrace, "Sending packet of type %v. %v frames", pt, len(tosend))
 	sent := 0
 
 	payload := make([]byte, 0)
 
 	for _, f := range tosend {
+		c.log(logTypeConnection, "Packet =%v %d", f, f.f.getType())
 		_, err := f.length()
 		if err != nil {
 			return err
 		}
 
 		c.log(logTypeTrace, "Frame=%v", hex.EncodeToString(f.encoded))
+
+		{
+			msd, ok := f.f.(*maxStreamDataFrame)
+			if ok {
+				c.log(logTypeFlowControl, "EKR: PT=%x Sending maxStreamDate %v %v", c.nextSendPacket, msd.StreamId, msd.MaximumStreamData)
+			}
+
+		}
 		payload = append(payload, f.encoded...)
 		sent++
 	}
-
-	c.log(logTypeConnection, "Packet=%v", dumpPacket(payload))
 
 	return c.sendPacketRaw(pt, payload)
 }
@@ -553,26 +566,28 @@ func (c *Connection) sendQueued(bareAcks bool) (int, error) {
 		pt = packetTypeServerCleartext
 	}
 
-	s, err := c.sendQueuedStreams(pt, c.streams[0:1], false, bareAcks)
+	// Now send other streams if we are in encrypted mode.
+	if c.state == StateEstablished {
+		s, err := c.queueStreamFrames(packetType1RTTProtectedPhase0, true, bareAcks)
+		if err != nil {
+			return sent, err
+		}
+		sent += s
+		bareAcks = false // We still want to send out data in unprotected mode but we don't need to just ACK stuff.
+
+	}
+
+	s, err := c.queueStreamFrames(pt, false, bareAcks)
 	if err != nil {
 		return sent, err
 	}
 	sent += s
 
-	// Now send other streams if we are in encrypted mode.
-	if c.state == StateEstablished {
-		s, err := c.sendQueuedStreams(packetType1RTTProtectedPhase0, c.streams[1:], true, bareAcks)
-		if err != nil {
-			return sent, err
-		}
-		sent += s
-	}
-
 	return sent, nil
 }
 
 // Send a packet of stream frames, plus whatever acks fit.
-func (c *Connection) sendStreamPacket(pt uint8, frames []frame, acks ackRanges) (int, error) {
+func (c *Connection) sendCombinedPacket(pt uint8, frames []frame, acks ackRanges) (int, error) {
 	left := c.mtu
 	asent := int(0)
 	var err error
@@ -605,9 +620,14 @@ func (c *Connection) sendStreamPacket(pt uint8, frames []frame, acks ackRanges) 
 	return asent, nil
 }
 
+func (c *Connection) queueFrame(q *[]frame, f frame) {
+	*q = append(*q, f)
+
+}
+
 // Send all the queued data on a set of streams with packet type |pt|
-func (c *Connection) sendQueuedStreams(pt uint8, streams []*Stream, protected bool, bareAcks bool) (int, error) {
-	c.log(logTypeConnection, "%v: sendQueuedStreams pt=%v, protected=%v",
+func (c *Connection) queueStreamFrames(pt uint8, protected bool, bareAcks bool) (int, error) {
+	c.log(logTypeConnection, "%v: sendQueuedStreamData pt=%v, protected=%v",
 		c.label(), pt, protected)
 	left := c.mtu
 	frames := make([]frame, 0)
@@ -615,49 +635,76 @@ func (c *Connection) sendQueuedStreams(pt uint8, streams []*Stream, protected bo
 	acks := c.recvd.prepareAckRange(protected, false)
 	now := time.Now()
 	txAge := time.Duration(c.retransmitTime) * time.Millisecond
-	for _, str := range streams {
-		if str == nil {
+
+	var streams []*Stream
+	var q *[]frame
+	if !protected {
+		streams = c.streams[0:1]
+		q = &c.outputClearQ
+	} else {
+		streams = c.streams[1:]
+		q = &c.outputProtectedQ
+	}
+
+	// 1. Output all the stream frames that are now permitted by stream flow control
+	//
+	for _, s := range streams {
+		chunks, _ := s.outputWritable()
+		for _, ch := range chunks {
+			c.queueFrame(q, newStreamFrame(s.id, ch.offset, ch.data, ch.last))
+		}
+	}
+
+	// 2. Now transmit all the frames permitted by connection level flow control.
+	// We're going to need to be more sophisticated when we actually do connection
+	// level flow control.
+	// TODO(ekr@rtfm.com): Don't retransmit non-retransmittable.
+	for i, _ := range *q {
+		f := &((*q)[i])
+		// c.log(logTypeStream, "Examining frame=%v", f)
+		l, err := f.length()
+		if err != nil {
+			return 0, err
+		}
+
+		cAge := now.Sub(f.time)
+		if cAge < txAge {
+			c.log(logTypeStream, "Skipping frame %f because sent too recently", f.String())
 			continue
 		}
-		for i, _ := range str.send.chunks {
-			chunk := &str.send.chunks[i]
-			c.log(logTypeStream, "Stream %v examining chunk of offset=%v len %v", str.label(), chunk.offset, len(chunk.data))
-			cAge := now.Sub(chunk.time)
-			if cAge < txAge {
-				c.log(logTypeStream, "Skipping chunk because sent too recently")
-				continue
-			}
-			c.log(logTypeStream, "Sending chunk, age = %v", cAge)
-			chunk.time = now
-			f := newStreamFrame(str.Id(), chunk.offset, chunk.data, chunk.last)
-			l, err := f.length()
+
+		c.log(logTypeStream, "Sending frame %s, age = %v", f.String(), cAge)
+		f.time = now
+
+		if left < l {
+			asent, err := c.sendCombinedPacket(pt, frames, acks)
 			if err != nil {
 				return 0, err
 			}
-			if left < l {
-				asent, err := c.sendStreamPacket(pt, frames, acks)
-				if err != nil {
-					return 0, err
-				}
-				sent++
+			sent++
 
-				acks = acks[asent:]
-				frames = make([]frame, 0)
-				left = c.mtu
-			}
+			acks = acks[asent:]
+			frames = make([]frame, 0)
+			left = c.mtu
+		}
 
-			frames = append(frames, f)
-			left -= l
-			// Record that we send this chunk in the current
-			str.send.chunks[i].pns = append(str.send.chunks[i].pns, c.nextSendPacket)
+		frames = append(frames, *f)
+		left -= l
+		// Record that we send this chunk in the current
+		f.pns = append(f.pns, c.nextSendPacket)
+		sf, ok := f.f.(*streamFrame)
+		if ok && sf.hasFin() {
+			c.streams[sf.StreamId].closeSend()
 		}
 	}
 
 	// Send the remainder, plus any ACKs that are left.
-	c.log(logTypeConnection, "%s: Remainder to send? sent=%v frames=%v acks=%v",
-		c.label(), sent, len(frames), len(acks))
+	c.log(logTypeConnection, "%s: Remainder to send? sent=%v frames=%v acks=%v bareAcks=%v",
+		c.label(), sent, len(frames), len(acks), bareAcks)
 	if len(frames) > 0 || (len(acks) > 0 && bareAcks) {
-		_, err := c.sendStreamPacket(pt, frames, acks)
+		// TODO(ekr@rtfm.com): this may skip acks if there isn't
+		// room, but hopefully we eventually catch up.
+		_, err := c.sendCombinedPacket(pt, frames, acks)
 		if err != nil {
 			return 0, err
 		}
@@ -677,6 +724,20 @@ func (c *Connection) outstandingQueuedBytes() (n int) {
 	for _, s := range c.streams {
 		n += s.outstandingQueuedBytes()
 	}
+
+	cd := func(frames []frame) int {
+		ret := 0
+		for _, f := range frames {
+			sf, ok := f.f.(*streamFrame)
+			if ok {
+				ret += len(sf.Data)
+			}
+		}
+		return ret
+	}
+
+	n += cd(c.outputClearQ)
+	n += cd(c.outputProtectedQ)
 
 	return
 }
@@ -727,6 +788,7 @@ func (c *Connection) input(p []byte) error {
 	}
 
 	typ := hdr.getHeaderType()
+	c.log(logTypeFlowControl, "EKR: Received packet %x len=%d", hdr.PacketNumber, len(p))
 	c.log(logTypeConnection, "Packet header %v, %d", hdr, typ)
 
 	// Process messages from the server that don't set up the connection
@@ -777,6 +839,7 @@ func (c *Connection) input(p []byte) error {
 	// We have now verified that this is a valid packet, so mark
 	// it received.
 
+	c.log(logTypeConnection, "Processing packet PT=%v PN=%x: %s", hdr.Type, hdr.PacketNumber, dumpPacket(payload))
 	naf := true
 	switch typ {
 	case packetTypeClientInitial:
@@ -861,6 +924,8 @@ func (c *Connection) processClientInitial(hdr *packetHeader, payload []byte) err
 
 	c.log(logTypeTrace, "Output of server handshake: %v", hex.EncodeToString(sflt))
 
+	c.setTransportParameters()
+
 	err = c.sendOnStream(0, sflt)
 	if err != nil {
 		return err
@@ -898,6 +963,15 @@ func (c *Connection) processCleartext(hdr *packetHeader, payload []byte, naf *bo
 		switch inner := f.f.(type) {
 		case *paddingFrame:
 			// Skip.
+
+		case *maxStreamDataFrame:
+			if inner.StreamId != 0 {
+				return ErrorProtocolViolation
+			}
+			err := c.streams[0].processMaxStreamData(inner.MaximumStreamData)
+			if err != nil {
+				return err
+			}
 
 		case *streamFrame:
 			// If this is duplicate data and if so early abort.
@@ -940,8 +1014,12 @@ func (c *Connection) processCleartext(hdr *packetHeader, payload []byte, naf *bo
 				return nonFatalError("Received cleartext with stream id != 0")
 			}
 
-			c.streams[0].newFrameData(inner.Offset, inner.hasFin(), inner.Data)
+			err = c.newFrameData(c.streams[0], inner)
+			if err != nil {
+				return err
+			}
 			available := c.streams[0].readAll()
+			c.issueStreamCredit(c.streams[0], len(available))
 			out, err := c.tls.handshake(available)
 			if err != nil {
 				return err
@@ -951,6 +1029,10 @@ func (c *Connection) processCleartext(hdr *packetHeader, payload []byte, naf *bo
 				err = c.handshakeComplete()
 				if err != nil {
 					return err
+				}
+				if c.role == RoleClient {
+					// We did this on the server already.
+					c.setTransportParameters()
 				}
 			}
 
@@ -965,7 +1047,7 @@ func (c *Connection) processCleartext(hdr *packetHeader, payload []byte, naf *bo
 		case *ackFrame:
 			c.log(logTypeAck, "Received ACK, first range=%x-%x", inner.LargestAcknowledged-inner.AckBlockLength, inner.LargestAcknowledged)
 
-			err = c.processAckFrame(inner)
+			err = c.processAckFrame(inner, false)
 			if err != nil {
 				return err
 			}
@@ -1025,9 +1107,58 @@ func (c *Connection) processVersionNegotiation(hdr *packetHeader, payload []byte
 	return ErrorReceivedVersionNegotiation
 }
 
+type frameFilterFunc func(*frame) bool
+
+func filterFrames(in []frame, f frameFilterFunc) []frame {
+	out := make([]frame, 0, len(in))
+	for _, t := range in {
+		if f(&t) {
+			out = append(out, t)
+		}
+	}
+
+	return out
+}
+
+func (c *Connection) issueStreamCredit(s *Stream, credit int) error {
+	max := ^uint64(0)
+
+	// Figure out how much credit to issue.
+	if max-s.recv.maxStreamData > uint64(credit) {
+		max = s.recv.maxStreamData + uint64(credit)
+	}
+	s.recv.maxStreamData = max
+
+	// Now issue it.
+	var q *[]frame
+	if s.id == 0 {
+		q = &c.outputClearQ
+	} else {
+		q = &c.outputProtectedQ
+	}
+
+	// Remove other MAX_STREAM_DATA frames so we don't retransmit them. This violates
+	// the current spec, but offline we all agree it's silly. See:
+	// https://github.com/quicwg/base-drafts/issues/806
+	*q = filterFrames(*q, func(f *frame) bool {
+		inner, ok := f.f.(*maxStreamDataFrame)
+		if !ok {
+			return false
+		}
+		return inner.StreamId == s.Id()
+	})
+
+	c.queueFrame(q, newMaxStreamData(s.Id(), max))
+	c.log(logTypeFlowControl, "Issuing more stream credit for stream %d new offset=%d", s.Id(), max)
+
+	// TODO(ekr@rtfm.com): We do need to do something to send this
+	// immediately, because we don't always.
+	return nil
+}
+
 func (c *Connection) processUnprotected(hdr *packetHeader, packetNumber uint64, payload []byte, naf *bool) error {
 	c.log(logTypeHandshake, "Reading unprotected data in state %v", c.state)
-	c.log(logTypeConnection, "Packet=%v", dumpPacket(payload))
+	c.log(logTypeConnection, "Received Packet=%v", dumpPacket(payload))
 	*naf = false
 	for len(payload) > 0 {
 		c.log(logTypeConnection, "%s: payload bytes left %d", c.label(), len(payload))
@@ -1061,11 +1192,14 @@ func (c *Connection) processUnprotected(hdr *packetHeader, packetNumber uint64, 
 				s.setState(kStreamStateOpen)
 				c.handler.NewStream(s)
 			}
+			err = s.processMaxStreamData(inner.MaximumStreamData)
+			if err != nil {
+				return err
+			}
 
 		case *ackFrame:
 			c.log(logTypeConnection, "Received ACK, first range=%v-%v", inner.LargestAcknowledged-inner.AckBlockLength, inner.LargestAcknowledged)
-
-			err = c.processAckFrame(inner)
+			err = c.processAckFrame(inner, true)
 			if err != nil {
 				return err
 			}
@@ -1079,7 +1213,6 @@ func (c *Connection) processUnprotected(hdr *packetHeader, packetNumber uint64, 
 			}
 
 		case *streamFrame:
-			c.log(logTypeConnection, "Received data on stream %v len=%v", inner.StreamId, len(inner.Data))
 			c.log(logTypeTrace, "Received on stream %v %x", inner.StreamId, inner.Data)
 			s, notifyCreated := c.ensureStream(inner.StreamId)
 			if notifyCreated && c.handler != nil {
@@ -1087,8 +1220,10 @@ func (c *Connection) processUnprotected(hdr *packetHeader, packetNumber uint64, 
 				s.setState(kStreamStateOpen)
 				c.handler.NewStream(s)
 			}
-			if s.newFrameData(inner.Offset, inner.hasFin(), inner.Data) && c.handler != nil {
-				c.handler.StreamReadable(s)
+
+			err = c.newFrameData(s, inner)
+			if err != nil {
+				return err
 			}
 
 		default:
@@ -1102,7 +1237,52 @@ func (c *Connection) processUnprotected(hdr *packetHeader, packetNumber uint64, 
 	return nil
 }
 
-func (c *Connection) processAckFrame(f *ackFrame) error {
+func (c *Connection) newFrameData(s *Stream, inner *streamFrame) error {
+	if s.recv.maxStreamData-inner.Offset < uint64(len(inner.Data)) {
+		return ErrorFrameFormatError
+	}
+
+	if s.newFrameData(inner.Offset, inner.hasFin(), inner.Data) && s.id > 0 &&
+		c.handler != nil {
+		c.handler.StreamReadable(s)
+	}
+
+	remaining := s.recv.maxStreamData - s.recv.lastReceivedByte()
+	c.log(logTypeFlowControl, "Stream %d has %d bytes of credit remaining, last byte received was", s.Id(), remaining, s.recv.lastReceivedByte())
+	if remaining < uint64(kInitialMaxStreamData) {
+		c.issueStreamCredit(s, int(kInitialMaxStreamData))
+	}
+	return nil
+}
+
+func (c *Connection) removeAckedFrames(pn uint64, qp *[]frame) {
+	q := *qp
+
+	c.log(logTypeStream, "Removing ACKed chunks PN=%x, currently %v chunks", pn, len(q))
+
+	for i := int(0); i < len(q); {
+		remove := false
+		f := q[i]
+		// c.log(logTypeStream, "Examining frame %v PNs=%v", f, f.pns)
+		for _, p := range f.pns {
+			if pn == p {
+				remove = true
+				break
+			}
+		}
+
+		if remove {
+			c.log(logTypeStream, "Removing frame %v, sent in PN %v", f.f, pn)
+			q = append(q[:i], q[i+1:]...)
+		} else {
+			i++
+		}
+	}
+	c.log(logTypeStream, "Un-acked chunks remaining %v", len(q))
+	*qp = q
+}
+
+func (c *Connection) processAckFrame(f *ackFrame, protected bool) error {
 	end := f.LargestAcknowledged
 	start := end - f.AckBlockLength
 
@@ -1116,13 +1296,10 @@ func (c *Connection) processAckFrame(f *ackFrame) error {
 			// wrong key phase.
 			c.log(logTypeConnection, "%s: processing ACK for PN=%x", c.label(), pn)
 
-			// 1. Go through each stream and remove the chunks. This is not
-			//    efficient but fine for now.
-			for _, str := range c.streams {
-				if str == nil {
-					continue
-				}
-				str.removeAckedChunks(pn)
+			// 1. Go through the outgoing queues and remove all the acked chunks.
+			c.removeAckedFrames(pn, &c.outputClearQ)
+			if protected {
+				c.removeAckedFrames(pn, &c.outputProtectedQ)
 			}
 
 			// 2. Mark all the packets that were ACKed in this packet as double-acked.
@@ -1176,6 +1353,11 @@ func (c *Connection) CheckTimer() (int, error) {
 
 	n, err := c.sendQueued(false)
 	return n, c.handleError(err)
+}
+
+func (c *Connection) setTransportParameters() {
+	// TODO(ekr@rtfm.com): Process the others..
+	_ = c.streams[0].processMaxStreamData(uint64(c.tpHandler.peerParams.maxStreamsData))
 }
 
 // Called when the handshake is complete.

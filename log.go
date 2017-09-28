@@ -15,18 +15,19 @@ const logConfigVar = "MINQ_LOG"
 
 // Pre-defined log types
 const (
-	logTypeAead       = "aead"
-	logTypeCodec      = "codec"
-	logTypeConnBuffer = "connbuffer"
-	logTypeConnection = "connection"
-	logTypeAck        = "ack"
-	logTypeFrame      = "frame"
-	logTypeHandshake  = "handshake"
-	logTypeTls        = "tls"
-	logTypeTrace      = "trace"
-	logTypeServer     = "server"
-	logTypeUdp        = "udp"
-	logTypeStream     = "stream"
+	logTypeAead        = "aead"
+	logTypeCodec       = "codec"
+	logTypeConnBuffer  = "connbuffer"
+	logTypeConnection  = "connection"
+	logTypeAck         = "ack"
+	logTypeFrame       = "frame"
+	logTypeHandshake   = "handshake"
+	logTypeTls         = "tls"
+	logTypeTrace       = "trace"
+	logTypeServer      = "server"
+	logTypeUdp         = "udp"
+	logTypeStream      = "stream"
+	logTypeFlowControl = "flow"
 )
 
 var (
@@ -70,7 +71,9 @@ func SetLogOutput(f func(string, ...interface{})) {
 
 func newConnectionLogger(c *Connection) loggingFunction {
 	return func(tag string, format string, args ...interface{}) {
-		fullFormat := fmt.Sprintf("Conn: %.16x:%.16x: %s: %s", c.clientConnId, c.serverConnId, c.label(), format)
-		logf(tag, fullFormat, args...)
+		if logAll || logSettings[tag] {
+			fullFormat := fmt.Sprintf("Conn: %.16x:%.16x: %s: %s", c.clientConnId, c.serverConnId, c.label(), format)
+			logf(tag, fullFormat, args...)
+		}
 	}
 }

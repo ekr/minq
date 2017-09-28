@@ -2,6 +2,7 @@ package minq
 
 import (
 	"fmt"
+	"time"
 )
 
 type frameType uint8
@@ -30,12 +31,23 @@ const (
 
 type innerFrame interface {
 	getType() frameType
+	String() string
 }
 
 type frame struct {
 	stream  uint32
 	f       innerFrame
 	encoded []byte
+	pns     []uint64
+	time    time.Time
+}
+
+func (f frame) String() string {
+	return f.f.String()
+}
+
+func newFrame(stream uint32, inner innerFrame) frame {
+	return frame{stream, inner, nil, nil, time.Unix(0, 0)}
 }
 
 // Encode internally if not already encoded.
@@ -99,7 +111,7 @@ func decodeFrame(data []byte) (uintptr, *frame, error) {
 		return 0, nil, err
 	}
 
-	return n, &frame{0, inner, data[:n]}, nil
+	return n, &frame{0, inner, data[:n], nil, time.Now()}, nil
 }
 
 // Frame definitions below this point.
@@ -118,7 +130,7 @@ func (f paddingFrame) getType() frameType {
 }
 
 func newPaddingFrame(stream uint32) frame {
-	return frame{stream, &paddingFrame{0}, nil}
+	return newFrame(stream, &paddingFrame{0})
 }
 
 // RST_STREAM
@@ -138,11 +150,12 @@ func (f rstStreamFrame) getType() frameType {
 }
 
 func newRstStreamFrame(streamId uint32, errorCode ErrorCode, finalOffset uint64) frame {
-	return frame{streamId, &rstStreamFrame{
+	return newFrame(streamId, &rstStreamFrame{
 		kFrameTypeRstStream,
 		streamId,
 		uint32(errorCode),
-		finalOffset}, nil}
+		finalOffset})
+
 }
 
 // CONNECTION_CLOSE
@@ -168,11 +181,12 @@ func (f connectionCloseFrame) ReasonPhrase__length() uintptr {
 func newConnectionCloseFrame(errcode ErrorCode, reason string) frame {
 	str := []byte(reason)
 
-	return frame{0, &connectionCloseFrame{
+	return newFrame(0, &connectionCloseFrame{
 		kFrameTypeConnectionClose,
 		uint32(errcode),
 		uint16(len(str)),
-		str}, nil}
+		[]byte(str),
+	})
 }
 
 // GOAWAY
@@ -191,10 +205,8 @@ func (f goawayFrame) getType() frameType {
 }
 
 func newGoawayFrame(client uint32, server uint32) frame {
-	return frame{0,
-		&goawayFrame{kFrameTypeGoaway, client, server},
-		nil,
-	}
+	return newFrame(0,
+		&goawayFrame{kFrameTypeGoaway, client, server})
 }
 
 // MAX_DATA
@@ -216,6 +228,15 @@ type maxStreamDataFrame struct {
 	Type              frameType
 	StreamId          uint32
 	MaximumStreamData uint64
+}
+
+func newMaxStreamData(stream uint32, offset uint64) frame {
+	return newFrame(stream,
+		&maxStreamDataFrame{
+			kFrameTypeMaxStreamData,
+			stream,
+			offset,
+		})
 }
 
 func (f maxStreamDataFrame) String() string {
@@ -399,7 +420,8 @@ func newAckFrame(rs ackRanges) (*frame, error) {
 		f.AckBlockSection = append(f.AckBlockSection, encoded...)
 	}
 
-	return &frame{0, &f, nil}, nil
+	ret := newFrame(0, &f)
+	return &ret, nil
 }
 
 // STREAM
@@ -412,7 +434,7 @@ type streamFrame struct {
 }
 
 func (f streamFrame) String() string {
-	return fmt.Sprintf("STREAM stream=%d offset=%x len=%d FIN=%v", f.StreamId, f.Offset, len(f.Data), f.hasFin())
+	return fmt.Sprintf("STREAM stream=%d offset=%d len=%d FIN=%v", f.StreamId, f.Offset, len(f.Data), f.hasFin())
 }
 
 func (f streamFrame) getType() frameType {
@@ -464,7 +486,7 @@ func newStreamFrame(stream uint32, offset uint64, data []byte, last bool) frame 
 	if last {
 		typ |= kFrameTypeFlagF
 	}
-	return frame{
+	return newFrame(
 		stream,
 		&streamFrame{
 			typ,
@@ -472,7 +494,5 @@ func newStreamFrame(stream uint32, offset uint64, data []byte, last bool) frame 
 			offset,
 			uint16(len(data)),
 			dup(data),
-		},
-		nil,
-	}
+		})
 }

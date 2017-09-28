@@ -3,15 +3,13 @@ package minq
 import (
 	"encoding/hex"
 	"fmt"
-	"time"
 )
 
 type streamChunk struct {
+	s      *stream
 	offset uint64
 	last   bool
 	data   []byte
-	pns    []uint64 // The packet numbers where we sent this.
-	time   time.Time
 }
 
 type streamState byte
@@ -32,15 +30,16 @@ const (
 )
 
 type streamHalf struct {
-	s      *stream
-	log    loggingFunction
-	dir    direction
-	closed bool
-	offset uint64
-	chunks []streamChunk
+	s             *stream
+	log           loggingFunction
+	dir           direction
+	closed        bool
+	offset        uint64
+	chunks        []streamChunk
+	maxStreamData uint64
 }
 
-func newStreamHalf(s *stream, log loggingFunction, dir direction) *streamHalf {
+func newStreamHalf(s *stream, log loggingFunction, dir direction, maxStreamData uint64) *streamHalf {
 	return &streamHalf{
 		s,
 		log,
@@ -48,6 +47,7 @@ func newStreamHalf(s *stream, log loggingFunction, dir direction) *streamHalf {
 		false,
 		0,
 		nil,
+		maxStreamData,
 	}
 }
 
@@ -64,7 +64,7 @@ func (h *streamHalf) label() string {
 func (h *streamHalf) insertSortedChunk(offset uint64, last bool, payload []byte) {
 	h.log(logTypeStream, "chunk insert %s stream %v with offset=%v, length=%v (current offset=%v) last=%v", h.label(), h.s.id, offset, len(payload), h.offset, last)
 	h.log(logTypeTrace, "Stream payload %v", hex.EncodeToString(payload))
-	c := streamChunk{offset, last, dup(payload), nil, time.Unix(0, 0)}
+	c := streamChunk{h.s, offset, last, dup(payload)}
 
 	var i int
 	for i = 0; i < len(h.chunks); i++ {
@@ -94,6 +94,7 @@ type stream struct {
 	log        loggingFunction
 	state      streamState
 	send, recv *streamHalf
+	blocked    bool // Have we returned blocked
 }
 
 // A single QUIC stream.
@@ -128,6 +129,7 @@ func (s *stream) newFrameData(offset uint64, last bool, payload []byte) bool {
 		return false
 	}
 	s.recv.insertSortedChunk(offset, last, payload)
+
 	return s.recv.chunks[0].offset <= s.recv.offset
 }
 
@@ -145,33 +147,6 @@ func (s *stream) queue(payload []byte) error {
 func (s *stream) setReadOffset(offset uint64) {
 	assert(s.id == 0)
 	s.recv.offset = offset
-}
-
-func (s *stream) removeAckedChunks(pn uint64) {
-	s.log(logTypeStream, "Removing ACKed chunks for stream %v, PN=%x, currently %v chunks", s.id, pn, len(s.send.chunks))
-
-	for i := int(0); i < len(s.send.chunks); {
-		remove := false
-		ch := s.send.chunks[i]
-		s.log(logTypeStream, "Examining chunk offset=%v, length=%v pns=%x", ch.offset, len(ch.data), ch.pns)
-		for _, p := range ch.pns {
-			if pn == p {
-				remove = true
-				break
-			}
-		}
-
-		if remove {
-			s.log(logTypeStream, "Removing chunk offset=%v len=%v from stream %v, sent in PN %v last=%v", s.send.chunks[i].offset, len(s.send.chunks[i].data), s.id, pn, ch.last)
-			s.send.chunks = append(s.send.chunks[:i], s.send.chunks[i+1:]...)
-			if ch.last {
-				s.closeSend()
-			}
-		} else {
-			i++
-		}
-		s.log(logTypeStream, "Un-acked chunks remaining %v", len(s.send.chunks))
-	}
 }
 
 func (s *stream) outstandingQueuedBytes() (n int) {
@@ -192,32 +167,27 @@ func (s *stream) setState(state streamState) *stream {
 	return s
 }
 
-func newStreamInt(id uint32, state streamState, log loggingFunction) stream {
+func newStreamInt(id uint32, state streamState, maxStreamData uint64, log loggingFunction) stream {
 	s := stream{
 		state: state,
 		id:    id,
 		log:   log,
 	}
-	s.send = newStreamHalf(&s, log, kDirSending)
-	s.recv = newStreamHalf(&s, log, kDirRecving)
+	s.send = newStreamHalf(&s, log, kDirSending, maxStreamData)
+	s.recv = newStreamHalf(&s, log, kDirRecving, uint64(kInitialMaxStreamData))
+
 	return s
 }
 
-func newStream(c *Connection, id uint32, state streamState) *Stream {
+func newStream(c *Connection, id uint32, maxStreamData uint64, state streamState) *Stream {
 	s := &Stream{
 		c,
-		newStreamInt(id, state, c.log),
+		newStreamInt(id, state, maxStreamData, c.log),
 	}
 	return s
 }
 
-// Write bytes to a stream. This function always succeeds, though the
-// bytes may end up being buffered.
-func (s *Stream) Write(data []byte) (int, error) {
-	if s.c.isClosed() {
-		return 0, ErrorConnIsClosed
-	}
-
+func (s *stream) write(data []byte) error {
 	for len(data) > 0 {
 		tocpy := 1024
 		if tocpy > len(data) {
@@ -225,13 +195,27 @@ func (s *Stream) Write(data []byte) (int, error) {
 		}
 		err := s.queue(data[:tocpy])
 		if err != nil {
-			return 0, err
+			return err
 		}
 
 		data = data[tocpy:]
 	}
 
+	return nil
+}
+
+func (s *Stream) Write(data []byte) (int, error) {
+	if s.c.isClosed() {
+		return 0, ErrorConnIsClosed
+	}
+
+	err := s.write(data)
+	if err != nil {
+		return 0, err
+	}
+
 	s.c.sendQueued(false)
+
 	return len(data), nil
 }
 
@@ -318,11 +302,66 @@ func (s *stream) read(b []byte) (int, error) {
 	return read, nil
 }
 
+func (s *stream) processMaxStreamData(offset uint64) error {
+	if offset < s.send.maxStreamData {
+		return nil
+	}
+	s.log(logTypeFlowControl, "Stream=%d now has max send offset=%d", s.id, offset)
+
+	s.send.maxStreamData = offset
+
+	return nil
+}
+
+// Push out all the frames permitted by flow control.
+func (s *stream) outputWritable() ([]streamChunk, bool) {
+	s.log(logTypeStream, "outputWritable(stream=%d, current max offset=%d)", s.id, s.send.maxStreamData)
+	out := make([]streamChunk, 0)
+	blocked := false
+	for len(s.send.chunks) > 0 {
+		ch := s.send.chunks[0]
+		if ch.offset+uint64(len(ch.data)) > s.send.maxStreamData {
+			blocked = true
+			s.log(logTypeFlowControl, "stream %d is blocked, s.send.maxStreamData=%d, chunk(offset=%d, len=%d)", s.id, s.send.maxStreamData, ch.offset, len(ch.data))
+			break
+		}
+		out = append(out, ch)
+		s.send.chunks = s.send.chunks[1:]
+	}
+
+	if s.blocked {
+		// Don't return blocked > once
+		blocked = false
+	} else {
+		s.blocked = blocked
+	}
+	return out, blocked
+}
+
+// Return the last received byte, even if it's out of order.
+func (s *streamHalf) lastReceivedByte() uint64 {
+	mx := s.offset
+
+	for _, ch := range s.chunks {
+		lb := ch.offset + uint64(len(ch.data))
+		if lb > mx {
+			mx = lb
+		}
+	}
+	return mx
+}
+
 func (s *Stream) Read(b []byte) (int, error) {
 	if s.c.isClosed() {
 		return 0, ErrorConnIsClosed
 	}
-	return s.read(b)
+
+	n, err := s.read(b)
+	if err != nil {
+		return 0, err
+	}
+
+	return n, nil
 }
 
 // Get the ID of a stream.

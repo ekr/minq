@@ -2,7 +2,6 @@ package minq
 
 import (
 	"bytes"
-	"fmt"
 )
 
 // Encode a QUIC packet.
@@ -205,9 +204,12 @@ func decodePacket(c ConnectionState, aead Aead, b []byte) (*Packet, error) {
 */
 
 func dumpPacket(payload []byte) string {
-	ret := ""
+	ret := "["
 
 	for len(payload) > 0 {
+		if len(ret) > 1 {
+			ret += ", "
+		}
 		n, f, err := decodeFrame(payload)
 		if err != nil {
 			ret += "Couldn't decode remainder\n"
@@ -215,8 +217,9 @@ func dumpPacket(payload []byte) string {
 		}
 		payload = payload[n:]
 		// TODO(ekr@rtfm.com): Not sure why %v doesn't work
-		ret += fmt.Sprintf("  %v\n", f.f)
+		ret += f.String()
 	}
+	ret += "]"
 
 	return ret
 }

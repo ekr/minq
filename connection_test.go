@@ -322,23 +322,25 @@ func (h *testReceiveHandler) NewStream(s *Stream) {
 }
 
 func (h *testReceiveHandler) StreamReadable(s *Stream) {
-	b := make([]byte, 1024)
+	for {
+		b := make([]byte, 1024)
 
-	n, err := s.Read(b)
-	switch err {
-	case nil:
-		break
-	case ErrorWouldBlock:
-		return
-	case ErrorStreamIsClosed, ErrorConnIsClosed:
-		h.done = true
-		return
-	default:
-		assertX(h.t, false, "Unknown error")
-		return
+		n, err := s.Read(b)
+		switch err {
+		case nil:
+			break
+		case ErrorWouldBlock:
+			return
+		case ErrorStreamIsClosed, ErrorConnIsClosed:
+			h.done = true
+			return
+		default:
+			assertX(h.t, false, "Unknown error")
+			return
+		}
+		b = b[:n]
+		h.buf = append(h.buf, b...)
 	}
-	b = b[:n]
-	h.buf = append(h.buf, b...)
 }
 
 func TestSendReceiveBigData(t *testing.T) {
@@ -358,12 +360,13 @@ func TestSendReceiveBigData(t *testing.T) {
 	cs.Write(buf)
 	cs.Close()
 
-	// Now read all the data
 	for !handler.done {
 		inputAll(pair.server)
+		inputAll(pair.client)
+		inputAll(pair.server)
+		inputAll(pair.client)
 	}
 
-	// Now check it.
 	assertByteEquals(t, buf, handler.buf)
 }
 

@@ -90,10 +90,13 @@ var ErrorInvalidPacket = nonFatalError("Could not decode packet")
 var ErrorConnectionTimedOut = fatalError("Connection timed out")
 var ErrorMissingValue = fatalError("Expected value is missing")
 var ErrorInvalidEncoding = fatalError("Invalid encoding")
+var ErrorProtocolViolation = fatalError("Protocol violation")
+var ErrorFrameFormatError = fatalError("Frame format error")
 
 // Protocol errors
 type ErrorCode uint32
 
 const (
-	kQuicErrorNoError = ErrorCode(0x80000000)
+	kQuicErrorNoError           = ErrorCode(0x80000000)
+	kQuicErrorProtocolViolation = ErrorCode(0x8000000A)
 )

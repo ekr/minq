@@ -47,7 +47,7 @@ func newTestStreamFixture(t *testing.T) *testStreamFixture {
 		t,
 		name,
 		log,
-		newStreamInt(0, kStreamStateOpen, log),
+		newStreamInt(0, kStreamStateOpen, 2048, log),
 		nil,
 	}
 }
@@ -128,4 +128,38 @@ func TestStreamFullCloseB(t *testing.T) {
 	f.s.closeRecv()
 	f.s.closeSend()
 	assertEquals(t, kStreamStateClosed, f.s.state)
+}
+
+func TestStreamIncreaseFlowControl(t *testing.T) {
+	f := newTestStreamFixture(t)
+	err := f.s.processMaxStreamData(2050)
+	assertEquals(t, nil, err)
+}
+
+func countChunkLens(chunks []streamChunk) int {
+	ct := 0
+	for _, ch := range chunks {
+		ct += len(ch.data)
+	}
+	return ct
+}
+
+func TestStreamBlockRelease(t *testing.T) {
+	f := newTestStreamFixture(t)
+	b := make([]byte, 5000)
+	err := f.s.write(b)
+	assertEquals(t, nil, err)
+	chunks, blocked := f.s.outputWritable()
+	assertX(t, blocked, "Output is blocked")
+	assertEquals(t, 2048, countChunkLens(chunks))
+	// Calling output writable again returns 0 chunks
+	// and not blocked (so we don't complain twice).
+	chunks, blocked = f.s.outputWritable()
+	assertX(t, !blocked, "Output is blocked")
+	assertEquals(t, 0, countChunkLens(chunks))
+	// Increasing the limit should let us write.
+	f.s.processMaxStreamData(8192)
+	chunks, blocked = f.s.outputWritable()
+	assertX(t, !blocked, "Output is not blocked")
+	assertEquals(t, 2952, countChunkLens(chunks))
 }
