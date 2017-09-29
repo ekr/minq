@@ -180,7 +180,7 @@ func NewConnection(trans Transport, role uint8, tls TlsConfig, handler Connectio
 		return nil
 	}
 	c.nextSendPacket = tmp & 0x7fffffff
-	s, newframe := c.ensureStream(0)
+	s, newframe, _ := c.ensureStream(0, false)
 	if newframe {
 		s.setState(kStreamStateOpen)
 	}
@@ -238,13 +238,23 @@ func stateName(state State) string {
 	}
 }
 
-func (c *Connection) ensureStream(id uint32) (*Stream, bool) {
+func (c *Connection) myStream(id uint32) bool {
+	return id == 0 || (((id & 1) == 1) == (c.role == RoleClient))
+}
+
+func (c *Connection) ensureStream(id uint32, remote bool) (*Stream, bool, error) {
 	c.log(logTypeTrace, "Ensuring stream %d exists", id)
 	// TODO(ekr@rtfm.com): this is not really done, because we never clean up
 	// Resize to fit.
 	if uint32(len(c.streams)) >= id+1 {
-		return c.streams[id], false
+		return c.streams[id], false, nil
 	}
+
+	// Don't create the stream if it's the wrong direction.
+	if remote == c.myStream(id) {
+		return nil, false, ErrorProtocolViolation
+	}
+
 	needed := id - uint32(len(c.streams)) + 1
 	c.log(logTypeTrace, "Needed=%d", needed)
 	c.streams = append(c.streams, make([]*Stream, needed)...)
@@ -286,7 +296,7 @@ func (c *Connection) ensureStream(id uint32) (*Stream, bool) {
 		c.maxStream = id
 	}
 
-	return c.streams[id], true
+	return c.streams[id], true, nil
 }
 
 func (c *Connection) sendClientInitial() error {
@@ -528,7 +538,7 @@ func (c *Connection) sendFramesInPacket(pt uint8, tosend []frame) error {
 
 func (c *Connection) sendOnStream(streamId uint32, data []byte) error {
 	c.log(logTypeConnection, "%v: sending %v bytes on stream %v", c.label(), len(data), streamId)
-	stream, newStream := c.ensureStream(streamId)
+	stream, newStream, _ := c.ensureStream(streamId, false)
 	if newStream {
 		stream.setState(kStreamStateOpen)
 	}
@@ -1178,7 +1188,11 @@ func (c *Connection) processUnprotected(hdr *packetHeader, packetNumber uint64, 
 			// TODO(ekr@rtfm.com): Don't let the other side initiate
 			// streams that are the wrong parity.
 			c.log(logTypeStream, "Received RST_STREAM on stream %v", inner.StreamId)
-			s, notifyCreated := c.ensureStream(inner.StreamId)
+			s, notifyCreated, err := c.ensureStream(inner.StreamId, true)
+			if err != nil {
+				return err
+			}
+
 			s.closeRecv()
 			if notifyCreated && c.handler != nil {
 				c.handler.NewStream(s)
@@ -1187,7 +1201,10 @@ func (c *Connection) processUnprotected(hdr *packetHeader, packetNumber uint64, 
 			c.setState(StateClosed)
 
 		case *maxStreamDataFrame:
-			s, notifyCreated := c.ensureStream(inner.StreamId)
+			s, notifyCreated, err := c.ensureStream(inner.StreamId, true)
+			if err != nil {
+				return err
+			}
 			if notifyCreated && c.handler != nil {
 				s.setState(kStreamStateOpen)
 				c.handler.NewStream(s)
@@ -1206,7 +1223,10 @@ func (c *Connection) processUnprotected(hdr *packetHeader, packetNumber uint64, 
 			nonAck = false
 
 		case *streamBlockedFrame:
-			s, notifyCreated := c.ensureStream(inner.StreamId)
+			s, notifyCreated, err := c.ensureStream(inner.StreamId, true)
+			if err != nil {
+				return err
+			}
 			if notifyCreated && c.handler != nil {
 				s.setState(kStreamStateOpen)
 				c.handler.NewStream(s)
@@ -1214,7 +1234,10 @@ func (c *Connection) processUnprotected(hdr *packetHeader, packetNumber uint64, 
 
 		case *streamFrame:
 			c.log(logTypeTrace, "Received on stream %v %x", inner.StreamId, inner.Data)
-			s, notifyCreated := c.ensureStream(inner.StreamId)
+			s, notifyCreated, err := c.ensureStream(inner.StreamId, true)
+			if err != nil {
+				return err
+			}
 			if notifyCreated && c.handler != nil {
 				c.log(logTypeTrace, "Notifying of stream creation")
 				s.setState(kStreamStateOpen)
@@ -1404,7 +1427,7 @@ func (c *Connection) CreateStream() *Stream {
 		}
 	}
 
-	s, _ := c.ensureStream(nextStream)
+	s, _, _ := c.ensureStream(nextStream, false)
 	s.setState(kStreamStateOpen)
 	return s
 }

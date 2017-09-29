@@ -520,3 +520,11 @@ func TestVersionNegotiationPacket(t *testing.T) {
 	assertEquals(t, hdr.Version, kQuicGreaseVersion2)
 	assertEquals(t, hdr.ConnectionID, client.clientConnId)
 }
+
+func TestCantMakeRemoteStream(t *testing.T) {
+	cTrans, _ := newTestTransportPair(true)
+	client := NewConnection(cTrans, RoleClient, testTlsConfig, nil)
+
+	_, _, err := client.ensureStream(1, true)
+	assertEquals(t, ErrorProtocolViolation, err)
+}
