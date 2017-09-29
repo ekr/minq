@@ -23,6 +23,8 @@ func newRecvStreamInt(id uint32, log loggingFunction, maxStreamData uint64) *rec
 			0,
 			nil,
 			maxStreamData,
+			false,
+			0,
 		},
 		false,
 	}

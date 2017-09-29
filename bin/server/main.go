@@ -64,7 +64,7 @@ func (h *echoConnHandler) StateChanged(s minq.State) {
 
 func (h *echoConnHandler) NewRecvStream(s *minq.RecvStream) {
 	fmt.Println("Created new stream id=", s.Id())
-	h.senders[s.Id()] = h.c.CreateSendStream()
+	h.senders[s.Id()] = h.c.CreateRelatedSendStream(s)
 }
 
 func (h *echoConnHandler) StreamReadable(s *minq.RecvStream) {
@@ -124,7 +124,7 @@ func (h *httpConnHandler) StateChanged(s minq.State) {
 }
 
 func (h *httpConnHandler) NewRecvStream(s *minq.RecvStream) {
-	h.streams[s.Id()] = &httpStream{h.c.CreateSendStream(), nil, false}
+	h.streams[s.Id()] = &httpStream{h.c.CreateRelatedSendStream(s), nil, false}
 }
 
 func (h *httpStream) Respond(val []byte) {

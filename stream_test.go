@@ -39,7 +39,7 @@ func newTestSendStreamFixture(t *testing.T) *testSendStreamFixture {
 	b := newTestBaseStreamFixture(t)
 	return &testSendStreamFixture{
 		*b,
-		newSendStreamInt(1, b.log, 2048),
+		newSendStreamInt(1, b.log, 2048, 0),
 	}
 }
 

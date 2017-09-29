@@ -25,6 +25,11 @@ func (h *connHandler) NewRecvStream(s *minq.RecvStream) {
 }
 
 func (h *connHandler) StreamReadable(s *minq.RecvStream) {
+	relatedId, isRelated := s.Related()
+	if isRelated {
+		fmt.Printf("Stream %d readable, related to stream %d\n", s.Id(), relatedId)
+	}
+
 	b := make([]byte, 1024)
 
 	n, err := s.Read(b)

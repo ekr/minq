@@ -12,7 +12,11 @@ type SendStream struct {
 	sendStream
 }
 
-func newSendStreamInt(id uint32, log loggingFunction, maxStreamData uint64) *sendStream {
+func newSendStreamInt(id uint32, log loggingFunction, maxStreamData uint64, related uint32) *sendStream {
+	isRelated := false
+	if related != 0 {
+		isRelated = true
+	}
 	return &sendStream{
 		baseStream{
 			kStreamStateOpen,
@@ -21,15 +25,17 @@ func newSendStreamInt(id uint32, log loggingFunction, maxStreamData uint64) *sen
 			0,
 			nil,
 			maxStreamData,
+			isRelated,
+			related,
 		},
 		false,
 	}
 }
 
-func newSendStream(c *Connection, id uint32, maxStreamData uint64) *SendStream {
+func newSendStream(c *Connection, id uint32, maxStreamData uint64, related uint32) *SendStream {
 	return &SendStream{
 		c,
-		*newSendStreamInt(id, c.log, maxStreamData),
+		*newSendStreamInt(id, c.log, maxStreamData, related),
 	}
 }
 

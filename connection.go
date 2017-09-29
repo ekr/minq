@@ -423,7 +423,7 @@ func (c *Connection) sendPacket(pt uint8, tosend []frame) error {
 		{
 			msd, ok := f.f.(*maxStreamDataFrame)
 			if ok {
-				c.log(logTypeFlowControl, "EKR: PT=%x Sending maxStreamDate %v %v", c.nextSendPacket, msd.StreamId, msd.MaximumStreamData)
+				c.log(logTypeFlowControl, "PT=%x Sending maxStreamData %v %v", c.nextSendPacket, msd.StreamId, msd.MaximumStreamData)
 			}
 
 		}
@@ -623,7 +623,11 @@ func (c *Connection) queueStreamFrames(pt uint8, protected bool, bareAcks bool) 
 	for _, s := range streams {
 		chunks, _ := s.outputWritable()
 		for _, ch := range chunks {
-			c.queueFrame(q, newStreamFrame(s.id, ch.offset, ch.data, ch.last))
+			sf := newStreamFrame(s.id, ch.offset, ch.data, ch.last)
+			if s.isRelated {
+				sf.f.(*streamFrame).setRelated(s.related)
+			}
+			c.queueFrame(q, sf)
 		}
 	}
 
@@ -760,7 +764,6 @@ func (c *Connection) input(p []byte) error {
 	}
 
 	typ := hdr.getHeaderType()
-	c.log(logTypeFlowControl, "EKR: Received packet %x len=%d", hdr.PacketNumber, len(p))
 	c.log(logTypeConnection, "Packet header %v, %d", hdr, typ)
 
 	// Process messages from the server that don't set up the connection
@@ -1192,9 +1195,24 @@ func (c *Connection) processUnprotected(hdr *packetHeader, packetNumber uint64, 
 
 		case *streamFrame:
 			c.log(logTypeTrace, "Received on stream %v %x", inner.StreamId, inner.Data)
+			relatedId, related := inner.isRelated()
+			var relatedStream *SendStream
+			if related {
+				// Check to see if the related stream is real
+				relatedStream = c.GetSendStream(relatedId)
+				if relatedStream == nil {
+					c.log(logTypeConnection, "Packet claims to be related to nonexistent stream %d", relatedId)
+					return ErrorInvalidRelatedStream
+				}
+			}
 			s, notifyCreated, err := c.ensureRecvStream(inner.StreamId)
 			if err != nil {
 				return err
+			}
+			// TODO(ekr@rtfm.com): Check for related consistency.
+			if related {
+				s.isRelated = true
+				s.related = relatedId
 			}
 			if notifyCreated && c.handler != nil {
 				c.log(logTypeTrace, "Notifying of stream creation")
@@ -1372,7 +1390,7 @@ func (c *Connection) packetNonce(pn uint64) []byte {
 
 // Create a stream on a given connection. Returns the created
 // stream.
-func (c *Connection) CreateSendStream() *SendStream {
+func (c *Connection) createSendStream(related *RecvStream) *SendStream {
 	nextStream := uint32(len(c.sstreams))
 
 	var initialMax uint64
@@ -1383,10 +1401,22 @@ func (c *Connection) CreateSendStream() *SendStream {
 		initialMax = 1280
 	}
 
-	s := newSendStream(c, nextStream, initialMax)
+	relatedId := uint32(0)
+	if related != nil {
+		relatedId = related.id
+	}
+	s := newSendStream(c, nextStream, initialMax, relatedId)
 	c.sstreams = append(c.sstreams, s)
 	s.setState(kStreamStateOpen)
 	return s
+}
+
+func (c *Connection) CreateSendStream() *SendStream {
+	return c.createSendStream(nil)
+}
+
+func (c *Connection) CreateRelatedSendStream(related *RecvStream) *SendStream {
+	return c.createSendStream(related)
 }
 
 // Get the stream with stream id |id|. Returns nil if no such

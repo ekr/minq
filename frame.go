@@ -20,12 +20,13 @@ const (
 	kFrameTypeStreamBlocked   = frameType(0x9)
 	kFrameTypeStreamIdNeeded  = frameType(0xa)
 	kFrameTypeNewConnectionId = frameType(0xb)
-	kFrameTypeAck             = frameType(0xa0)
-	kFrameTypeStream          = frameType(0xc0)
+	kFrameTypeAck             = frameType(0x60)
+	kFrameTypeStream          = frameType(0x80)
 )
 
 const (
-	kFrameTypeFlagF = frameType(0x20)
+	kFrameTypeFlagF = frameType(0x40)
+	kFrameTypeFlagR = frameType(0x02)
 	kFrameTypeFlagD = frameType(0x01)
 )
 
@@ -97,7 +98,7 @@ func decodeFrame(data []byte) (uintptr, *frame, error) {
 		inner = &streamIdNeededFrame{}
 	case t == uint8(kFrameTypeNewConnectionId):
 		inner = &newConnectionIdFrame{}
-	case t >= uint8(kFrameTypeAck) && t <= 0xbf:
+	case t >= uint8(kFrameTypeAck) && t < uint8(kFrameTypeStream):
 		inner = &ackFrame{}
 	case t >= uint8(kFrameTypeStream):
 		inner = &streamFrame{}
@@ -426,15 +427,16 @@ func newAckFrame(rs ackRanges) (*frame, error) {
 
 // STREAM
 type streamFrame struct {
-	Typ        frameType
-	StreamId   uint32
-	Offset     uint64
-	DataLength uint16
-	Data       []byte
+	Typ             frameType
+	StreamId        uint32
+	Offset          uint64
+	RelatedStreamId uint32
+	DataLength      uint16
+	Data            []byte
 }
 
 func (f streamFrame) String() string {
-	return fmt.Sprintf("STREAM stream=%d offset=%d len=%d FIN=%v", f.StreamId, f.Offset, len(f.Data), f.hasFin())
+	return fmt.Sprintf("STREAM stream=%d offset=%d len=%d related=%d FIN=%v", f.StreamId, f.Offset, len(f.Data), f.RelatedStreamId, f.hasFin())
 }
 
 func (f streamFrame) getType() frameType {
@@ -469,6 +471,13 @@ func (f streamFrame) Data__length() uintptr {
 	return uintptr(f.DataLength)
 }
 
+func (f streamFrame) RelatedStreamId__length() uintptr {
+	if f.Typ&kFrameTypeFlagR != 0 {
+		return codecDefaultSize
+	}
+	return 0
+}
+
 func (f streamFrame) hasFin() bool {
 	if f.Typ&kFrameTypeFlagF == 0 {
 		return false
@@ -476,15 +485,27 @@ func (f streamFrame) hasFin() bool {
 	return true
 }
 
+func (f *streamFrame) setRelated(stream uint32) {
+	assert(stream != 0)
+	f.Typ |= kFrameTypeFlagR
+	f.RelatedStreamId = stream
+}
+
+func (f streamFrame) isRelated() (uint32, bool) {
+	if f.Typ&kFrameTypeFlagR != 0 {
+		return f.RelatedStreamId, true
+	}
+	return 0, false
+}
+
 func newStreamFrame(stream uint32, offset uint64, data []byte, last bool) frame {
 	logf(logTypeFrame, "Creating stream frame with data length=%d", len(data))
 	assert(len(data) <= 65535)
-	// TODO(ekr@tfm.com): One might want to allow non
-	// D bit, but not for now.
-	// Set all of SSOO to 1
-	typ := kFrameTypeStream | 0x1e | kFrameTypeFlagD
-	if last {
-		typ |= kFrameTypeFlagF
+	// Set all the bits but R, which we only set if we are a FIN.
+	// TODO(ekr@rtfm.com): Shorter encodings.
+	typ := frameType(0xfd)
+	if !last {
+		typ &= ^kFrameTypeFlagF
 	}
 	return newFrame(
 		stream,
@@ -492,6 +513,7 @@ func newStreamFrame(stream uint32, offset uint64, data []byte, last bool) frame 
 			typ,
 			uint32(stream),
 			offset,
+			0,
 			uint16(len(data)),
 			dup(data),
 		})

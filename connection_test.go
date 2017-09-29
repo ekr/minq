@@ -302,6 +302,51 @@ func TestSendReceiveData(t *testing.T) {
 	assertEquals(t, pair.server.GetState(), StateClosed)
 }
 
+func TestSendReceiveRelated(t *testing.T) {
+	testString := []byte("abcdef")
+	pair := newCsPair(t)
+
+	pair.handshake(t)
+
+	// Force the client to get the ACK from the server
+	pair.server.CheckTimer()
+	err := inputAll(pair.client)
+
+	// Write data C->S
+	c2s_w := pair.client.CreateSendStream()
+	assertNotNil(t, c2s_w, "Failed to create a stream")
+	c2s_w.Write(testString)
+
+	// Read data C->S
+	err = inputAll(pair.server)
+	assertNotError(t, err, "Couldn't read input packets")
+	c2s_r := pair.server.GetRecvStream(1)
+	_, related := c2s_r.Related()
+	assertX(t, !related, "Streams shouldn't be related")
+
+	b := c2s_r.readAll()
+	assertNotNil(t, b, "Read data from server")
+	assertByteEquals(t, []byte(testString), b)
+
+	// Write data S->C
+	s2c_w := pair.server.CreateRelatedSendStream(c2s_r)
+	for i, _ := range b {
+		b[i] ^= 0xff
+	}
+	s2c_w.Write(b)
+
+	// Read data C->S
+	err = inputAll(pair.client)
+	assertNotError(t, err, "Couldn't read input packets")
+	s2c_r := pair.client.GetRecvStream(1)
+	b2 := s2c_r.readAll()
+	assertNotNil(t, b2, "Read data on client")
+	assertByteEquals(t, b, b2)
+	relatedId, related := s2c_r.Related()
+	assertX(t, related, "Streams should be related")
+	assertEquals(t, relatedId, uint32(1))
+}
+
 type testReceiveHandler struct {
 	t    *testing.T
 	buf  []byte

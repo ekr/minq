@@ -23,6 +23,8 @@ type baseStream struct {
 	offset        uint64
 	chunks        []streamChunk
 	maxStreamData uint64
+	isRelated     bool
+	related       uint32
 }
 
 func (s *baseStream) setState(state streamState) {
@@ -48,4 +50,12 @@ func (s *baseStream) close() {
 // Get the ID of a stream.
 func (s *baseStream) Id() uint32 {
 	return s.id
+}
+
+func (s *baseStream) Related() (uint32, bool) {
+	if !s.isRelated {
+		return 0, false
+	}
+	assert(s.related != 0)
+	return s.related, true
 }

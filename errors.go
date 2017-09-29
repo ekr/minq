@@ -90,8 +90,12 @@ var ErrorInvalidPacket = nonFatalError("Could not decode packet")
 var ErrorConnectionTimedOut = fatalError("Connection timed out")
 var ErrorMissingValue = fatalError("Expected value is missing")
 var ErrorInvalidEncoding = fatalError("Invalid encoding")
+
+// QUIC Errors below here
+// TODO(ekr): Update to have the error codes.
 var ErrorProtocolViolation = fatalError("Protocol violation")
 var ErrorFrameFormatError = fatalError("Frame format error")
+var ErrorInvalidRelatedStream = fatalError("Invalid related stream")
 
 // Protocol errors
 type ErrorCode uint32
