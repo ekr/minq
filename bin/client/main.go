@@ -21,10 +21,10 @@ func (h *connHandler) StateChanged(s minq.State) {
 	fmt.Println("State changed to ", s)
 }
 
-func (h *connHandler) NewStream(s *minq.Stream) {
+func (h *connHandler) NewRecvStream(s *minq.RecvStream) {
 }
 
-func (h *connHandler) StreamReadable(s *minq.Stream) {
+func (h *connHandler) StreamReadable(s *minq.RecvStream) {
 	b := make([]byte, 1024)
 
 	n, err := s.Read(b)
@@ -124,9 +124,9 @@ func main() {
 	fmt.Println("Connection established")
 
 	// Make all the streams we need
-	streams := make([]*minq.Stream, httpCount)
+	streams := make([]*minq.SendStream, httpCount)
 	for i := 0; i < httpCount; i++ {
-		streams[i] = conn.CreateStream()
+		streams[i] = conn.CreateSendStream()
 	}
 
 	udpin := make(chan []byte)

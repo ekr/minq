@@ -46,22 +46,28 @@ type echoServerHandler struct {
 
 func (h *echoServerHandler) NewConnection(c *minq.Connection) {
 	fmt.Println("New connection")
-	c.SetHandler(&echoConnHandler{})
+	c.SetHandler(&echoConnHandler{
+		c,
+		make(map[uint32]*minq.SendStream, 0),
+	})
 	conns[c.Id()] = &conn{c, time.Now()}
 }
 
 type echoConnHandler struct {
+	c       *minq.Connection
+	senders map[uint32]*minq.SendStream
 }
 
 func (h *echoConnHandler) StateChanged(s minq.State) {
 	fmt.Println("State changed to ", s)
 }
 
-func (h *echoConnHandler) NewStream(s *minq.Stream) {
+func (h *echoConnHandler) NewRecvStream(s *minq.RecvStream) {
 	fmt.Println("Created new stream id=", s.Id())
+	h.senders[s.Id()] = h.c.CreateSendStream()
 }
 
-func (h *echoConnHandler) StreamReadable(s *minq.Stream) {
+func (h *echoConnHandler) StreamReadable(s *minq.RecvStream) {
 	fmt.Println("Ready to read for stream id=", s.Id())
 	b := make([]byte, 1024)
 
@@ -89,7 +95,7 @@ func (h *echoConnHandler) StreamReadable(s *minq.Stream) {
 		}
 	}
 
-	s.Write(b)
+	h.senders[s.Id()].Write(b)
 }
 
 // An HTTP 0.9 Handler
@@ -98,17 +104,18 @@ type httpServerHandler struct {
 
 func (h *httpServerHandler) NewConnection(c *minq.Connection) {
 	fmt.Println("New connection")
-	c.SetHandler(&httpConnHandler{make(map[uint32]*httpStream, 0)})
+	c.SetHandler(&httpConnHandler{c, make(map[uint32]*httpStream, 0)})
 	conns[c.Id()] = &conn{c, time.Now()}
 }
 
 type httpStream struct {
-	s      *minq.Stream
+	s      *minq.SendStream
 	buf    []byte
 	closed bool
 }
 
 type httpConnHandler struct {
+	c       *minq.Connection
 	streams map[uint32]*httpStream
 }
 
@@ -116,8 +123,8 @@ func (h *httpConnHandler) StateChanged(s minq.State) {
 	fmt.Println("State changed to ", s)
 }
 
-func (h *httpConnHandler) NewStream(s *minq.Stream) {
-	h.streams[s.Id()] = &httpStream{s, nil, false}
+func (h *httpConnHandler) NewRecvStream(s *minq.RecvStream) {
+	h.streams[s.Id()] = &httpStream{h.c.CreateSendStream(), nil, false}
 }
 
 func (h *httpStream) Respond(val []byte) {
@@ -136,7 +143,7 @@ func (h *httpStream) Error(err string) {
 // Xs, up to 10,000
 // A non-number, in which case we respond with 10 repetitions
 // of that value.
-func (h *httpConnHandler) StreamReadable(s *minq.Stream) {
+func (h *httpConnHandler) StreamReadable(s *minq.RecvStream) {
 	fmt.Println("Ready to read for stream id=", s.Id())
 	st := h.streams[s.Id()]
 	if st.closed {

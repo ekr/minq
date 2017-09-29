@@ -63,12 +63,12 @@ type ConnectionHandler interface {
 	// The connection has changed state to state |s|
 	StateChanged(s State)
 
-	// A new stream has been created (by receiving a frame
+	// A new receiving stream has been created (by receiving a frame
 	// from the other side. |s| contains the stream.
-	NewStream(s *Stream)
+	NewRecvStream(s *RecvStream)
 
 	// Stream |s| is now readable.
-	StreamReadable(s *Stream)
+	StreamReadable(s *RecvStream)
 }
 
 // Internal structures indicating ranges to ACK
@@ -110,8 +110,8 @@ type Connection struct {
 	readProtected    *cryptoState
 	nextSendPacket   uint64
 	mtu              int
-	streams          []*Stream
-	maxStream        uint32
+	sstreams         []*SendStream
+	rstreams         []*RecvStream
 	outputClearQ     []frame // For stream 0
 	outputProtectedQ []frame // For stream >= 0
 	clientInitial    []byte
@@ -143,7 +143,7 @@ func NewConnection(trans Transport, role uint8, tls TlsConfig, handler Connectio
 		uint64(0),
 		kInitialMTU,
 		nil,
-		0,
+		nil,
 		nil,
 		nil,
 		nil,
@@ -180,10 +180,11 @@ func NewConnection(trans Transport, role uint8, tls TlsConfig, handler Connectio
 		return nil
 	}
 	c.nextSendPacket = tmp & 0x7fffffff
-	s, newframe, _ := c.ensureStream(0, false)
-	if newframe {
-		s.setState(kStreamStateOpen)
-	}
+
+	// Make streams 0
+	c.CreateSendStream()
+	c.ensureRecvStream(0)
+
 	return &c
 }
 
@@ -242,61 +243,33 @@ func (c *Connection) myStream(id uint32) bool {
 	return id == 0 || (((id & 1) == 1) == (c.role == RoleClient))
 }
 
-func (c *Connection) ensureStream(id uint32, remote bool) (*Stream, bool, error) {
+func (c *Connection) ensureRecvStream(id uint32) (*RecvStream, bool, error) {
 	c.log(logTypeTrace, "Ensuring stream %d exists", id)
 	// TODO(ekr@rtfm.com): this is not really done, because we never clean up
 	// Resize to fit.
-	if uint32(len(c.streams)) >= id+1 {
-		return c.streams[id], false, nil
+	if uint32(len(c.rstreams)) >= id+1 {
+		return c.rstreams[id], false, nil
 	}
 
-	// Don't create the stream if it's the wrong direction.
-	if remote == c.myStream(id) {
-		return nil, false, ErrorProtocolViolation
-	}
-
-	needed := id - uint32(len(c.streams)) + 1
+	// Make all streams up this one.
+	i := uint32(len(c.rstreams))
+	needed := id - uint32(len(c.rstreams)) + 1
+	c.rstreams = append(c.rstreams, make([]*RecvStream, needed)...)
 	c.log(logTypeTrace, "Needed=%d", needed)
-	c.streams = append(c.streams, make([]*Stream, needed)...)
-	// Now make all the streams in the same direction
-	i := id
-
-	var initialMax uint64
-	if c.tpHandler.peerParams != nil {
-		initialMax = uint64(c.tpHandler.peerParams.maxStreamsData)
-	} else {
-		assert(id == 0)
-		initialMax = 1280
-	}
-
-	for {
-		if c.streams[i] != nil {
-			break
-		}
-
-		if (i & 1) == (id & 1) {
-			s := newStream(c, i, initialMax, kStreamStateIdle)
-			c.streams[i] = s
-			if id != i {
-				// Any lower-numbered streams start in open, so set the
-				// state and notify.
-				s.setState(kStreamStateOpen)
-				if c.handler != nil {
-					c.handler.NewStream(s)
-				}
+	for ; i <= id; i++ {
+		s := newRecvStream(c, i, uint64(kInitialMaxStreamData))
+		c.rstreams[i] = s
+		if id != i {
+			// Any lower-numbered streams start in open, so set the
+			// state and notify.
+			s.setState(kStreamStateOpen)
+			if c.handler != nil {
+				c.handler.NewRecvStream(s)
 			}
 		}
-
-		if i == 0 {
-			break
-		}
-		i--
-	}
-	if id > c.maxStream {
-		c.maxStream = id
 	}
 
-	return c.streams[id], true, nil
+	return c.rstreams[id], true, nil
 }
 
 func (c *Connection) sendClientInitial() error {
@@ -332,7 +305,7 @@ func (c *Connection) sendClientInitial() error {
 	// Enqueue the frame for transmission.
 	queued = append(queued, f)
 
-	c.streams[0].send.setOffset(uint64(len(c.clientInitial)))
+	c.sstreams[0].setOffset(uint64(len(c.clientInitial)))
 
 	for i := 0; i < topad; i++ {
 		queued = append(queued, newPaddingFrame(0))
@@ -536,17 +509,6 @@ func (c *Connection) sendFramesInPacket(pt uint8, tosend []frame) error {
 	return nil
 }
 
-func (c *Connection) sendOnStream(streamId uint32, data []byte) error {
-	c.log(logTypeConnection, "%v: sending %v bytes on stream %v", c.label(), len(data), streamId)
-	stream, newStream, _ := c.ensureStream(streamId, false)
-	if newStream {
-		stream.setState(kStreamStateOpen)
-	}
-
-	_, err := stream.Write(data)
-	return err
-}
-
 func (c *Connection) makeAckFrame(acks ackRanges, maxlength int) (*frame, int, error) {
 	maxacks := (maxlength - 16) / 5 // We are using 32-byte values for all the variable-lengths
 
@@ -646,13 +608,13 @@ func (c *Connection) queueStreamFrames(pt uint8, protected bool, bareAcks bool) 
 	now := time.Now()
 	txAge := time.Duration(c.retransmitTime) * time.Millisecond
 
-	var streams []*Stream
+	var streams []*SendStream
 	var q *[]frame
 	if !protected {
-		streams = c.streams[0:1]
+		streams = c.sstreams[0:1]
 		q = &c.outputClearQ
 	} else {
-		streams = c.streams[1:]
+		streams = c.sstreams[1:]
 		q = &c.outputProtectedQ
 	}
 
@@ -704,7 +666,7 @@ func (c *Connection) queueStreamFrames(pt uint8, protected bool, bareAcks bool) 
 		f.pns = append(f.pns, c.nextSendPacket)
 		sf, ok := f.f.(*streamFrame)
 		if ok && sf.hasFin() {
-			c.streams[sf.StreamId].closeSend()
+			c.sstreams[sf.StreamId].close()
 		}
 	}
 
@@ -731,7 +693,7 @@ func (c *Connection) queueStreamFrames(pt uint8, protected bool, bareAcks bool) 
 // Right now this is very expensive.
 
 func (c *Connection) outstandingQueuedBytes() (n int) {
-	for _, s := range c.streams {
+	for _, s := range c.sstreams {
 		n += s.outstandingQueuedBytes()
 	}
 
@@ -909,8 +871,8 @@ func (c *Connection) processClientInitial(hdr *packetHeader, payload []byte) err
 	}
 
 	if c.state != StateWaitClientInitial {
-		if uint64(len(sf.Data)) > c.streams[0].recv.offset {
-			return nonFatalError("Received second ClientInitial which seems to be too long, offset=%v len=%v", c.streams[0].recv.offset, n)
+		if uint64(len(sf.Data)) > c.rstreams[0].offset {
+			return nonFatalError("Received second ClientInitial which seems to be too long, offset=%v len=%v", c.rstreams[0].offset, n)
 		}
 		return nil
 	}
@@ -925,7 +887,7 @@ func (c *Connection) processClientInitial(hdr *packetHeader, payload []byte) err
 		}
 	}
 
-	c.streams[0].recv.setOffset(uint64(len(sf.Data)))
+	c.rstreams[0].setOffset(uint64(len(sf.Data)))
 	sflt, err := c.tls.handshake(sf.Data)
 	if err != nil {
 		c.log(logTypeConnection, "TLS connection error: %v", err)
@@ -936,7 +898,7 @@ func (c *Connection) processClientInitial(hdr *packetHeader, payload []byte) err
 
 	c.setTransportParameters()
 
-	err = c.sendOnStream(0, sflt)
+	err = c.sstreams[0].write(sflt)
 	if err != nil {
 		return err
 	}
@@ -949,7 +911,7 @@ func (c *Connection) processClientInitial(hdr *packetHeader, payload []byte) err
 
 func (c *Connection) processCleartext(hdr *packetHeader, payload []byte, naf *bool) error {
 	*naf = false
-	c.log(logTypeHandshake, "Reading cleartext in state %v", c.state)
+	c.log(logTypeHandshake, "Reading cleartext in state %s", stateName(c.state))
 	// TODO(ekr@rtfm.com): Need clearer state checks.
 	/*
 		We should probably reinstate this once we have encrypted ACKs.
@@ -978,14 +940,14 @@ func (c *Connection) processCleartext(hdr *packetHeader, payload []byte, naf *bo
 			if inner.StreamId != 0 {
 				return ErrorProtocolViolation
 			}
-			err := c.streams[0].processMaxStreamData(inner.MaximumStreamData)
+			err := c.sstreams[0].processMaxStreamData(inner.MaximumStreamData)
 			if err != nil {
 				return err
 			}
 
 		case *streamFrame:
 			// If this is duplicate data and if so early abort.
-			if inner.Offset+uint64(len(inner.Data)) <= c.streams[0].recv.offset {
+			if inner.Offset+uint64(len(inner.Data)) <= c.rstreams[0].offset {
 				continue
 			}
 
@@ -1005,7 +967,6 @@ func (c *Connection) processCleartext(hdr *packetHeader, payload []byte, naf *bo
 				// 2. Set the outgoing stream offset accordingly
 				// 3. Remember the connection ID
 				if len(c.clientInitial) > 0 {
-					c.streams[0].send.setOffset(uint64(len(c.clientInitial)))
 					c.clientInitial = nil
 					c.serverConnId = hdr.ConnectionID
 				}
@@ -1024,12 +985,12 @@ func (c *Connection) processCleartext(hdr *packetHeader, payload []byte, naf *bo
 				return nonFatalError("Received cleartext with stream id != 0")
 			}
 
-			err = c.newFrameData(c.streams[0], inner)
+			err = c.newFrameData(c.rstreams[0], inner)
 			if err != nil {
 				return err
 			}
-			available := c.streams[0].readAll()
-			c.issueStreamCredit(c.streams[0], len(available))
+			available := c.rstreams[0].readAll()
+			c.issueStreamCredit(c.rstreams[0], len(available))
 			out, err := c.tls.handshake(available)
 			if err != nil {
 				return err
@@ -1047,7 +1008,7 @@ func (c *Connection) processCleartext(hdr *packetHeader, payload []byte, naf *bo
 			}
 
 			if len(out) > 0 {
-				c.sendOnStream(0, out)
+				err := c.sstreams[0].write(out)
 				if err != nil {
 					return err
 				}
@@ -1130,14 +1091,14 @@ func filterFrames(in []frame, f frameFilterFunc) []frame {
 	return out
 }
 
-func (c *Connection) issueStreamCredit(s *Stream, credit int) error {
+func (c *Connection) issueStreamCredit(s *RecvStream, credit int) error {
 	max := ^uint64(0)
 
 	// Figure out how much credit to issue.
-	if max-s.recv.maxStreamData > uint64(credit) {
-		max = s.recv.maxStreamData + uint64(credit)
+	if max-s.maxStreamData > uint64(credit) {
+		max = s.maxStreamData + uint64(credit)
 	}
-	s.recv.maxStreamData = max
+	s.maxStreamData = max
 
 	// Now issue it.
 	var q *[]frame
@@ -1188,26 +1149,23 @@ func (c *Connection) processUnprotected(hdr *packetHeader, packetNumber uint64, 
 			// TODO(ekr@rtfm.com): Don't let the other side initiate
 			// streams that are the wrong parity.
 			c.log(logTypeStream, "Received RST_STREAM on stream %v", inner.StreamId)
-			s, notifyCreated, err := c.ensureStream(inner.StreamId, true)
+			s, notifyCreated, err := c.ensureRecvStream(inner.StreamId)
 			if err != nil {
 				return err
 			}
 
-			s.closeRecv()
+			// TODO(ekr@rtfm.com): What about close on sending streams?
+			s.close()
 			if notifyCreated && c.handler != nil {
-				c.handler.NewStream(s)
+				c.handler.NewRecvStream(s)
 			}
 		case *connectionCloseFrame:
 			c.setState(StateClosed)
 
 		case *maxStreamDataFrame:
-			s, notifyCreated, err := c.ensureStream(inner.StreamId, true)
-			if err != nil {
-				return err
-			}
-			if notifyCreated && c.handler != nil {
-				s.setState(kStreamStateOpen)
-				c.handler.NewStream(s)
+			s := c.GetSendStream(inner.StreamId)
+			if s == nil {
+				return ErrorProtocolViolation
 			}
 			err = s.processMaxStreamData(inner.MaximumStreamData)
 			if err != nil {
@@ -1223,25 +1181,25 @@ func (c *Connection) processUnprotected(hdr *packetHeader, packetNumber uint64, 
 			nonAck = false
 
 		case *streamBlockedFrame:
-			s, notifyCreated, err := c.ensureStream(inner.StreamId, true)
+			s, notifyCreated, err := c.ensureRecvStream(inner.StreamId)
 			if err != nil {
 				return err
 			}
 			if notifyCreated && c.handler != nil {
 				s.setState(kStreamStateOpen)
-				c.handler.NewStream(s)
+				c.handler.NewRecvStream(s)
 			}
 
 		case *streamFrame:
 			c.log(logTypeTrace, "Received on stream %v %x", inner.StreamId, inner.Data)
-			s, notifyCreated, err := c.ensureStream(inner.StreamId, true)
+			s, notifyCreated, err := c.ensureRecvStream(inner.StreamId)
 			if err != nil {
 				return err
 			}
 			if notifyCreated && c.handler != nil {
 				c.log(logTypeTrace, "Notifying of stream creation")
 				s.setState(kStreamStateOpen)
-				c.handler.NewStream(s)
+				c.handler.NewRecvStream(s)
 			}
 
 			err = c.newFrameData(s, inner)
@@ -1260,8 +1218,9 @@ func (c *Connection) processUnprotected(hdr *packetHeader, packetNumber uint64, 
 	return nil
 }
 
-func (c *Connection) newFrameData(s *Stream, inner *streamFrame) error {
-	if s.recv.maxStreamData-inner.Offset < uint64(len(inner.Data)) {
+func (c *Connection) newFrameData(s *RecvStream, inner *streamFrame) error {
+	c.log(logTypeConnection, "New frame data %v", *inner)
+	if s.maxStreamData-inner.Offset < uint64(len(inner.Data)) {
 		return ErrorFrameFormatError
 	}
 
@@ -1270,8 +1229,8 @@ func (c *Connection) newFrameData(s *Stream, inner *streamFrame) error {
 		c.handler.StreamReadable(s)
 	}
 
-	remaining := s.recv.maxStreamData - s.recv.lastReceivedByte()
-	c.log(logTypeFlowControl, "Stream %d has %d bytes of credit remaining, last byte received was", s.Id(), remaining, s.recv.lastReceivedByte())
+	remaining := s.maxStreamData - s.lastReceivedByte()
+	c.log(logTypeFlowControl, "Stream %d has %d bytes of credit remaining, last byte received was", s.Id(), remaining, s.lastReceivedByte())
 	if remaining < uint64(kInitialMaxStreamData) {
 		c.issueStreamCredit(s, int(kInitialMaxStreamData))
 	}
@@ -1380,7 +1339,7 @@ func (c *Connection) CheckTimer() (int, error) {
 
 func (c *Connection) setTransportParameters() {
 	// TODO(ekr@rtfm.com): Process the others..
-	_ = c.streams[0].processMaxStreamData(uint64(c.tpHandler.peerParams.maxStreamsData))
+	_ = c.sstreams[0].processMaxStreamData(uint64(c.tpHandler.peerParams.maxStreamsData))
 }
 
 // Called when the handshake is complete.
@@ -1413,35 +1372,43 @@ func (c *Connection) packetNonce(pn uint64) []byte {
 
 // Create a stream on a given connection. Returns the created
 // stream.
-func (c *Connection) CreateStream() *Stream {
-	nextStream := c.maxStream + 1
+func (c *Connection) CreateSendStream() *SendStream {
+	nextStream := uint32(len(c.sstreams))
 
-	// Client opens odd streams
-	if c.role == RoleClient {
-		if (nextStream & 1) == 0 {
-			nextStream++
-		}
+	var initialMax uint64
+	if c.tpHandler.peerParams != nil {
+		initialMax = uint64(c.tpHandler.peerParams.maxStreamsData)
 	} else {
-		if (nextStream & 1) == 1 {
-			nextStream++
-		}
+		assert(len(c.sstreams) == 0)
+		initialMax = 1280
 	}
 
-	s, _, _ := c.ensureStream(nextStream, false)
+	s := newSendStream(c, nextStream, initialMax)
+	c.sstreams = append(c.sstreams, s)
 	s.setState(kStreamStateOpen)
 	return s
 }
 
 // Get the stream with stream id |id|. Returns nil if no such
 // stream exists.
-func (c *Connection) GetStream(id uint32) *Stream {
+func (c *Connection) GetSendStream(id uint32) *SendStream {
 	iid := int(id)
 
-	if iid >= len(c.streams) {
+	if iid >= len(c.sstreams) {
 		return nil
 	}
 
-	return c.streams[iid]
+	return c.sstreams[iid]
+}
+
+func (c *Connection) GetRecvStream(id uint32) *RecvStream {
+	iid := int(id)
+
+	if iid >= len(c.rstreams) {
+		return nil
+	}
+
+	return c.rstreams[iid]
 }
 
 func generateRand64() (uint64, error) {

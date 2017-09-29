@@ -6,33 +6,13 @@ import (
 	"testing"
 )
 
-type testStreamFixture struct {
+type testBaseStreamFixture struct {
 	t    *testing.T
 	name string
 	log  loggingFunction
-	s    stream
-	b    []byte
 }
 
-func (f *testStreamFixture) read() {
-	f.b = make([]byte, 1024)
-	n, err := f.s.read(f.b)
-	assertNotError(f.t, err, "Should be able to read bytes")
-	f.b = f.b[:n]
-}
-
-func (f *testStreamFixture) readExpectError(exerr error) {
-	f.b = make([]byte, 1024)
-	n, err := f.s.read(f.b)
-	assertError(f.t, err, "Should not be able to read bytes")
-	assertEquals(f.t, exerr, err)
-	assertEquals(f.t, 0, n)
-}
-
-var kTestString1 = []byte("abcdef")
-var kTestString2 = []byte("ghijkl")
-
-func newTestStreamFixture(t *testing.T) *testStreamFixture {
+func newTestBaseStreamFixture(t *testing.T) *testBaseStreamFixture {
 	pc, _, _, ok := runtime.Caller(1)
 	name := "unknown"
 	if ok {
@@ -43,25 +23,69 @@ func newTestStreamFixture(t *testing.T) *testStreamFixture {
 		logf(tag, fullFormat, args...)
 	}
 
-	return &testStreamFixture{
+	return &testBaseStreamFixture{
 		t,
 		name,
 		log,
-		newStreamInt(0, kStreamStateOpen, 2048, log),
+	}
+}
+
+type testSendStreamFixture struct {
+	testBaseStreamFixture
+	s *sendStream
+}
+
+func newTestSendStreamFixture(t *testing.T) *testSendStreamFixture {
+	b := newTestBaseStreamFixture(t)
+	return &testSendStreamFixture{
+		*b,
+		newSendStreamInt(1, b.log, 2048),
+	}
+}
+
+func (f *testRecvStreamFixture) read() {
+	f.b = make([]byte, 1024)
+	n, err := f.s.read(f.b)
+	assertNotError(f.t, err, "Should be able to read bytes")
+	f.b = f.b[:n]
+}
+
+func (f *testRecvStreamFixture) readExpectError(exerr error) {
+	f.b = make([]byte, 1024)
+	n, err := f.s.read(f.b)
+	assertError(f.t, err, "Should not be able to read bytes")
+	assertEquals(f.t, exerr, err)
+	assertEquals(f.t, 0, n)
+}
+
+type testRecvStreamFixture struct {
+	testBaseStreamFixture
+	s *recvStream
+	b []byte
+}
+
+func newTestRecvStreamFixture(t *testing.T) *testRecvStreamFixture {
+	b := newTestBaseStreamFixture(t)
+	return &testRecvStreamFixture{
+		*b,
+		newRecvStreamInt(1, b.log, 2048),
 		nil,
 	}
 }
 
-func TestStreamInputOneChunk(t *testing.T) {
-	f := newTestStreamFixture(t)
+var kTestString1 = []byte("abcdef")
+var kTestString2 = []byte("ghijkl")
+
+func TestRecvStreamInputOneChunk(t *testing.T) {
+	f := newTestRecvStreamFixture(t)
 	readable := f.s.newFrameData(0, false, kTestString1)
 	assertX(t, readable, "Stream should be readable")
 	f.read()
 	assertByteEquals(t, f.b, kTestString1)
 }
 
-func TestStreamInputTwoChunks(t *testing.T) {
-	f := newTestStreamFixture(t)
+func TestRecvStreamInputTwoChunks(t *testing.T) {
+	f := newTestRecvStreamFixture(t)
 	readable := f.s.newFrameData(0, false, kTestString1)
 	assertX(t, readable, "Stream should be readable")
 	f.read()
@@ -72,8 +96,8 @@ func TestStreamInputTwoChunks(t *testing.T) {
 	assertByteEquals(t, f.b, kTestString2)
 }
 
-func TestStreamInputCoalesceChunks(t *testing.T) {
-	f := newTestStreamFixture(t)
+func TestRecvStreamInputCoalesceChunks(t *testing.T) {
+	f := newTestRecvStreamFixture(t)
 	readable := f.s.newFrameData(0, false, kTestString1[:2])
 	assertX(t, readable, "Stream should be readable")
 	readable = f.s.newFrameData(2, false, kTestString1[2:])
@@ -82,8 +106,8 @@ func TestStreamInputCoalesceChunks(t *testing.T) {
 	assertByteEquals(t, f.b, kTestString1)
 }
 
-func TestStreamInputChunksOverlap(t *testing.T) {
-	f := newTestStreamFixture(t)
+func TestRecvStreamInputChunksOverlap(t *testing.T) {
+	f := newTestRecvStreamFixture(t)
 	readable := f.s.newFrameData(0, false, kTestString1[:2])
 	assertX(t, readable, "Stream should be readable")
 	readable = f.s.newFrameData(0, false, kTestString1)
@@ -92,8 +116,8 @@ func TestStreamInputChunksOverlap(t *testing.T) {
 	assertByteEquals(t, f.b, kTestString1)
 }
 
-func TestStreamInputTwoChunksWrongOrder(t *testing.T) {
-	f := newTestStreamFixture(t)
+func TestRecvStreamInputTwoChunksWrongOrder(t *testing.T) {
+	f := newTestRecvStreamFixture(t)
 	readable := f.s.newFrameData(2, false, kTestString1[2:])
 	assertX(t, !readable, "Stream not should be readable")
 	f.readExpectError(ErrorWouldBlock)
@@ -103,35 +127,21 @@ func TestStreamInputTwoChunksWrongOrder(t *testing.T) {
 	assertByteEquals(t, f.b, kTestString1)
 }
 
-func TestStreamInputChunk1FinChunk2(t *testing.T) {
-	f := newTestStreamFixture(t)
+func TestRecvStreamInputChunk1FinChunk2(t *testing.T) {
+	f := newTestRecvStreamFixture(t)
 	readable := f.s.newFrameData(0, true, kTestString1)
 	assertX(t, readable, "Stream should be readable")
 	assertEquals(t, kStreamStateOpen, f.s.state)
 	f.read()
 	assertByteEquals(t, f.b, kTestString1)
-	assertEquals(t, kStreamStateHCRemote, f.s.state)
+	assertEquals(t, kStreamStateClosed, f.s.state)
 	readable = f.s.newFrameData(uint64(len(kTestString1)), false, kTestString2)
 	assertX(t, !readable, "Stream not be readable")
 	f.readExpectError(ErrorStreamIsClosed)
 }
 
-func TestStreamFullCloseA(t *testing.T) {
-	f := newTestStreamFixture(t)
-	f.s.closeSend()
-	f.s.closeRecv()
-	assertEquals(t, kStreamStateClosed, f.s.state)
-}
-
-func TestStreamFullCloseB(t *testing.T) {
-	f := newTestStreamFixture(t)
-	f.s.closeRecv()
-	f.s.closeSend()
-	assertEquals(t, kStreamStateClosed, f.s.state)
-}
-
-func TestStreamIncreaseFlowControl(t *testing.T) {
-	f := newTestStreamFixture(t)
+func TestSendStreamIncreaseFlowControl(t *testing.T) {
+	f := newTestSendStreamFixture(t)
 	err := f.s.processMaxStreamData(2050)
 	assertEquals(t, nil, err)
 }
@@ -144,14 +154,14 @@ func countChunkLens(chunks []streamChunk) int {
 	return ct
 }
 
-func TestStreamBlockRelease(t *testing.T) {
-	f := newTestStreamFixture(t)
+func TestSendStreamBlockRelease(t *testing.T) {
+	f := newTestSendStreamFixture(t)
 	b := make([]byte, 5000)
 	err := f.s.write(b)
 	assertEquals(t, nil, err)
 	chunks, blocked := f.s.outputWritable()
-	assertX(t, blocked, "Output is blocked")
 	assertEquals(t, 2048, countChunkLens(chunks))
+	assertX(t, blocked, "Output should be blocked")
 	// Calling output writable again returns 0 chunks
 	// and not blocked (so we don't complain twice).
 	chunks, blocked = f.s.outputWritable()
