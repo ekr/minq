@@ -21,15 +21,10 @@ func (h *connHandler) StateChanged(s minq.State) {
 	fmt.Println("State changed to ", s)
 }
 
-func (h *connHandler) NewRecvStream(s *minq.RecvStream) {
+func (h *connHandler) NewStream(s *minq.Stream) {
 }
 
-func (h *connHandler) StreamReadable(s *minq.RecvStream) {
-	relatedId, isRelated := s.Related()
-	if isRelated {
-		fmt.Printf("Stream %d readable, related to stream %d\n", s.Id(), relatedId)
-	}
-
+func (h *connHandler) StreamReadable(s *minq.Stream) {
 	b := make([]byte, 1024)
 
 	n, err := s.Read(b)
@@ -100,7 +95,7 @@ func main() {
 
 	utrans := minq.NewUdpTransport(usock, uaddr)
 
-	conn := minq.NewConnection(utrans, minq.RoleClient,
+	conn := minq.NewConnection2(utrans, minq.RoleClient,
 		minq.NewTlsConfig(serverName), &connHandler{})
 
 	// Start things off.
@@ -129,9 +124,9 @@ func main() {
 	fmt.Println("Connection established")
 
 	// Make all the streams we need
-	streams := make([]*minq.SendStream, httpCount)
+	streams := make([]*minq.Stream, httpCount)
 	for i := 0; i < httpCount; i++ {
-		streams[i] = conn.CreateSendStream()
+		streams[i] = conn.CreateStream()
 	}
 
 	udpin := make(chan []byte)
@@ -167,8 +162,8 @@ func main() {
 			}
 		}()
 	} else {
-		req := "GET " + doHttp + "\r\n"
-		for _, str := range streams {
+		for i, str := range streams {
+			req := "GET " + fmt.Sprintf("%s:%d", doHttp, i) + "\r\n"
 			str.Write([]byte(req))
 		}
 	}

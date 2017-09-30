@@ -28,6 +28,7 @@ const (
 	logTypeUdp         = "udp"
 	logTypeStream      = "stream"
 	logTypeFlowControl = "flow"
+	logTypeBidi        = "bidi"
 )
 
 var (
