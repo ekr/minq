@@ -6,7 +6,6 @@ import (
 
 type recvStream struct {
 	baseStream
-	blocked bool
 }
 
 type RecvStream struct {
@@ -26,7 +25,6 @@ func newRecvStreamInt(id uint32, log loggingFunction, maxStreamData uint64) *rec
 			false,
 			0,
 		},
-		false,
 	}
 }
 
