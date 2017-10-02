@@ -4,6 +4,7 @@ RUN go get github.com/bifurcation/mint
 RUN go get github.com/cloudflare/cfssl/helpers
 RUN go get github.com/ekr/minq
 RUN go install github.com/ekr/minq/bin/server
+RUN go install github.com/ekr/minq/bin/client
 RUN apt-get update
 RUN apt-get install -y tcpdump
 RUN apt-get install -y node
