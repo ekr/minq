@@ -807,8 +807,7 @@ func (c *Connection) input(p []byte) error {
 	case packetTypeVersionNegotiation:
 		return c.processVersionNegotiation(&hdr, p[hdrlen:])
 	case packetTypeServerStatelessRetry:
-		c.log(logTypeConnection, "Unsupported packet type %v", typ)
-		return fmt.Errorf("Unsupported packet type %v", typ)
+		return c.processStatelessRetry(&hdr, p[hdrlen:])
 	}
 
 	aead := c.readClear
@@ -925,15 +924,26 @@ func (c *Connection) processClientInitial(hdr *packetHeader, payload []byte) err
 		}
 	}
 
-	c.streams[0].recv.setOffset(uint64(len(sf.Data)))
 	sflt, err := c.tls.handshake(sf.Data)
 	if err != nil {
 		c.log(logTypeConnection, "TLS connection error: %v", err)
 		return err
 	}
-
 	c.log(logTypeTrace, "Output of server handshake: %v", hex.EncodeToString(sflt))
 
+	if c.tls.getHsState() == "ServerStateStart" {
+		c.log(logTypeConnection, "Sending Stateless Retry")
+		// We sent HRR
+		sf := newStreamFrame(0, 0, sflt, false)
+		err := sf.encode()
+		if err != nil {
+			return err
+		}
+		return c.sendSpecialClearPacket(packetTypeServerStatelessRetry, hdr.ConnectionID, hdr.PacketNumber, kQuicVersion, sf.encoded)
+	}
+
+	assert(c.tls.getHsState() == "ServerStateWaitFinished")
+	c.streams[0].recv.setOffset(uint64(len(sf.Data)))
 	c.setTransportParameters()
 
 	err = c.sendOnStream(0, sflt)
@@ -1115,6 +1125,53 @@ func (c *Connection) processVersionNegotiation(hdr *packetHeader, payload []byte
 	}
 
 	return ErrorReceivedVersionNegotiation
+}
+
+// I assume here that Stateless Retry contains just a single stream frame,
+// contra the spec but per https://github.com/quicwg/base-drafts/pull/817
+func (c *Connection) processStatelessRetry(hdr *packetHeader, payload []byte) error {
+	c.log(logTypeConnection, "%s: Processing stateless retry packet", c.label())
+	if c.recvd.initialized() {
+		c.log(logTypeConnection, "%s: Ignoring stateless retry after received another packet", c.label())
+	}
+
+	// Directly parse the Stateless Retry rather than inserting it into
+	// the stream processor.
+	var sf streamFrame
+
+	n, err := decode(&sf, payload)
+	if err != nil {
+		c.log(logTypeConnection, "Failure decoding stream frame in Stateless Retry")
+		return err
+	}
+
+	if int(n) != len(payload) {
+		return nonFatalError("Extra stuff in Stateless Retry")
+	}
+
+	if sf.StreamId != 0 {
+		return nonFatalError("Received ClientInitial with stream id != 0")
+	}
+
+	if sf.Offset != 0 {
+		return nonFatalError("Received ClientInitial with offset != 0")
+	}
+
+	// TODO(ekr@rtfm.com): add some more state checks that we don't get
+	// multiple SRs
+	assert(c.tls.getHsState() == "ClientStateWaitSH")
+
+	// Pass this data to the TLS connection, which gets us another CH which
+	// we insert in ClientInitial
+	cflt, err := c.tls.handshake(sf.Data)
+	if err != nil {
+		c.log(logTypeConnection, "TLS connection error: %v", err)
+		return err
+	}
+	c.log(logTypeTrace, "Output of client handshake: %v", hex.EncodeToString(cflt))
+
+	c.clientInitial = cflt
+	return c.sendClientInitial()
 }
 
 type frameFilterFunc func(*frame) bool

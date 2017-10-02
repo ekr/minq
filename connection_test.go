@@ -528,3 +528,42 @@ func TestCantMakeRemoteStream(t *testing.T) {
 	_, _, err := client.ensureStream(1, true)
 	assertEquals(t, ErrorProtocolViolation, err)
 }
+
+func TestStatelessRetry(t *testing.T) {
+	cTrans, sTrans := newTestTransportPair(true)
+
+	client := NewConnection(cTrans, RoleClient, testTlsConfig, nil)
+	assertNotNil(t, client, "Couldn't make client")
+
+	hrrConfig := testTlsConfig
+	hrrConfig.ForceHrr = true
+
+	server := NewConnection(sTrans, RoleServer, hrrConfig, nil)
+	assertNotNil(t, server, "Couldn't make server")
+
+	err := client.sendClientInitial()
+	assertNotError(t, err, "Couldn't send client initial packet")
+
+	// Send the Stateless Retry
+	err = inputAll(server)
+	assertNotError(t, err, "Error processing CI")
+
+	// Process SR, send CI
+	err = inputAll(client)
+	assertNotError(t, err, "Error processing SR")
+
+	// Send the Stateless Retry
+	err = inputAll(server)
+	assertNotError(t, err, "Error processing CI")
+
+	// Process server flight
+	err = inputAll(client)
+	assertNotError(t, err, "Error processing SH...FIN")
+
+	// Process CFIN
+	err = inputAll(server)
+	assertNotError(t, err, "Error processing CFIN")
+
+	assertEquals(t, StateEstablished, client.state)
+	assertEquals(t, StateEstablished, server.state)
+}

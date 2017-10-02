@@ -13,6 +13,7 @@ type TlsConfig struct {
 	CertificateChain []*x509.Certificate
 	Key              crypto.Signer
 	mintConfig       *mint.Config
+	ForceHrr         bool
 }
 
 func (c *TlsConfig) init() {
@@ -26,6 +27,10 @@ func (c *TlsConfig) toMint() *mint.Config {
 			ServerName:  c.ServerName,
 			NonBlocking: true,
 			NextProtos:  []string{kQuicALPNToken},
+		}
+
+		if c.ForceHrr {
+			config.RequireCookie = true
 		}
 
 		if c.CertificateChain != nil && c.Key != nil {
@@ -112,4 +117,8 @@ func (c *tlsConn) handshake(input []byte) ([]byte, error) {
 
 func (c *tlsConn) computeExporter(label string) ([]byte, error) {
 	return c.tls.ComputeExporter(label, []byte{}, c.cs.Hash.Size())
+}
+
+func (c *tlsConn) getHsState() string {
+	return c.tls.GetHsState()
 }
