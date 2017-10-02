@@ -41,10 +41,7 @@ only be used for testing.
     # The following line will produce a complaint about mint.CipherSuiteParams. Ignore it.
     go get github.com/ekr/minq
     cd github.com/bifurcation/mint
-    git remote add ekr https://www.github.com/ekr/mint
-    git fetch ekr
-    git checkout minq_draft_21
-    cd ../../ekr/minq
+       cd ../../ekr/minq
     go test
 
 This should produce something like this:
@@ -104,8 +101,6 @@ Multiple log levels can be separated by commas.
 ## Mint
 
 Minq depends on Mint (https://www.github.com/bifurcation/mint) for TLS.
-There are some changes to Mint to support QUIC that haven't been
-merged yet, so in the meantime you will want the following branch:
-https://github.com/ekr/mint/tree/minq_draft_21
-(or https://github.com/ekr/mint/tree/minq_draft_20 for draft-20).
+Currently Mint master should work, but occasionally I will have to be on
+a branch. Will try to keep this updated.
 
