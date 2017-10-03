@@ -473,6 +473,7 @@ func (c *Connection) sendFramesInPacket(pt uint8, tosend []frame) error {
 	}
 	connId = c.serverConnId
 
+	longHeader := true
 	if c.role == RoleClient {
 		switch {
 		case pt == packetTypeClientInitial:
@@ -483,19 +484,26 @@ func (c *Connection) sendFramesInPacket(pt uint8, tosend []frame) error {
 		case pt == packetType0RTTProtected:
 			connId = c.clientConnId
 			aead = nil // This will cause a crash b/c 0-RTT doesn't work yet
+		default:
+			longHeader = false
 		}
 	} else {
 		if pt == packetTypeServerCleartext {
 			aead = c.writeClear
+		} else {
+			longHeader = true
 		}
 	}
 
 	left -= aead.Overhead()
 
-	// For now, just do the long header.
+	npt := pt
+	if longHeader {
+		npt |= packetFlagLongHeader
+	}
 	p := packet{
 		packetHeader{
-			pt | packetFlagLongHeader,
+			npt,
 			connId,
 			c.nextSendPacket,
 			c.version,
