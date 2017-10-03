@@ -224,25 +224,24 @@ func TestSendReceiveCISI(t *testing.T) {
 	err = inputAll(server)
 	assertNotError(t, err, "Error processing CFIN")
 
-	// All the server's data should be acked.
+	err = inputAll(client)
+	assertNotError(t, err, "Error processing NST")
+
+	err = inputAll(server)
+	assertNotError(t, err, "Error processing CFIN")
+
+	// All the server's and client's data should be acked.
 	n := server.outstandingQueuedBytes()
+	assertEquals(t, 0, n)
+
+	// But the client still has-unacked-data
+	n = client.outstandingQueuedBytes()
 	assertEquals(t, 0, n)
 
 	fmt.Println("Checking client state")
 	assertEquals(t, client.state, StateEstablished)
 	fmt.Println("Checking server state")
 	assertEquals(t, server.state, StateEstablished)
-
-	// But the client still has-unacked-data
-	n = client.outstandingQueuedBytes()
-	assertX(t, n > 0, "Client should still have un-acked data")
-
-	// Have the client ingest the server's ACK, sent on
-	// reading CFIN.
-	err = inputAll(client)
-	assertNotError(t, err, "Error processing server ACK")
-	n = client.outstandingQueuedBytes()
-	assertEquals(t, 0, n)
 
 	// Run the client's checkTimer, which shouldn't do
 	// anything because you don't ACK acks.

@@ -24,9 +24,10 @@ func (c *TlsConfig) toMint() *mint.Config {
 	if c.mintConfig == nil {
 		// TODO(ekr@rtfm.com): Provide a real config
 		config := mint.Config{
-			ServerName:  c.ServerName,
-			NonBlocking: true,
-			NextProtos:  []string{kQuicALPNToken},
+			ServerName:         c.ServerName,
+			NonBlocking:        true,
+			NextProtos:         []string{kQuicALPNToken},
+			SendSessionTickets: true,
 		}
 
 		if c.ForceHrr {
