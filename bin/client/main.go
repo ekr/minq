@@ -67,6 +67,7 @@ func readUDP(s *net.UDPConn) ([]byte, error) {
 }
 
 func main() {
+	fmt.Println("PID=", os.Getpid())
 	flag.StringVar(&addr, "addr", "localhost:4433", "[host:port]")
 	flag.StringVar(&serverName, "server-name", "", "SNI")
 	flag.StringVar(&doHttp, "http", "", "Do HTTP/0.9 with provided URL")
@@ -98,6 +99,8 @@ func main() {
 	conn := minq.NewConnection(utrans, minq.RoleClient,
 		minq.NewTlsConfig(serverName), &connHandler{})
 
+	fmt.Printf("Client conn id=%x\n", conn.ClientId())
+
 	// Start things off.
 	_, err = conn.CheckTimer()
 
@@ -114,7 +117,9 @@ func main() {
 			return
 		}
 
+		fmt.Println("<")
 		err = conn.Input(b)
+		fmt.Println(">")
 		if err != nil {
 			fmt.Println("Error", err)
 			return

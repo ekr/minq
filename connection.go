@@ -667,9 +667,11 @@ func (c *Connection) queueStreamFrames(pt uint8, protected bool, bareAcks bool) 
 	// 1. Output all the stream frames that are now permitted by stream flow control
 	//
 	for _, s := range streams {
-		chunks, _ := s.outputWritable()
-		for _, ch := range chunks {
-			c.queueFrame(q, newStreamFrame(s.id, ch.offset, ch.data, ch.last))
+		if s != nil {
+			chunks, _ := s.outputWritable()
+			for _, ch := range chunks {
+				c.queueFrame(q, newStreamFrame(s.id, ch.offset, ch.data, ch.last))
+			}
 		}
 	}
 
@@ -1563,6 +1565,10 @@ func (c *Connection) GetState() State {
 // been received.
 func (c *Connection) Id() ConnectionId {
 	return c.serverConnId
+}
+
+func (c *Connection) ClientId() ConnectionId {
+	return c.clientConnId
 }
 
 func (c *Connection) handleError(e error) error {
