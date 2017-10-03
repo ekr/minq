@@ -833,12 +833,15 @@ func (c *Connection) input(p []byte) error {
 	c.log(logTypeConnection, "%s: Received (unverified) packet with PN=%x PT=%v",
 		c.label(), hdr.PacketNumber, hdr.getHeaderType())
 
-	packetNumber := c.expandPacketNumber(hdr.PacketNumber, int(hdr.PacketNumber__length()))
-	c.log(logTypeConnection, "Reconstructed packet number %x", packetNumber)
+	packetNumber := hdr.PacketNumber
+	if c.recvd.initialized() {
+		packetNumber = c.expandPacketNumber(hdr.PacketNumber, int(hdr.PacketNumber__length()))
+		c.log(logTypeConnection, "Reconstructed packet number %x", packetNumber)
+	}
 
 	if c.recvd.initialized() && !c.recvd.packetNotReceived(packetNumber) {
 		c.log(logTypeConnection, "Discarding duplicate packet %x", packetNumber)
-		return nonFatalError("Duplicate packet")
+		return nonFatalError(fmt.Sprintf("Duplicate packet id %x", packetNumber))
 	}
 
 	payload, err := aead.Open(nil, c.packetNonce(packetNumber), p[hdrlen:], p[:hdrlen])
