@@ -96,7 +96,9 @@ func (p *recvdPackets) prepareAckRange(protected bool, allowAckOnly bool) ackRan
 
 	ranges := make(ackRanges, 0)
 
-	for pn = p.maxReceived; pn >= p.minReceived; pn-- {
+	// TODO(ekr@rtfm.com): This is kind of a gross hack in case
+	// someone sends us a 0 initial packet number.
+	for pn = p.maxReceived; pn >= p.minReceived && pn > 0; pn-- {
 		p.log(logTypeTrace, "Examining packet %x", pn)
 		pk, ok := p.packets[pn]
 		needs_ack := false
