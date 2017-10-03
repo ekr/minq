@@ -1047,7 +1047,7 @@ func (c *Connection) processCleartext(hdr *packetHeader, payload []byte, naf *bo
 				return err
 			}
 			available := c.streams[0].readAll()
-			c.issueStreamCredit(c.streams[0], len(available))
+			// c.issueStreamCredit(c.streams[0], len(available))
 			out, err := c.tls.handshake(available)
 			if err != nil {
 				return err
@@ -1337,7 +1337,7 @@ func (c *Connection) newFrameData(s *Stream, inner *streamFrame) error {
 
 	remaining := s.recv.maxStreamData - s.recv.lastReceivedByte()
 	c.log(logTypeFlowControl, "Stream %d has %d bytes of credit remaining, last byte received was", s.Id(), remaining, s.recv.lastReceivedByte())
-	if remaining < uint64(kInitialMaxStreamData) {
+	if remaining < uint64(kInitialMaxStreamData) && s.Id() != 0 {
 		c.issueStreamCredit(s, int(kInitialMaxStreamData))
 	}
 	return nil
