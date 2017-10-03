@@ -117,9 +117,7 @@ func main() {
 			return
 		}
 
-		fmt.Println("<")
 		err = conn.Input(b)
-		fmt.Println(">")
 		if err != nil {
 			fmt.Println("Error", err)
 			return
