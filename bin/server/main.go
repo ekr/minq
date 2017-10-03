@@ -23,6 +23,7 @@ var certFile string
 var logFile string
 var logOut *os.File
 var doHttp bool
+var statelessReset bool
 
 // Shared data structures.
 type conn struct {
@@ -212,12 +213,14 @@ func main() {
 	flag.StringVar(&certFile, "cert", "", "Cert file")
 	flag.StringVar(&logFile, "log", "", "Log file")
 	flag.BoolVar(&doHttp, "http", false, "Do HTTP/0.9")
+	flag.BoolVar(&statelessReset, "stateless-reset", false, "Do stateless reset")
 	flag.Parse()
 
 	var key crypto.Signer
 	var certChain []*x509.Certificate
 
 	config := minq.NewTlsConfig(serverName)
+	config.ForceHrr = statelessReset
 
 	if keyFile != "" && certFile == "" {
 		fmt.Println("Can't specify -key without -cert")
