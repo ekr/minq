@@ -167,7 +167,7 @@ type connectionCloseFrame struct {
 }
 
 func (f connectionCloseFrame) String() string {
-	return fmt.Sprintf("CONNECTION_CLOSE errorCode=%d", f.ErrorCode)
+	return fmt.Sprintf("CONNECTION_CLOSE errorCode=%x", f.ErrorCode)
 }
 
 func (f connectionCloseFrame) getType() frameType {
