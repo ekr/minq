@@ -74,7 +74,11 @@ func (p *packetHeader) String() string {
 	if isLongHeader(p) {
 		ht = "LONG"
 	}
-	return fmt.Sprintf("%s PT=%x", ht, p.getHeaderType())
+	prot := "CLEAR"
+	if p.isProtected() {
+		prot = "ENC"
+	}
+	return fmt.Sprintf("%s %s PT=%x", ht, prot, p.getHeaderType())
 }
 
 type packet struct {
