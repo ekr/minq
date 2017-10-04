@@ -168,6 +168,7 @@ func main() {
 		req := "GET " + doHttp + "\r\n"
 		for _, str := range streams {
 			str.Write([]byte(req))
+			str.Close()
 		}
 	}
 

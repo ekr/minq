@@ -365,7 +365,6 @@ func (c *Connection) sendSpecialClearPacket(pt uint8, connId ConnectionId, pn ui
 }
 
 func (c *Connection) sendPacketRaw(pt uint8, connId ConnectionId, pn uint64, version VersionNumber, payload []byte) error {
-	c.log(logTypeConnection, "Sending packet PT=%v PN=%x: %s", pt, c.nextSendPacket, dumpPacket(payload))
 	left := c.mtu
 	var aead cipher.AEAD
 	if c.writeProtected != nil {
@@ -399,6 +398,7 @@ func (c *Connection) sendPacketRaw(pt uint8, connId ConnectionId, pn uint64, ver
 		},
 		nil,
 	}
+	c.logPacket("Sent", &p.packetHeader, pn, payload)
 
 	// Encode the header so we know how long it is.
 	// TODO(ekr@rtfm.com): this is gross.
@@ -867,8 +867,8 @@ func (c *Connection) input(p []byte) error {
 
 	// We have now verified that this is a valid packet, so mark
 	// it received.
+	c.logPacket("Received", &hdr, packetNumber, payload)
 
-	c.log(logTypeConnection, "Processing packet PT=%v PN=%x: %s", hdr.Type, hdr.PacketNumber, dumpPacket(payload))
 	naf := true
 	switch typ {
 	case packetTypeClientInitial:
@@ -944,6 +944,7 @@ func (c *Connection) processClientInitial(hdr *packetHeader, payload []byte) err
 		}
 	}
 
+	c.logPacket("Received", hdr, hdr.PacketNumber, payload)
 	sflt, err := c.tls.handshake(sf.Data)
 	if err != nil {
 		c.log(logTypeConnection, "TLS connection error: %v", err)
@@ -1592,6 +1593,12 @@ func (c *Connection) handleError(e error) error {
 	c.setState(StateError)
 
 	return e
+}
+
+func (c *Connection) logPacket(dir string, hdr *packetHeader, pn uint64, payload []byte) {
+	l := fmt.Sprintf("Packet %s: PN=%x hdr[%s]: %s", dir, pn, hdr.String(), dumpPacket(payload))
+	c.log(logTypePacket, l)
+	c.log(logTypeConnection, l)
 }
 
 // S 5.8:

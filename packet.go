@@ -2,6 +2,7 @@ package minq
 
 import (
 	"bytes"
+	"fmt"
 )
 
 // Encode a QUIC packet.
@@ -70,6 +71,14 @@ type packetHeader struct {
 	ConnectionID ConnectionId
 	PacketNumber uint64 // Never more than 32 bits on the wire.
 	Version      VersionNumber
+}
+
+func (p *packetHeader) String() string {
+	ht := "SHORT"
+	if isLongHeader(p) {
+		ht = "LONG"
+	}
+	return fmt.Sprintf("%s PT=%x", ht, p.getHeaderType())
 }
 
 type packet struct {

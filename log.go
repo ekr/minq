@@ -28,6 +28,7 @@ const (
 	logTypeUdp         = "udp"
 	logTypeStream      = "stream"
 	logTypeFlowControl = "flow"
+	logTypePacket      = "packet" // Just send notes on which packets are sent and received
 )
 
 var (
