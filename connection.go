@@ -1464,6 +1464,15 @@ func (c *Connection) processUnprotected(hdr *packetHeader, packetNumber uint64, 
 				return err
 			}
 
+			if inner.StreamId == 0 {
+				// TLS process for NST.
+				available := c.streams[0].readAll()
+				err := c.tls.readPostHandshake(available)
+				if err != nil {
+					return err
+				}
+			}
+
 		default:
 			c.log(logTypeConnection, "Received unexpected frame type")
 		}

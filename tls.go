@@ -129,6 +129,26 @@ outer:
 	return c.conn.getOutput(), nil
 }
 
+func (c *tlsConn) readPostHandshake(input []byte) error {
+	logf(logTypeTls, "TLS post-handshake input len=%v", len(input))
+	if input != nil {
+		err := c.conn.input(input)
+		if err != nil {
+			return err
+		}
+	}
+
+	buf := make([]byte, 1)
+	n, err := c.tls.Read(buf)
+	if n != 0 {
+		return fmt.Errorf("Received TLS application data")
+	}
+	if err != mint.AlertWouldBlock {
+		return err
+	}
+	return nil
+}
+
 func (c *tlsConn) computeExporter(label string) ([]byte, error) {
 	return c.tls.ComputeExporter(label, []byte{}, c.cs.Hash.Size())
 }
