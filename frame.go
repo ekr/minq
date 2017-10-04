@@ -122,7 +122,7 @@ type paddingFrame struct {
 }
 
 func (f paddingFrame) String() string {
-	return "PADDING"
+	return "P"
 }
 
 func (f paddingFrame) getType() frameType {

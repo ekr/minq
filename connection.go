@@ -364,30 +364,25 @@ func (c *Connection) sendSpecialClearPacket(pt uint8, connId ConnectionId, pn ui
 	return nil
 }
 
-func (c *Connection) sendPacketRaw(pt uint8, payload []byte) error {
+func (c *Connection) sendPacketRaw(pt uint8, connId ConnectionId, pn uint64, version VersionNumber, payload []byte) error {
 	c.log(logTypeConnection, "Sending packet PT=%v PN=%x: %s", pt, c.nextSendPacket, dumpPacket(payload))
 	left := c.mtu
-
-	var connId ConnectionId
 	var aead cipher.AEAD
 	if c.writeProtected != nil {
 		aead = c.writeProtected.aead
 	}
-	connId = c.serverConnId
 
 	if c.role == RoleClient {
 		switch {
 		case pt == packetTypeClientInitial:
 			aead = c.writeClear
-			connId = c.clientConnId
 		case pt == packetTypeClientCleartext:
 			aead = c.writeClear
 		case pt == packetType0RTTProtected:
-			connId = c.clientConnId
 			aead = nil // This will cause a crash b/c 0-RTT doesn't work yet
 		}
 	} else {
-		if pt == packetTypeServerCleartext || pt == packetTypeVersionNegotiation {
+		if pt == packetTypeServerCleartext || pt == packetTypeServerStatelessRetry {
 			aead = c.writeClear
 		}
 	}
@@ -399,12 +394,11 @@ func (c *Connection) sendPacketRaw(pt uint8, payload []byte) error {
 		packetHeader{
 			pt | packetFlagLongHeader,
 			connId,
-			c.nextSendPacket,
-			c.version,
+			pn,
+			version,
 		},
 		nil,
 	}
-	c.nextSendPacket++
 
 	// Encode the header so we know how long it is.
 	// TODO(ekr@rtfm.com): this is gross.
@@ -439,7 +433,6 @@ func (c *Connection) sendPacket(pt uint8, tosend []frame) error {
 	payload := make([]byte, 0)
 
 	for _, f := range tosend {
-		c.log(logTypeConnection, "Packet =%v %d", f, f.f.getType())
 		_, err := f.length()
 		if err != nil {
 			return err
@@ -458,7 +451,21 @@ func (c *Connection) sendPacket(pt uint8, tosend []frame) error {
 		sent++
 	}
 
-	return c.sendPacketRaw(pt, payload)
+	connId := c.serverConnId
+	if c.role == RoleClient {
+		if pt == packetTypeClientInitial {
+			connId = c.clientConnId
+		}
+	} else {
+		if pt == packetTypeServerStatelessRetry {
+			connId = c.clientConnId
+		}
+	}
+
+	pn := c.nextSendPacket
+	c.nextSendPacket++
+
+	return c.sendPacketRaw(pt, connId, pn, c.version, payload)
 }
 
 func (c *Connection) sendFramesInPacket(pt uint8, tosend []frame) error {
@@ -782,7 +789,7 @@ func (c *Connection) input(p []byte) error {
 	c.log(logTypeTrace, "Receiving packet len=%v %v", len(p), hex.EncodeToString(p))
 	hdrlen, err := decode(&hdr, p)
 	if err != nil {
-		c.log(logTypeConnection, "Could not decode packet")
+		c.log(logTypeConnection, "Could not decode packetX: %v", hex.EncodeToString(p))
 		return wrapE(ErrorInvalidPacket, err)
 	}
 	assert(int(hdrlen) <= len(p))
@@ -811,13 +818,8 @@ func (c *Connection) input(p []byte) error {
 	c.log(logTypeFlowControl, "EKR: Received packet %x len=%d", hdr.PacketNumber, len(p))
 	c.log(logTypeConnection, "Packet header %v, %d", hdr, typ)
 
-	// Process messages from the server that don't set up the connection
-	// first.
-	switch typ {
-	case packetTypeVersionNegotiation:
+	if typ == packetTypeVersionNegotiation {
 		return c.processVersionNegotiation(&hdr, p[hdrlen:])
-	case packetTypeServerStatelessRetry:
-		return c.processStatelessRetry(&hdr, p[hdrlen:])
 	}
 
 	aead := c.readClear
@@ -851,6 +853,11 @@ func (c *Connection) input(p []byte) error {
 		c.log(logTypeConnection, "Could not unprotect packet")
 		c.log(logTypeTrace, "Packet %h", p)
 		return wrapE(ErrorInvalidPacket, err)
+	}
+
+	// Now that we know it's valid, process stateless retry.
+	if typ == packetTypeServerStatelessRetry {
+		return c.processStatelessRetry(&hdr, payload)
 	}
 
 	if !c.recvd.initialized() {
@@ -952,7 +959,7 @@ func (c *Connection) processClientInitial(hdr *packetHeader, payload []byte) err
 		if err != nil {
 			return err
 		}
-		return c.sendSpecialClearPacket(packetTypeServerStatelessRetry, hdr.ConnectionID, hdr.PacketNumber, kQuicVersion, sf.encoded)
+		return c.sendPacketRaw(packetTypeServerStatelessRetry, hdr.ConnectionID, hdr.PacketNumber, kQuicVersion, sf.encoded)
 	}
 
 	assert(c.tls.getHsState() == "ServerStateWaitFinished")
@@ -1143,7 +1150,7 @@ func (c *Connection) processVersionNegotiation(hdr *packetHeader, payload []byte
 // I assume here that Stateless Retry contains just a single stream frame,
 // contra the spec but per https://github.com/quicwg/base-drafts/pull/817
 func (c *Connection) processStatelessRetry(hdr *packetHeader, payload []byte) error {
-	c.log(logTypeConnection, "%s: Processing stateless retry packet", c.label())
+	c.log(logTypeConnection, "%s: Processing stateless retry packet %s", c.label(), dumpPacket(payload))
 	if c.recvd.initialized() {
 		c.log(logTypeConnection, "%s: Ignoring stateless retry after received another packet", c.label())
 	}
@@ -1159,7 +1166,7 @@ func (c *Connection) processStatelessRetry(hdr *packetHeader, payload []byte) er
 	}
 
 	if int(n) != len(payload) {
-		return nonFatalError("Extra stuff in Stateless Retry")
+		return nonFatalError("Extra stuff in Stateless Retry: (%d != %d) %v", n, len(payload), hex.EncodeToString(payload[n:]))
 	}
 
 	if sf.StreamId != 0 {

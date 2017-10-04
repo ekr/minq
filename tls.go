@@ -91,7 +91,6 @@ func (c *tlsConn) handshake(input []byte) ([]byte, error) {
 			return nil, err
 		}
 	}
-	assert(c.conn.OutputLen() == 0)
 	alert := c.tls.Handshake()
 
 	switch alert {
