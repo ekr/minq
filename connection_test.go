@@ -128,10 +128,10 @@ type csPair struct {
 func newCsPair(t *testing.T) *csPair {
 	cTrans, sTrans := newTestTransportPair(true)
 
-	client := NewConnection(cTrans, RoleClient, testTlsConfig, nil)
+	client := NewConnection(cTrans, RoleClient, &testTlsConfig, nil)
 	assertNotNil(t, client, "Couldn't make client")
 
-	server := NewConnection(sTrans, RoleServer, testTlsConfig, nil)
+	server := NewConnection(sTrans, RoleServer, &testTlsConfig, nil)
 	assertNotNil(t, server, "Couldn't make server")
 
 	return &csPair{
@@ -156,7 +156,7 @@ func (pair *csPair) handshake(t *testing.T) {
 func TestSendCI(t *testing.T) {
 	cTrans, _ := newTestTransportPair(true)
 
-	client := NewConnection(cTrans, RoleClient, testTlsConfig, nil)
+	client := NewConnection(cTrans, RoleClient, &testTlsConfig, nil)
 	assertNotNil(t, client, "Couldn't make client")
 
 	err := client.sendClientInitial()
@@ -166,10 +166,10 @@ func TestSendCI(t *testing.T) {
 func TestSendReceiveCIOnly(t *testing.T) {
 	cTrans, sTrans := newTestTransportPair(true)
 
-	client := NewConnection(cTrans, RoleClient, testTlsConfig, nil)
+	client := NewConnection(cTrans, RoleClient, &testTlsConfig, nil)
 	assertNotNil(t, client, "Couldn't make client")
 
-	server := NewConnection(sTrans, RoleServer, testTlsConfig, nil)
+	server := NewConnection(sTrans, RoleServer, &testTlsConfig, nil)
 	assertNotNil(t, server, "Couldn't make server")
 
 	err := client.sendClientInitial()
@@ -183,10 +183,10 @@ func TestSendReceiveCIOnly(t *testing.T) {
 func TestSendReceiveDupCI(t *testing.T) {
 	cTrans, sTrans := newTestTransportPair(true)
 
-	client := NewConnection(cTrans, RoleClient, testTlsConfig, nil)
+	client := NewConnection(cTrans, RoleClient, &testTlsConfig, nil)
 	assertNotNil(t, client, "Couldn't make client")
 
-	server := NewConnection(sTrans, RoleServer, testTlsConfig, nil)
+	server := NewConnection(sTrans, RoleServer, &testTlsConfig, nil)
 	assertNotNil(t, server, "Couldn't make server")
 
 	err := client.sendClientInitial()
@@ -206,10 +206,10 @@ func TestSendReceiveDupCI(t *testing.T) {
 func TestSendReceiveCISI(t *testing.T) {
 	cTrans, sTrans := newTestTransportPair(true)
 
-	client := NewConnection(cTrans, RoleClient, testTlsConfig, nil)
+	client := NewConnection(cTrans, RoleClient, &testTlsConfig, nil)
 	assertNotNil(t, client, "Couldn't make client")
 
-	server := NewConnection(sTrans, RoleServer, testTlsConfig, nil)
+	server := NewConnection(sTrans, RoleServer, &testTlsConfig, nil)
 	assertNotNil(t, server, "Couldn't make server")
 
 	err := client.sendClientInitial()
@@ -223,6 +223,8 @@ func TestSendReceiveCISI(t *testing.T) {
 
 	err = inputAll(server)
 	assertNotError(t, err, "Error processing CFIN")
+
+	fmt.Println("Handshake should be complete")
 
 	err = inputAll(client)
 	assertNotError(t, err, "Error processing NST")
@@ -493,12 +495,12 @@ func TestSendReceiveStreamRst(t *testing.T) {
 func TestVersionNegotiationPacket(t *testing.T) {
 	cTrans, sTrans := newTestTransportPair(true)
 
-	client := NewConnection(cTrans, RoleClient, testTlsConfig, nil)
+	client := NewConnection(cTrans, RoleClient, &testTlsConfig, nil)
 	assertNotNil(t, client, "Couldn't make client")
 	// Set the client version to something bogus.
 	client.version = kQuicGreaseVersion2
 
-	server := NewConnection(sTrans, RoleServer, testTlsConfig, nil)
+	server := NewConnection(sTrans, RoleServer, &testTlsConfig, nil)
 	assertNotNil(t, server, "Couldn't make server")
 
 	err := client.sendClientInitial()
@@ -522,7 +524,7 @@ func TestVersionNegotiationPacket(t *testing.T) {
 
 func TestCantMakeRemoteStream(t *testing.T) {
 	cTrans, _ := newTestTransportPair(true)
-	client := NewConnection(cTrans, RoleClient, testTlsConfig, nil)
+	client := NewConnection(cTrans, RoleClient, &testTlsConfig, nil)
 
 	_, _, err := client.ensureStream(1, true)
 	assertEquals(t, ErrorProtocolViolation, err)
@@ -531,10 +533,10 @@ func TestCantMakeRemoteStream(t *testing.T) {
 func TestStatelessRetry(t *testing.T) {
 	cTrans, sTrans := newTestTransportPair(true)
 
-	client := NewConnection(cTrans, RoleClient, testTlsConfig, nil)
+	client := NewConnection(cTrans, RoleClient, &testTlsConfig, nil)
 	assertNotNil(t, client, "Couldn't make client")
 
-	hrrConfig := testTlsConfig
+	hrrConfig := &testTlsConfig
 	hrrConfig.ForceHrr = true
 
 	server := NewConnection(sTrans, RoleServer, hrrConfig, nil)

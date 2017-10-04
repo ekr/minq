@@ -119,8 +119,9 @@ func main() {
 
 	utrans := minq.NewUdpTransport(usock, uaddr)
 
+	config := minq.NewTlsConfig(serverName)
 	conn := minq.NewConnection(utrans, minq.RoleClient,
-		minq.NewTlsConfig(serverName), &connHandler{})
+		&config, &connHandler{})
 
 	log.Printf("Client conn id=%x\n", conn.ClientId())
 

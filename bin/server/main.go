@@ -8,15 +8,15 @@ import (
 	"fmt"
 	"github.com/cloudflare/cfssl/helpers"
 	"github.com/ekr/minq"
-	"io/ioutil"
 	"io"
+	"io/ioutil"
+	"log"
 	"net"
 	"os"
+	"runtime/pprof"
 	"strconv"
 	"strings"
 	"time"
-	"runtime/pprof"
-	"log"
 )
 
 var addr string
@@ -58,7 +58,7 @@ func (h *feedthroughServerHandler) NewConnection(c *minq.Connection) {
 }
 
 type feedthroughConnHandler struct {
-	echo bool
+	echo      bool
 	bytesRead int
 }
 
@@ -111,7 +111,7 @@ type httpServerHandler struct {
 
 func (h *httpServerHandler) NewConnection(c *minq.Connection) {
 	log.Println("New connection")
-	c.SetHandler(&httpConnHandler{make(map[uint32]*httpStream, 0)})
+	c.SetHandler(&httpConnHandler{make(map[uint64]*httpStream, 0)})
 	conns[c.Id()] = &conn{c, time.Now()}
 }
 
@@ -122,7 +122,7 @@ type httpStream struct {
 }
 
 type httpConnHandler struct {
-	streams map[uint32]*httpStream
+	streams map[uint64]*httpStream
 }
 
 func (h *httpConnHandler) StateChanged(s minq.State) {
@@ -234,15 +234,15 @@ func main() {
 	var certChain []*x509.Certificate
 
 	if cpuProfile != "" {
-        f, err := os.Create(cpuProfile)
-        if err != nil {
-            log.Printf("Could not create CPU profile file %v err=%v\n", cpuProfile, err)
+		f, err := os.Create(cpuProfile)
+		if err != nil {
+			log.Printf("Could not create CPU profile file %v err=%v\n", cpuProfile, err)
 			return
-        }
-        pprof.StartCPUProfile(f)
+		}
+		pprof.StartCPUProfile(f)
 		log.Println("CPU profiler started")
-        defer pprof.StopCPUProfile()
-    }
+		defer pprof.StopCPUProfile()
+	}
 
 	config := minq.NewTlsConfig(serverName)
 	config.ForceHrr = statelessReset
@@ -310,7 +310,7 @@ func main() {
 	} else {
 		handler = &feedthroughServerHandler{echo}
 	}
-	server := minq.NewServer(minq.NewUdpTransportFactory(usock), config, handler)
+	server := minq.NewServer(minq.NewUdpTransportFactory(usock), &config, handler)
 
 	stdin := make(chan []byte)
 	go func() {
@@ -330,11 +330,10 @@ func main() {
 		}
 	}()
 
-
 	for {
 
 		select {
-		case _, open := <- stdin:
+		case _, open := <-stdin:
 			if open == false {
 				log.Println("Shutdown signal received from stdin. Goodnight.")
 				return

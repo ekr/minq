@@ -59,8 +59,9 @@ func main() {
 	}
 
 	strans := &stdoutTransport{}
+	config := minq.NewTlsConfig(serverName)
 	conn := minq.NewConnection(strans, minq.RoleServer,
-		minq.NewTlsConfig(serverName), &connHandler{})
+		&config, &connHandler{})
 	err = conn.Input(in)
 	if err != nil {
 		fmt.Println("Couldn't process input: ", err)

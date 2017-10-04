@@ -131,7 +131,7 @@ type Connection struct {
 
 // Create a new QUIC connection. Should only be used with role=RoleClient,
 // though we use it with RoleServer internally.
-func NewConnection(trans Transport, role uint8, tls TlsConfig, handler ConnectionHandler) *Connection {
+func NewConnection(trans Transport, role uint8, tls *TlsConfig, handler ConnectionHandler) *Connection {
 	c := Connection{
 		handler,
 		role,

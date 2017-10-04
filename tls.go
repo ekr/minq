@@ -58,13 +58,14 @@ func NewTlsConfig(serverName string) TlsConfig {
 }
 
 type tlsConn struct {
+	config   *TlsConfig
 	conn     *connBuffer
 	tls      *mint.Conn
 	finished bool
 	cs       *mint.CipherSuiteParams
 }
 
-func newTlsConn(conf TlsConfig, role uint8) *tlsConn {
+func newTlsConn(conf *TlsConfig, role uint8) *tlsConn {
 	isClient := true
 	if role == RoleServer {
 		isClient = false
@@ -73,6 +74,7 @@ func newTlsConn(conf TlsConfig, role uint8) *tlsConn {
 	c := newConnBuffer()
 
 	return &tlsConn{
+		conf,
 		c,
 		mint.NewConn(c, conf.toMint(), isClient),
 		false,

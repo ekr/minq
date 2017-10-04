@@ -17,7 +17,7 @@ type TransportFactory interface {
 type Server struct {
 	handler      ServerHandler
 	transFactory TransportFactory
-	tls          TlsConfig
+	tls          *TlsConfig
 	addrTable    map[string]*Connection
 	idTable      map[ConnectionId]*Connection
 }
@@ -101,7 +101,7 @@ func (s *Server) ConnectionCount() int {
 }
 
 // Create a new QUIC server with the provide TLS config.
-func NewServer(factory TransportFactory, tls TlsConfig, handler ServerHandler) *Server {
+func NewServer(factory TransportFactory, tls *TlsConfig, handler ServerHandler) *Server {
 	s := Server{
 		handler,
 		factory,
