@@ -13,6 +13,7 @@ var addr string
 var serverName string
 var doHttp string
 var httpCount int
+var heartbeat int
 
 type connHandler struct {
 }
@@ -72,6 +73,7 @@ func main() {
 	flag.StringVar(&serverName, "server-name", "", "SNI")
 	flag.StringVar(&doHttp, "http", "", "Do HTTP/0.9 with provided URL")
 	flag.IntVar(&httpCount, "httpCount", 1, "Number of parallel HTTP requests to start")
+	flag.IntVar(&heartbeat, "heartbeat", 0, "heartbeat frequency [ms]")
 	flag.Parse()
 
 	// Default to the host component of addr.
@@ -149,6 +151,15 @@ func main() {
 			}
 		}
 	}()
+
+	if heartbeat > 0 && doHttp == ""{
+        ticker := time.NewTicker(time.Millisecond * time.Duration(heartbeat))
+        go func() {
+            for t := range ticker.C {
+                stdin <- []byte(fmt.Sprintf("Heartbeat at %v\n", t))
+            }
+        }()
+    }
 
 	if doHttp == "" {
 		// Read from stdin.
