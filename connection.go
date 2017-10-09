@@ -421,7 +421,7 @@ func (c *Connection) sendPacketRaw(pt uint8, connId ConnectionId, pn uint64, ver
 	// Encode the header so we know how long it is.
 	// TODO(ekr@rtfm.com): this is gross.
 	hdr, err := encode(&p.packetHeader)
-	if err != nil {
+ 	if err != nil {
 		return err
 	}
 	left -= len(hdr)
@@ -627,6 +627,11 @@ func (c *Connection) sendCombinedPacket(pt uint8, frames []frame, acks ackRanges
 	asent := int(0)
 	var err error
 
+	left := c.mtu
+	aead := c.determineAead(pt)
+	left -= aead.Overhead()
+	left -= kLongHeaderLength //TODO make this check if we are using a long or short header
+
 	for _, f := range frames {
 		l, err := f.length()
 		if err != nil {
@@ -676,7 +681,6 @@ func (c *Connection) queueStreamFrames(pt uint8, protected bool, bareAcks bool) 
 	txAge := time.Duration(c.retransmitTime) * time.Millisecond
 
 	aeadOverhead := c.determineAead(pt).Overhead()
-
 	leftInitial := c.mtu - aeadOverhead - kLongHeaderLength // TODO(ekr@rtfm.com): check header type
 	left := leftInitial
 
