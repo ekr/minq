@@ -579,9 +579,7 @@ func (c *Connection) sendOnStream(streamId uint32, data []byte) error {
 	return err
 }
 
-func (c *Connection) makeAckFrame(acks ackRanges, maxlength int) (*frame, int, error) {
-	maxacks := (maxlength - 16) / 5 // We are using 32-byte values for all the variable-lengths
-
+func (c *Connection) makeAckFrame(acks ackRanges, maxacks int) (*frame, int, error) {
 	if len(acks) > maxacks {
 		acks = acks[:maxacks]
 	}
@@ -633,10 +631,19 @@ func (c *Connection) sendCombinedPacket(pt uint8, frames []frame, acks ackRanges
 	asent := int(0)
 	var err error
 
-	if len(acks) > 0 {
-		var af *frame
+	for _, f := range frames {
+		l, err := f.length()
+		if err != nil {
+			return 0, err
+		}
+		left -= l
+	}
 
-		af, asent, err = c.makeAckFrame(acks, left)
+	// See if there is space for any acks, and if there are acks waiting
+	maxacks := (left - 16) / 5 // We are using 32-byte values for all the variable-lengths
+	if len(acks) > 0 && maxacks > 0 {
+		var af *frame
+		af, asent, err = c.makeAckFrame(acks, maxacks)
 		if err != nil {
 			return 0, err
 		}
