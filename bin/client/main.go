@@ -153,13 +153,13 @@ func main() {
 	}()
 
 	if heartbeat > 0 && doHttp == ""{
-        ticker := time.NewTicker(time.Millisecond * time.Duration(heartbeat))
-        go func() {
-            for t := range ticker.C {
-                stdin <- []byte(fmt.Sprintf("Heartbeat at %v\n", t))
-            }
-        }()
-    }
+		ticker := time.NewTicker(time.Millisecond * time.Duration(heartbeat))
+		go func() {
+			for t := range ticker.C {
+				stdin <- []byte(fmt.Sprintf("Heartbeat at %v\n", t))
+			}
+		}()
+	}
 
 	if doHttp == "" {
 		// Read from stdin.
