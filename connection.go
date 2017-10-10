@@ -627,28 +627,14 @@ func (c *Connection) sendCombinedPacket(pt uint8, frames []frame, acks ackRanges
 	asent := int(0)
 	var err error
 
-	left := c.mtu
-	aead := c.determineAead(pt)
-	left -= aead.Overhead()
-	left -= kLongHeaderLength //TODO make this check if we are using a long or short header
-
-	for _, f := range frames {
-		l, err := f.length()
-		if err != nil {
-			return 0, err
-		}
-		left -= l
-	}
-
 	// See if there is space for any acks, and if there are acks waiting
-	maxackblocks := (left - 16) / 5 // We are using 32-byte values for all the variable-lengths
+	maxacks := (left - 16) / 5 // We are using 32-byte values for all the variable-lengths
 	if maxackblocks > 255 {
 		maxackblocks = 255
 	}
-
-	if len(acks) > 0 && (left - 16) >= 0 {
+	if len(acks) > 0 && maxacks > 0 {
 		var af *frame
-		af, asent, err = c.makeAckFrame(acks, uint8(maxackblocks))
+		af, asent, err = c.makeAckFrame(acks, maxacks)
 		if err != nil {
 			return 0, err
 		}
