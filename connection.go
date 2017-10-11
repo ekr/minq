@@ -75,8 +75,8 @@ type ConnectionHandler interface {
 
 // Internal structures indicating ranges to ACK
 type ackRange struct {
-	lastPacket uint64
-	count      uint64
+	lastPacket uint64	/* Packet with highest pn in range */
+	count      uint64	/* Total number of packets in range */
 }
 
 type ackRanges []ackRange
@@ -579,18 +579,18 @@ func (c *Connection) sendOnStream(streamId uint32, data []byte) error {
 	return err
 }
 
-func (c *Connection) makeAckFrame(acks ackRanges, maxacks int) (*frame, int, error) {
-	if len(acks) > maxacks {
-		acks = acks[:maxacks]
-	}
+func (c *Connection) makeAckFrame(acks ackRanges, maxackblocks uint8) (*frame, int, error) {
+//	if len(acks) > maxackblocks {
+//		acks = acks[:maxackblocks]
+//	}
 
-	af, err := newAckFrame(acks)
+	af, rangesSent, err := newAckFrame(acks, maxackblocks)
 	if err != nil {
 		c.log(logTypeConnection, "Couldn't prepare ACK frame %v", err)
 		return nil, 0, err
 	}
 
-	return af, len(acks), nil
+	return af, rangesSent, nil
 }
 
 func (c *Connection) sendQueued(bareAcks bool) (int, error) {
@@ -640,10 +640,14 @@ func (c *Connection) sendCombinedPacket(pt uint8, frames []frame, acks ackRanges
 	}
 
 	// See if there is space for any acks, and if there are acks waiting
-	maxacks := (left - 16) / 5 // We are using 32-byte values for all the variable-lengths
-	if len(acks) > 0 && maxacks > 0 {
+	maxackblocks := (left - 16) / 5 // We are using 32-byte values for all the variable-lengths
+	if maxackblocks > 255 {
+		maxackblocks = 255
+	}
+
+	if len(acks) > 0 && (left - 16) >= 0 {
 		var af *frame
-		af, asent, err = c.makeAckFrame(acks, maxacks)
+		af, asent, err = c.makeAckFrame(acks, uint8(maxackblocks))
 		if err != nil {
 			return 0, err
 		}
@@ -1416,49 +1420,73 @@ func (c *Connection) removeAckedFrames(pn uint64, qp *[]frame) {
 	*qp = q
 }
 
+func (c* Connection) processAckRange(start uint64, end uint64, protected bool){
+	pn := start
+	// Unusual loop structure to avoid weirdness at 2^64-1
+	for {
+		// TODO(ekr@rtfm.com): properly filter for ACKed packets which are in the
+		// wrong key phase.
+		c.log(logTypeConnection, "%s: processing ACK for PN=%x", c.label(), pn)
+
+		// 1. Go through the outgoing queues and remove all the acked chunks.
+		c.removeAckedFrames(pn, &c.outputClearQ)
+		if protected {
+			c.removeAckedFrames(pn, &c.outputProtectedQ)
+		}
+
+		// 2. Mark all the packets that were ACKed in this packet as double-acked.
+		acks, ok := c.sentAcks[pn]
+		if ok {
+			for _, a := range acks {
+				c.log(logTypeAck, "Ack2 for ack range last=%v len=%v", a.lastPacket, a.count)
+				for i := uint64(0); i < a.count; i++ {
+					c.recvd.packetSetAcked2(a.lastPacket - i)
+				}
+			}
+		}
+
+		if pn == end {
+			break
+		}
+		pn++
+	}
+}
+
 func (c *Connection) processAckFrame(f *ackFrame, protected bool) error {
 	end := f.LargestAcknowledged
 	start := end - f.AckBlockLength
 
-	// Go through all the ACK blocks and process everything.
-	for {
-		c.log(logTypeAck, "%s: processing ACK range %x-%x", c.label(), start, end)
-		// Unusual loop structure to avoid weirdness at 2^64-1
-		pn := start
-		for {
-			// TODO(ekr@rtfm.com): properly filter for ACKed packets which are in the
-			// wrong key phase.
-			c.log(logTypeConnection, "%s: processing ACK for PN=%x", c.label(), pn)
+	/* Process the First ACK Block */
+	c.log(logTypeAck, "%s: processing ACK range %x-%x", c.label(), start, end)
+	c.processAckRange(start, end, protected)
 
-			// 1. Go through the outgoing queues and remove all the acked chunks.
-			c.removeAckedFrames(pn, &c.outputClearQ)
-			if protected {
-				c.removeAckedFrames(pn, &c.outputProtectedQ)
-			}
+	/* Process aditional ACK Blocks */
+	last := start
+	rawAckBlocks := f.AckBlockSection
+	assert(len(rawAckBlocks) == int(f.NumBlocks * 5)) //TODO manage non 32-bit ack blocks
+	for i := f.NumBlocks ; i > 0; i-- {
+		var decoded ackBlock
+		bytesread, err := decode(&decoded, rawAckBlocks)
+		if err != nil {
+			return err
+		}
+		rawAckBlocks = rawAckBlocks[bytesread:]
 
-			// 2. Mark all the packets that were ACKed in this packet as double-acked.
-			acks, ok := c.sentAcks[pn]
-			if ok {
-				for _, a := range acks {
-					c.log(logTypeAck, "Ack2 for ack range last=%v len=%v", a.lastPacket, a.count)
-					for i := uint64(0); i < a.count; i++ {
-						c.recvd.packetSetAcked2(a.lastPacket - i)
-					}
-				}
-			}
+		end = last - uint64(decoded.Gap) - 1
+		start = end - decoded.Length + 1
 
-			if pn == end {
-				break
-			}
-			pn++
+		/* This happens if a gap is larger than 255 */
+		if start > end {
+			last -= uint64(decoded.Gap)
+			c.log(logTypeAck, "%s: encountered extra large ACK gap", c.label())
+			continue
 		}
 
-		// TODO(ekr@rtfm.com): Process subsequent ACK blocks.
-		break
+		last = start
+		c.log(logTypeAck, "%s: processing ACK range %x-%x", c.label(), start, end)
+		c.processAckRange(start, end, protected)
 	}
-
 	// TODO(ekr@rtfm.com): Process the ACK timestamps.
-
 	return nil
 }
 
