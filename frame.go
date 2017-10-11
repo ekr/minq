@@ -386,16 +386,17 @@ func (f ackFrame) TimestampSection__length() uintptr {
 	return uintptr(f.NumTS * 5)
 }
 
-func newAckFrame(rs ackRanges) (*frame, error) {
+const (
+	maxAckGap = 255
+)
+
+func newAckFrame(rs ackRanges, maxackblocks uint8) (*frame, int, error) {
 	logf(logTypeFrame, "Making ACK frame %v", rs)
 
+	/* FIRST, fill in the basic info of the ACK frame */
 	var f ackFrame
-
 	f.Type = kFrameTypeAck | 0xa
-	if len(rs) > 1 {
-		f.Type |= 0x10
-		f.NumBlocks = uint8(len(rs) - 1)
-	}
+	f.NumBlocks = 0
 	f.LargestAcknowledged = rs[0].lastPacket
 	f.AckBlockLength = rs[0].count - 1
 	last := f.LargestAcknowledged - f.AckBlockLength
@@ -404,24 +405,58 @@ func newAckFrame(rs ackRanges) (*frame, error) {
 	f.NumTS = 0
 	f.TimestampSection = nil
 
-	for i := 1; i < len(rs); i++ {
-		gap := last - rs[i].lastPacket
-		assert(gap < 256) // TODO(ekr@rtfm.com): handle this.
-		b := &ackBlock{
-			4, // Fixed 32-bit width (see 0xb above)
-			uint8(last - rs[i].lastPacket),
-			rs[i].count,
+	addedRanges := 1
+
+	/* SECOND, add the remaining ACK blocks that fit and that we have */
+	for (maxackblocks > f.NumBlocks) && (addedRanges < len(rs)) {
+
+		/* calculate blocks needed for the next range */
+		gap := last - rs[addedRanges].lastPacket - 1
+		blocksneeded := uint64((gap / maxAckGap) + 1)
+		if blocksneeded > uint64(maxackblocks) {
+			/* break if there is no space */
+			break
 		}
-		last = rs[i].lastPacket - rs[i].count + 1
+
+		/* place the needed empty blocks */
+		for i := uint64(0); i < blocksneeded - 1; i++ {
+			b := &ackBlock{
+				4, // Fixed 32-bit width (see 0xb above)
+				uint8(maxAckGap),
+				0,
+			}
+			last -= maxAckGap
+			encoded, err := encode(b)
+			if err != nil {
+				return nil, 0, err
+			}
+			f.Type |= 0x10
+			f.NumBlocks += 1
+			f.AckBlockSection = append(f.AckBlockSection, encoded...)
+		}
+
+		/* Now place the actual block */
+		gap = last - rs[addedRanges].lastPacket - 1
+		assert(gap < 256)
+		b := &ackBlock{
+			4,
+			uint8(gap),
+			rs[addedRanges].count,
+		}
+		last = rs[addedRanges].lastPacket - rs[addedRanges].count + 1
 		encoded, err := encode(b)
 		if err != nil {
-			return nil, err
+			return nil, 0, err
 		}
+		f.Type |= 0x10
+		f.NumBlocks += 1
 		f.AckBlockSection = append(f.AckBlockSection, encoded...)
+
+		addedRanges += 1
 	}
 
 	ret := newFrame(0, &f)
-	return &ret, nil
+	return &ret, addedRanges, nil
 }
 
 // STREAM

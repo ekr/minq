@@ -9,7 +9,7 @@ import (
 func TestAckFrameOneRange(t *testing.T) {
 	ar := []ackRange{{0xdeadbeef, 2}}
 
-	f, err := newAckFrame(ar)
+	f, _, err := newAckFrame(ar, 5)
 	assertNotError(t, err, "Couldn't make ack frame")
 
 	err = f.encode()
@@ -25,7 +25,7 @@ func TestAckFrameOneRange(t *testing.T) {
 func TestAckFrameTwoRanges(t *testing.T) {
 	ar := []ackRange{{0xdeadbeef, 2}, {0xdeadbee0, 1}}
 
-	f, err := newAckFrame(ar)
+	f, _, err := newAckFrame(ar, 10)
 	assertNotError(t, err, "Couldn't make ack frame")
 
 	err = f.encode()
