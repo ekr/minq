@@ -628,13 +628,16 @@ func (c *Connection) sendCombinedPacket(pt uint8, frames []frame, acks ackRanges
 	var err error
 
 	// See if there is space for any acks, and if there are acks waiting
-	maxacks := (left - 16) / 5 // We are using 32-byte values for all the variable-lengths
+	maxackblocks := (left - 16) / 5 // We are using 32-byte values for all the variable-lengths
 	if maxackblocks > 255 {
 		maxackblocks = 255
 	}
-	if len(acks) > 0 && maxacks > 0 {
+
+	// (left - 16) is positive if there is place enough for a basic ACK frame without
+	// aditional ACK blocks.
+	if len(acks) > 0 && (left - 16) >= 0 {
 		var af *frame
-		af, asent, err = c.makeAckFrame(acks, maxacks)
+// 		af, asent, err = c.makeAckFrame(acks, uint8(maxackblocks))
 		if err != nil {
 			return 0, err
 		}
@@ -1450,6 +1453,7 @@ func (c *Connection) processAckFrame(f *ackFrame, protected bool) error {
 	last := start
 	rawAckBlocks := f.AckBlockSection
 	assert(len(rawAckBlocks) == int(f.NumBlocks * 5)) //TODO(ekr@rtmf.com) manage non 32-bit ack blocks
+
 	for i := f.NumBlocks ; i > 0; i-- {
 		var decoded ackBlock
 		bytesread, err := decode(&decoded, rawAckBlocks)
