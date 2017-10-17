@@ -127,6 +127,7 @@ type Connection struct {
 	tpHandler        *transportParametersHandler
 	log              loggingFunction
 	retransmitTime   uint32
+	cc               CongestionController
 }
 
 // Create a new QUIC connection. Should only be used with role=RoleClient,
@@ -159,6 +160,7 @@ func NewConnection(trans Transport, role uint8, tls TlsConfig, handler Connectio
 		nil,
 		nil,
 		kDefaultInitialRtt,
+		nil,
 	}
 
 	c.log = newConnectionLogger(&c)
