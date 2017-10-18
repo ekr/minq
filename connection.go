@@ -127,7 +127,7 @@ type Connection struct {
 	tpHandler        *transportParametersHandler
 	log              loggingFunction
 	retransmitTime   uint32
-	cc               CongestionController
+	congestion       CongestionController
 }
 
 // Create a new QUIC connection. Should only be used with role=RoleClient,
@@ -160,7 +160,7 @@ func NewConnection(trans Transport, role uint8, tls TlsConfig, handler Connectio
 		nil,
 		nil,
 		kDefaultInitialRtt,
-		nil,
+		newCongestionControllerIetf(),
 	}
 
 	c.log = newConnectionLogger(&c)
@@ -370,6 +370,7 @@ func (c *Connection) sendSpecialClearPacket(pt uint8, connId ConnectionId, pn ui
 		return err
 	}
 	packet = append(packet, payload...)
+	c.congestion.OnPacketSent(pn, len(packet))
 	c.transport.Send(packet)
 	return nil
 }
@@ -445,6 +446,7 @@ func (c *Connection) sendPacketRaw(pt uint8, connId ConnectionId, pn uint64, ver
 	}
 
 	c.log(logTypeTrace, "Sending packet len=%d, len=%v", len(packet), hex.EncodeToString(packet))
+	c.congestion.OnPacketSent(pn, len(packet))
 	c.transport.Send(packet)
 
 	return nil
@@ -538,11 +540,12 @@ func (c *Connection) sendFramesInPacket(pt uint8, tosend []frame) error {
 	if longHeader {
 		npt |= packetFlagLongHeader
 	}
+	pn := c.nextSendPacket
 	p := packet{
 		packetHeader{
 			npt,
 			connId,
-			c.nextSendPacket,
+			pn,
 			c.version,
 		},
 		nil,
@@ -576,6 +579,7 @@ func (c *Connection) sendFramesInPacket(pt uint8, tosend []frame) error {
 	packet := append(hdr, protected...)
 
 	c.log(logTypeTrace, "Sending packet len=%d, len=%v", len(packet), hex.EncodeToString(packet))
+	c.congestion.OnPacketSent(pn, len(packet))
 	c.transport.Send(packet)
 
 	return nil
@@ -602,6 +606,12 @@ func (c *Connection) makeAckFrame(acks ackRanges, maxackblocks uint8) (*frame, i
 	return af, rangesSent, nil
 }
 
+//TODO do not forget send counter
+//TODO look at waht was going on with the bareAcks
+/*
+ * Stucture: first enqueue, then decide on what to send.
+ */
+
 func (c *Connection) sendQueued(bareAcks bool) (int, error) {
 	if c.state == StateInit || c.state == StateWaitClientInitial {
 		return 0, nil
@@ -609,24 +619,45 @@ func (c *Connection) sendQueued(bareAcks bool) (int, error) {
 
 	sent := int(0)
 
-	// First send stream 0 if needed.
-	pt := uint8(packetTypeClientCleartext)
-	if c.role == RoleServer {
-		pt = packetTypeServerCleartext
+	/*
+	 * ENQUEUE STUFF
+	 */
+
+	/* FIRST enqueue data for stream 0 */
+	err := c.queueStreamFrames(false)
+	if err != nil {
+		return sent, err
 	}
 
-	// Now send other streams if we are in encrypted mode.
+	/* SECOND enqueue data for protected streams */
 	if c.state == StateEstablished {
-		s, err := c.queueStreamFrames(packetType1RTTProtectedPhase0, true, bareAcks)
+		err := c.queueStreamFrames(true)
+		if err != nil {
+			return sent, err
+		}
+	}
+
+	/*
+	 * STEND STUFF
+	 */
+
+	/* THIRD send enqueued data from protected streams */
+	if c.state == StateEstablished{
+		s, err := c.sendQueuedFrames(packetType1RTTProtectedPhase0, true, bareAcks)
 		if err != nil {
 			return sent, err
 		}
 		sent += s
-		bareAcks = false // We still want to send out data in unprotected mode but we don't need to just ACK stuff.
-
+		/* We still want to send out data in unprotected mode but we don't need to just ACK stuff. */
+		bareAcks = false
 	}
 
-	s, err := c.queueStreamFrames(pt, false, bareAcks)
+	/* FOURTH send enqueued data from stream 0 */
+	pt := uint8(packetTypeClientCleartext)
+	if c.role == RoleServer {
+		pt = packetTypeServerCleartext
+	}
+	s, err := c.sendQueuedFrames(pt, false, bareAcks)
 	if err != nil {
 		return sent, err
 	}
@@ -672,19 +703,10 @@ func (c *Connection) queueFrame(q *[]frame, f frame) {
 
 }
 
-// Send all the queued data on a set of streams with packet type |pt|
-func (c *Connection) queueStreamFrames(pt uint8, protected bool, bareAcks bool) (int, error) {
-	c.log(logTypeConnection, "%v: sendQueuedStreamData pt=%v, protected=%v",
-		c.label(), pt, protected)
-	frames := make([]frame, 0)
-	sent := int(0)
-	acks := c.recvd.prepareAckRange(protected, false)
-	now := time.Now()
-	txAge := time.Duration(c.retransmitTime) * time.Millisecond
-
-	aeadOverhead := c.determineAead(pt).Overhead()
-	leftInitial := c.mtu - aeadOverhead - kLongHeaderLength // TODO(ekr@rtfm.com): check header type
-	left := leftInitial
+/* Send all the queued data on a set of streams with packet type |pt| */
+func (c *Connection) queueStreamFrames(protected bool) error {
+	c.log(logTypeConnection, "%v: queueStreamFrames, protected=%v",
+		c.label(), protected)
 
 	var streams []*Stream
 	var q *[]frame
@@ -696,8 +718,7 @@ func (c *Connection) queueStreamFrames(pt uint8, protected bool, bareAcks bool) 
 		q = &c.outputProtectedQ
 	}
 
-	// 1. Output all the stream frames that are now permitted by stream flow control
-	//
+	/* Output all the stream frames that are now permitted by stream flow control */
 	for _, s := range streams {
 		if s != nil {
 			chunks, _ := s.outputWritable()
@@ -705,6 +726,29 @@ func (c *Connection) queueStreamFrames(pt uint8, protected bool, bareAcks bool) 
 				c.queueFrame(q, newStreamFrame(s.id, ch.offset, ch.data, ch.last))
 			}
 		}
+	}
+
+	return nil
+}
+
+func (c *Connection) sendQueuedFrames(pt uint8, protected bool, bareAcks bool) (int, error){
+	c.log(logTypeConnection, "%v: sendQueuedFrames, pt=%v, protected=%v",
+		c.label(), pt, protected)
+
+	frames := make([]frame, 0)
+	sent := int(0)
+	acks := c.recvd.prepareAckRange(protected, false)
+	now := time.Now()
+	txAge := time.Duration(c.retransmitTime) * time.Millisecond
+	aeadOverhead :=  c.determineAead(pt).Overhead()
+	left := c.mtu - aeadOverhead - kLongHeaderLength // TODO(ekr@rtfm.com): check header type
+
+	/* Select the queue we will send from */
+	var q *[]frame
+	if protected {
+		q = &c.outputProtectedQ
+	} else {
+		q = &c.outputClearQ
 	}
 
 	// 2. Now transmit all the frames permitted by connection level flow control.
@@ -742,13 +786,14 @@ func (c *Connection) queueStreamFrames(pt uint8, protected bool, bareAcks bool) 
 
 		frames = append(frames, *f)
 		left -= l
-		// Record that we send this chunk in the current
+		// Record that we send this chunk in the current packet
 		f.pns = append(f.pns, c.nextSendPacket)
 		sf, ok := f.f.(*streamFrame)
 		if ok && sf.hasFin() {
 			c.streams[sf.StreamId].closeSend()
 		}
 	}
+
 
 	// Send the remainder, plus any ACKs that are left.
 	c.log(logTypeConnection, "%s: Remainder to send? sent=%v frames=%v acks=%v bareAcks=%v",
@@ -1453,6 +1498,9 @@ func (c* Connection) processAckRange(start uint64, end uint64, protected bool){
 				}
 			}
 		}
+
+		// 3. Let congestion control know that this packet was acked
+		c.congestion.OnPacketAcked(pn)
 
 		if pn == end {
 			break
