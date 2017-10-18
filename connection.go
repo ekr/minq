@@ -1230,9 +1230,9 @@ func (c *Connection) issueStreamCredit(s *Stream, credit int) error {
 	*q = filterFrames(*q, func(f *frame) bool {
 		inner, ok := f.f.(*maxStreamDataFrame)
 		if !ok {
-			return false
+			return true
 		}
-		return inner.StreamId == s.Id()
+		return !(inner.StreamId == s.Id())
 	})
 
 	c.queueFrame(q, newMaxStreamData(s.Id(), max))
