@@ -618,22 +618,9 @@ func (c *Connection) sendQueued(bareAcks bool) (int, error) {
 }
 
 // Send a packet of stream frames, plus whatever acks fit.
-func (c *Connection) sendCombinedPacket(pt uint8, frames []frame, acks ackRanges) (int, error) {
+func (c *Connection) sendCombinedPacket(pt uint8, frames []frame, acks ackRanges, left int) (int, error) {
 	asent := int(0)
 	var err error
-
-	left := c.mtu
-	aead := c.determineAead(pt)
-	left -= aead.Overhead()
-	left -= kLongHeaderLength //TODO make this check if we are using a long or short header
-
-	for _, f := range frames {
-		l, err := f.length()
-		if err != nil {
-			return 0, err
-		}
-		left -= l
-	}
 
 	if len(acks) > 0 {
 		var af *frame
@@ -671,7 +658,7 @@ func (c *Connection) queueStreamFrames(pt uint8, protected bool, bareAcks bool) 
 	txAge := time.Duration(c.retransmitTime) * time.Millisecond
 
 	aeadOverhead :=  c.determineAead(pt).Overhead()
-	left := c.mtu - aeadOverhead - kLongHeaderLength // TODO: check header type
+	left := c.mtu - aeadOverhead - kLongHeaderLength // TODO(ekr@rtfm.com): check header type
 
 	var streams []*Stream
 	var q *[]frame
@@ -716,7 +703,7 @@ func (c *Connection) queueStreamFrames(pt uint8, protected bool, bareAcks bool) 
 		f.time = now
 
 		if left < l {
-			asent, err := c.sendCombinedPacket(pt, frames, acks)
+			asent, err := c.sendCombinedPacket(pt, frames, acks, left)
 			if err != nil {
 				return 0, err
 			}
@@ -724,7 +711,7 @@ func (c *Connection) queueStreamFrames(pt uint8, protected bool, bareAcks bool) 
 
 			acks = acks[asent:]
 			frames = make([]frame, 0)
-			left = c.mtu - aeadOverhead - kLongHeaderLength // TODO: check header type
+			left = c.mtu - aeadOverhead - kLongHeaderLength // TODO(ekr@rtfm.com): check header type
 		}
 
 		frames = append(frames, *f)
@@ -743,7 +730,7 @@ func (c *Connection) queueStreamFrames(pt uint8, protected bool, bareAcks bool) 
 	if len(frames) > 0 || (len(acks) > 0 && bareAcks) {
 		// TODO(ekr@rtfm.com): this may skip acks if there isn't
 		// room, but hopefully we eventually catch up.
-		_, err := c.sendCombinedPacket(pt, frames, acks)
+		_, err := c.sendCombinedPacket(pt, frames, acks, left)
 		if err != nil {
 			return 0, err
 		}
