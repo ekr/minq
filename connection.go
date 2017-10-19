@@ -726,34 +726,45 @@ func (c *Connection) queueStreamFrames(protected bool) error {
 	return nil
 }
 
+/* Transmit all the frames permitted by connection level flow control and
+* the congestion controller. We're going to need to be more sophisticated
+* when we actually do connection level flow control. */
 func (c *Connection) sendQueuedFrames(pt uint8, protected bool, bareAcks bool) (int, error){
 	c.log(logTypeConnection, "%v: sendQueuedFrames, pt=%v, protected=%v",
 		c.label(), pt, protected)
 
-	frames := make([]frame, 0)
-	sent := int(0)
 	acks := c.recvd.prepareAckRange(protected, false)
 	now := time.Now()
 	txAge := time.Duration(c.retransmitTime) * time.Millisecond
 	aeadOverhead :=  c.determineAead(pt).Overhead()
-	left := c.mtu - aeadOverhead - kLongHeaderLength // TODO(ekr@rtfm.com): check header type
+	sent := int(0)
+	spaceInCongestionWindow := c.congestion.bytesAllowedToSend()
 
 	/* Select the queue we will send from */
-	var q *[]frame
+	var queue *[]frame
 	if protected {
-		q = &c.outputProtectedQ
+		queue = &c.outputProtectedQ
 	} else {
-		q = &c.outputClearQ
+		queue = &c.outputClearQ
 	}
 
-	// 2. Now transmit all the frames permitted by connection level flow control.
-	// We're going to need to be more sophisticated when we actually do connection
-	// level flow control.
 	// TODO(ekr@rtfm.com): Don't retransmit non-retransmittable.
-	for i, _ := range *q {
-		f := &((*q)[i])
+
+	/* Itterate through the queue, and append frames to packet, sending
+	 * packets when the maximum packet size is reached, or we are not
+	 * allowed to send more from the congestion controller */
+
+	/* Stores frames that will be send in the next packet */
+	frames := make([]frame, 0)
+	/* The lenght of the next packet to be send */
+	spaceInPacket := c.mtu - aeadOverhead - kLongHeaderLength // TODO(ekr@rtfm.com): check header type
+	spaceInCongestionWindow -= aeadOverhead - kLongHeaderLength
+
+	for i, _ := range *queue {
+		f := &((*queue)[i])
 		// c.log(logTypeStream, "Examining frame=%v", f)
-		l, err := f.length()
+
+		frameLenght, err := f.length()
 		if err != nil {
 			return 0, err
 		}
@@ -767,8 +778,16 @@ func (c *Connection) sendQueuedFrames(pt uint8, protected bool, bareAcks bool) (
 		c.log(logTypeStream, "Sending frame %s, age = %v", f.String(), cAge)
 		f.time = now
 
-		if left < l {
-			asent, err := c.sendCombinedPacket(pt, frames, acks, left)
+		/* if there is no more space in the congestion window, stop
+		 * trying to send stuff */
+		if (spaceInCongestionWindow < frameLenght) && protected{
+			break
+		}
+
+		/* if there is no more space for the next frame in the packet,
+		 * send it and start forming a new packet */
+		if spaceInPacket < frameLenght {
+			asent, err := c.sendCombinedPacket(pt, frames, acks, spaceInPacket)
 			if err != nil {
 				return 0, err
 			}
@@ -776,12 +795,15 @@ func (c *Connection) sendQueuedFrames(pt uint8, protected bool, bareAcks bool) (
 
 			acks = acks[asent:]
 			frames = make([]frame, 0)
-			left = c.mtu - aeadOverhead - kLongHeaderLength // TODO(ekr@rtfm.com): check header type
+			spaceInPacket = c.mtu - aeadOverhead - kLongHeaderLength // TODO(ekr@rtfm.com): check header type
+			spaceInCongestionWindow -= aeadOverhead - kLongHeaderLength
 		}
 
+		/* add the frame to the packet */
 		frames = append(frames, *f)
-		left -= l
-		// Record that we send this chunk in the current packet
+		spaceInPacket -= frameLenght
+		spaceInCongestionWindow -= frameLenght
+		/* Record that we send this chunk in the current packet */
 		f.pns = append(f.pns, c.nextSendPacket)
 		sf, ok := f.f.(*streamFrame)
 		if ok && sf.hasFin() {
@@ -789,16 +811,14 @@ func (c *Connection) sendQueuedFrames(pt uint8, protected bool, bareAcks bool) (
 		}
 	}
 
-/*****************************************************************************************************/
-
-
-	// Send the remainder, plus any ACKs that are left.
+	/* Send the remainder, plus any ACKs that are left. */
+	// TODO(piet@devae.re) This might push the outstanding data over the congestion window
 	c.log(logTypeConnection, "%s: Remainder to send? sent=%v frames=%v acks=%v bareAcks=%v",
 		c.label(), sent, len(frames), len(acks), bareAcks)
 	if len(frames) > 0 || (len(acks) > 0 && bareAcks) {
 		// TODO(ekr@rtfm.com): this may skip acks if there isn't
 		// room, but hopefully we eventually catch up.
-		_, err := c.sendCombinedPacket(pt, frames, acks, left)
+		_, err := c.sendCombinedPacket(pt, frames, acks, spaceInPacket)
 		if err != nil {
 			return 0, err
 		}
@@ -810,6 +830,8 @@ func (c *Connection) sendQueuedFrames(pt uint8, protected bool, bareAcks bool) (
 
 	return sent, nil
 }
+
+/*****************************************************************************************************/
 
 // Walk through all the streams and see how many bytes are outstanding.
 // Right now this is very expensive.
@@ -1423,7 +1445,8 @@ func (c *Connection) newFrameData(s *Stream, inner *streamFrame) error {
 	}
 
 	remaining := s.recv.maxStreamData - s.recv.lastReceivedByte()
-	c.log(logTypeFlowControl, "Stream %d has %d bytes of credit remaining, last byte received was", s.Id(), remaining, s.recv.lastReceivedByte())
+	c.log(logTypeFlowControl, "Stream %d has %d bytes of credit remaining, last byte received was",
+		s.Id(), remaining, s.recv.lastReceivedByte())
 	if remaining < uint64(kInitialMaxStreamData) && s.Id() != 0 {
 		c.issueStreamCredit(s, int(kInitialMaxStreamData))
 	}
@@ -1503,7 +1526,7 @@ func (c *Connection) processAckFrame(f *ackFrame, protected bool) error {
 	/* Process aditional ACK Blocks */
 	last := start
 	rawAckBlocks := f.AckBlockSection
-	assert(len(rawAckBlocks) == int(f.NumBlocks * 5)) //TODO manage non 32-bit ack blocks
+	assert(len(rawAckBlocks) == int(f.NumBlocks * 5)) //TODO(ekr@rtfm.com) manage non 32-bit ack blocks
 	for i := f.NumBlocks ; i > 0; i-- {
 		var decoded ackBlock
 		bytesread, err := decode(&decoded, rawAckBlocks)
