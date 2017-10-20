@@ -365,7 +365,7 @@ func (c *Connection) sendSpecialClearPacket(pt uint8, connId ConnectionId, pn ui
 		return err
 	}
 	packet = append(packet, payload...)
-	c.congestion.OnPacketSent(pn, len(packet))
+	c.congestion.onPacketSent(pn, false, len(packet)) //TODO(piet@devae.re) check isackonly
 	c.transport.Send(packet)
 	return nil
 }
@@ -437,7 +437,7 @@ func (c *Connection) sendPacketRaw(pt uint8, connId ConnectionId, pn uint64, ver
 	}
 
 	c.log(logTypeTrace, "Sending packet len=%d, len=%v", len(packet), hex.EncodeToString(packet))
-	c.congestion.OnPacketSent(pn, len(packet))
+	c.congestion.onPacketSent(pn, false, len(packet))  //TODO(piet@devae.re) check isackonly
 	c.transport.Send(packet)
 
 	return nil
@@ -570,7 +570,7 @@ func (c *Connection) sendFramesInPacket(pt uint8, tosend []frame) error {
 	packet := append(hdr, protected...)
 
 	c.log(logTypeTrace, "Sending packet len=%d, len=%v", len(packet), hex.EncodeToString(packet))
-	c.congestion.OnPacketSent(pn, len(packet))
+	c.congestion.onPacketSent(pn, false, len(packet)) //TODO(piet@devae.re) check isackonly
 	c.transport.Send(packet)
 
 	return nil
@@ -1504,10 +1504,6 @@ func (c* Connection) processAckRange(start uint64, end uint64, protected bool){
 				}
 			}
 		}
-
-		// 3. Let congestion control know that this packet was acked
-		c.congestion.OnPacketAcked(pn)
-
 		if pn == end {
 			break
 		}
@@ -1516,12 +1512,15 @@ func (c* Connection) processAckRange(start uint64, end uint64, protected bool){
 }
 
 func (c *Connection) processAckFrame(f *ackFrame, protected bool) error {
+	var receivedAcks ackRanges
+
 	end := f.LargestAcknowledged
 	start := end - f.AckBlockLength
 
 	/* Process the First ACK Block */
 	c.log(logTypeAck, "%s: processing ACK range %x-%x", c.label(), start, end)
 	c.processAckRange(start, end, protected)
+	receivedAcks = append(receivedAcks, ackRange{end, end-start+1})
 
 	/* Process aditional ACK Blocks */
 	last := start
@@ -1548,8 +1547,14 @@ func (c *Connection) processAckFrame(f *ackFrame, protected bool) error {
 		last = start
 		c.log(logTypeAck, "%s: processing ACK range %x-%x", c.label(), start, end)
 		c.processAckRange(start, end, protected)
+		receivedAcks = append(receivedAcks, ackRange{end, end-start+1})
 	}
+
 	// TODO(ekr@rtfm.com): Process the ACK timestamps.
+
+	//TODO(ekr@rtfm.com) add timestamping stuff
+	c.congestion.onAckReceived(receivedAcks, 0)
+
 	return nil
 }
 
