@@ -378,5 +378,5 @@ func (s *Stream) Close() {
 func (s *Stream) Reset(error ErrorCode) error {
 	s.closeSend()
 	f := newRstStreamFrame(s.id, error, s.send.offset)
-	return s.c.sendPacketNow([]frame{f})
+	return s.c.sendPacketNow([]frame{f}, false)
 }

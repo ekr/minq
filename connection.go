@@ -350,7 +350,7 @@ func (c *Connection) sendClientInitial() error {
 
 	c.setState(StateWaitServerFirstFlight)
 
-	return c.sendPacket(packetTypeClientInitial, queued)
+	return c.sendPacket(packetTypeClientInitial, queued, false)
 }
 
 func (c *Connection) sendSpecialClearPacket(pt uint8, connId ConnectionId, pn uint64, version VersionNumber, payload []byte) error {
@@ -399,7 +399,7 @@ func (c *Connection) determineAead(pt uint8) cipher.AEAD {
 	return aead
 }
 
-func (c *Connection) sendPacketRaw(pt uint8, connId ConnectionId, pn uint64, version VersionNumber, payload []byte) error {
+func (c *Connection) sendPacketRaw(pt uint8, connId ConnectionId, pn uint64, version VersionNumber, payload []byte, onlyAcks bool) error {
 	c.log(logTypeConnection, "Sending packet PT=%v PN=%x: %s", pt, c.nextSendPacket, dumpPacket(payload))
 	left := c.mtu // track how much space is left for payload
 
@@ -446,20 +446,20 @@ func (c *Connection) sendPacketRaw(pt uint8, connId ConnectionId, pn uint64, ver
 	}
 
 	c.log(logTypeTrace, "Sending packet len=%d, len=%v", len(packet), hex.EncodeToString(packet))
-	c.congestion.onPacketSent(pn, false, len(packet))  //TODO(piet@devae.re) check isackonly
+	c.congestion.onPacketSent(pn, onlyAcks, len(packet))  //TODO(piet@devae.re) check isackonly
 	c.transport.Send(packet)
 
 	return nil
 }
 
 // Send a packet with whatever PT seems appropriate now.
-func (c *Connection) sendPacketNow(tosend []frame) error {
+func (c *Connection) sendPacketNow(tosend []frame, onlyAcks bool) error {
 	// Right now this is just 1-RTT 0-phase
-	return c.sendPacket(packetType1RTTProtectedPhase0, tosend)
+	return c.sendPacket(packetType1RTTProtectedPhase0, tosend, onlyAcks)
 }
 
 // Send a packet with a specific PT.
-func (c *Connection) sendPacket(pt uint8, tosend []frame) error {
+func (c *Connection) sendPacket(pt uint8, tosend []frame, onlyAcks bool) error {
 	sent := 0
 
 	payload := make([]byte, 0)
@@ -497,7 +497,7 @@ func (c *Connection) sendPacket(pt uint8, tosend []frame) error {
 	pn := c.nextSendPacket
 	c.nextSendPacket++
 
-	return c.sendPacketRaw(pt, connId, pn, c.version, payload)
+	return c.sendPacketRaw(pt, connId, pn, c.version, payload, onlyAcks)
 }
 
 func (c *Connection) sendFramesInPacket(pt uint8, tosend []frame) error {
@@ -671,6 +671,8 @@ func (c *Connection) sendCombinedPacket(pt uint8, frames []frame, acks ackRanges
 	asent := int(0)
 	var err error
 
+	onlyAcks := len(frames) == 0
+
 	// See if there is space for any acks, and if there are acks waiting
 	maxackblocks := (left - 16) / 5 // We are using 32-byte values for all the variable-lengths
 	if maxackblocks > 255 {
@@ -690,7 +692,7 @@ func (c *Connection) sendCombinedPacket(pt uint8, frames []frame, acks ackRanges
 	// Record which packets we sent ACKs in.
 	c.sentAcks[c.nextSendPacket] = acks[0:asent]
 
-	err = c.sendPacket(pt, frames)
+	err = c.sendPacket(pt, frames, onlyAcks)
 	if err != nil {
 		return 0, err
 	}
@@ -763,7 +765,7 @@ func (c *Connection) sendQueuedFrames(pt uint8, protected bool, bareAcks bool) (
 	frames := make([]frame, 0)
 	/* The lenght of the next packet to be send */
 	spaceInPacket := c.mtu - aeadOverhead - kLongHeaderLength // TODO(ekr@rtfm.com): check header type
-	spaceInCongestionWindow -= aeadOverhead - kLongHeaderLength
+	spaceInCongestionWindow -= (aeadOverhead + kLongHeaderLength)
 
 	for i, _ := range *queue {
 		f := &((*queue)[i])
@@ -785,7 +787,7 @@ func (c *Connection) sendQueuedFrames(pt uint8, protected bool, bareAcks bool) (
 
 		/* if there is no more space in the congestion window, stop
 		 * trying to send stuff */
-		if (spaceInCongestionWindow < frameLenght) && protected{
+		if (spaceInCongestionWindow < frameLenght){
 			break
 		}
 
@@ -801,7 +803,7 @@ func (c *Connection) sendQueuedFrames(pt uint8, protected bool, bareAcks bool) (
 			acks = acks[asent:]
 			frames = make([]frame, 0)
 			spaceInPacket = c.mtu - aeadOverhead - kLongHeaderLength // TODO(ekr@rtfm.com): check header type
-			spaceInCongestionWindow -= aeadOverhead - kLongHeaderLength
+			spaceInCongestionWindow -= (aeadOverhead + kLongHeaderLength)
 		}
 
 		/* add the frame to the packet */
@@ -1075,7 +1077,7 @@ func (c *Connection) processClientInitial(hdr *packetHeader, payload []byte) err
 		if err != nil {
 			return err
 		}
-		return c.sendPacketRaw(packetTypeServerStatelessRetry, hdr.ConnectionID, hdr.PacketNumber, kQuicVersion, sf.encoded)
+		return c.sendPacketRaw(packetTypeServerStatelessRetry, hdr.ConnectionID, hdr.PacketNumber, kQuicVersion, sf.encoded, false)
 	}
 
 	assert(c.tls.getHsState() == "ServerStateWaitFinished")
@@ -1725,7 +1727,7 @@ func (c *Connection) SetHandler(h ConnectionHandler) {
 
 func (c *Connection) close(code ErrorCode, reason string) {
 	f := newConnectionCloseFrame(code, reason)
-	c.sendPacket(packetType1RTTProtectedPhase0, []frame{f})
+	c.sendPacket(packetType1RTTProtectedPhase0, []frame{f}, false)
 }
 
 // Close a connection.
