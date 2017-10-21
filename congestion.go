@@ -8,12 +8,12 @@ package minq
 import (
 	"math"
 	"time"
-//	"fmt"
+	"fmt"
 )
 
 
 
-/* congestion controll related constants */
+/* congestion control related constants */
 const (
 	kDefaultMss            = 14600//1460  // bytes
 	kInitalWindow          = 10 * kDefaultMss
@@ -38,7 +38,6 @@ type CongestionController interface {
 	onPacketSent(pn uint64, isAckOnly bool, sentBytes int)
 	onAckReceived(acks ackRanges, delay time.Duration)
 	/* Packet |pn| has been acked */
-	onPacketAcked(pn uint64)
 	bytesAllowedToSend() int
 
 }
@@ -79,6 +78,7 @@ func (cc *CongestionControllerIetf) onPacketSent(pn uint64, isAckOnly bool, sent
 	cc.timeOfLastSentPacket = time.Now()
 	cc.largestSendPacket = pn
 	packetData := packetEntry{pn, time.Now(), 0}
+	fmt.Printf("Packet SEND pn: %d len:%d ackonly: %v\n", pn, sentBytes, isAckOnly)
 	if !isAckOnly{
 		cc.onPacketSentCC(sentBytes)
 		packetData.bytes = sentBytes
@@ -106,10 +106,12 @@ func(cc *CongestionControllerIetf) onAckReceived(acks ackRanges, delay time.Dura
 	}
 
 	/* find and proccess newly acked packets */
-	for _, ackBlock := range acks{
-		for pn := ackBlock.lastPacket; pn > ackBlock.lastPacket - ackBlock.count; pn-- {
+	for _, ackBlock := range acks {
+		for pn := ackBlock.lastPacket; pn > (ackBlock.lastPacket - ackBlock.count); pn-- {
+			fmt.Printf("OnAckRecieved: I am seeing the ack for %d\n", pn)
 			_, present := cc.sentPackets[pn]
 			if present {
+				fmt.Printf("OnAckRecieved: I am seeing the first ack for %d\n", pn)
 				cc.onPacketAcked(pn)
 			}
 		}
@@ -156,19 +158,25 @@ func(cc *CongestionControllerIetf) detectLostPackets(){
 
 func (cc *CongestionControllerIetf) onPacketSentCC(bytes_sent int){
 	cc.bytesInFlight += bytes_sent
+	fmt.Printf("cc.onPacketSentCC: %d bytes just got send\n", bytes_sent)
 }
 
 func (cc *CongestionControllerIetf) onPacketAckedCC(pn uint64){
 	cc.bytesInFlight -= cc.sentPackets[pn].bytes
+	fmt.Printf("cc.onPacketAckedCC: %d bytes just got acked in packet %d \n", cc.sentPackets[pn].bytes, pn)
 	//TODO(piet@devae.re) change window size
 }
 
 func (cc *CongestionControllerIetf) onPacketsLost(packets []packetEntry){
+	for _, packet := range packets {
+		cc.bytesInFlight -= packet.bytes
+		fmt.Printf("onPacketsLost: lost packet pn: %d len: %d\n", packet.pn, packet.bytes)
+	}
 	//TODO(piet@devae.re)
 }
 
 func (cc *CongestionControllerIetf) bytesAllowedToSend() int {
-	//fmt.Printf("cc.bytesAllowedToSend: Allowing %v bytes to be send\n", cc.congestionWindow - cc.bytesInFlight)
+	fmt.Printf("cc.bytesAllowedToSend: Allowing %v bytes to be send\n", cc.congestionWindow - cc.bytesInFlight)
 	return cc.congestionWindow - cc.bytesInFlight
 }
 
