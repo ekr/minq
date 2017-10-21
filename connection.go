@@ -158,10 +158,13 @@ func NewConnection(trans Transport, role uint8, tls TlsConfig, handler Connectio
 		nil,
 		nil,
 		kDefaultInitialRtt,
-		newCongestionControllerIetf(),
+		nil,
 	}
 
 	c.log = newConnectionLogger(&c)
+
+	c.congestion = newCongestionControllerIetf(&c)
+	c.congestion.setLostPacketHandler(c.handleLostPackets)
 
 	// TODO(ekr@rtfm.com): This isn't generic, but rather tied to
 	// Mint.
@@ -698,8 +701,6 @@ func (c *Connection) queueFrame(q *[]frame, f frame) {
 
 }
 
-/*****************************************************************************************************/
-
 /* Send all the queued data on a set of streams with packet type |pt| */
 func (c *Connection) queueStreamFrames(protected bool) error {
 	c.log(logTypeConnection, "%v: queueStreamFrames, protected=%v",
@@ -771,20 +772,23 @@ func (c *Connection) sendQueuedFrames(pt uint8, protected bool, bareAcks bool) (
 			return 0, err
 		}
 
+		/* if there is no more space in the congestion window, stop
+		 * trying to send stuff */
+		if (spaceInCongestionWindow < frameLenght){
+			break
+		}
+
 		cAge := now.Sub(f.time)
-		if cAge < txAge {
+		if f.needsTransmit {
+			c.log(logTypeStream, "Frame %f requires transmission", f.String())
+		} else if cAge < txAge {
 			c.log(logTypeStream, "Skipping frame %f because sent too recently", f.String())
 			continue
 		}
 
 		c.log(logTypeStream, "Sending frame %s, age = %v", f.String(), cAge)
 		f.time = now
-
-		/* if there is no more space in the congestion window, stop
-		 * trying to send stuff */
-		if (spaceInCongestionWindow < frameLenght){
-			break
-		}
+		f.needsTransmit = false
 
 		/* if there is no more space for the next frame in the packet,
 		 * send it and start forming a new packet */
@@ -833,7 +837,18 @@ func (c *Connection) sendQueuedFrames(pt uint8, protected bool, bareAcks bool) (
 	return sent, nil
 }
 
-/*****************************************************************************************************/
+func (c *Connection) handleLostPackets(lostPn uint64){
+	queues := [...][]frame{c.outputClearQ, c.outputProtectedQ}
+	for _, queue := range queues {
+		for _, frame := range queue {
+			for _, pn := range frame.pns {
+				if pn == lostPn {
+					frame.needsTransmit = true
+				}
+			}
+		}
+	}
+}
 
 // Walk through all the streams and see how many bytes are outstanding.
 // Right now this is very expensive.

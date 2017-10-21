@@ -8,14 +8,14 @@ package minq
 import (
 	"math"
 	"time"
-	"fmt"
+//	"fmt"
 )
 
 
 
 /* congestion control related constants */
 const (
-	kDefaultMss            = 14600//1460  // bytes
+	kDefaultMss            = 1460   // bytes
 	kInitalWindow          = 10 * kDefaultMss
 	kMinimumWindow         =  2 * kDefaultMss
 	kMaximumWindow         = kInitalWindow
@@ -39,6 +39,7 @@ type CongestionController interface {
 	onAckReceived(acks ackRanges, delay time.Duration)
 	/* Packet |pn| has been acked */
 	bytesAllowedToSend() int
+	setLostPacketHandler(handler func(pn uint64))
 
 }
 
@@ -47,7 +48,7 @@ type CongestionControllerIetf struct {
 	bytesInFlight          int
 	congestionWindow       int
 	endOfRecovery          uint64
-	sstresh                uint64
+	sstresh                int
 
 	/* Loss detection related */
 	lossDetectionAlarm     int //TODO(ekr@rtfm.com) set this to the right type
@@ -65,6 +66,10 @@ type CongestionControllerIetf struct {
 	timeReorderingFraction float32
 	lossTime               time.Time
 	sentPackets            map[uint64]packetEntry
+
+	/* others */
+	lostPacketHandler      func(pn uint64)
+	conn                   *Connection
 }
 
 type packetEntry struct{
@@ -78,7 +83,7 @@ func (cc *CongestionControllerIetf) onPacketSent(pn uint64, isAckOnly bool, sent
 	cc.timeOfLastSentPacket = time.Now()
 	cc.largestSendPacket = pn
 	packetData := packetEntry{pn, time.Now(), 0}
-	fmt.Printf("Packet SEND pn: %d len:%d ackonly: %v\n", pn, sentBytes, isAckOnly)
+	cc.conn.log(logTypeCongestion, "Packet send pn: %d len:%d ackonly: %v\n", pn, sentBytes, isAckOnly)
 	if !isAckOnly{
 		cc.onPacketSentCC(sentBytes)
 		packetData.bytes = sentBytes
@@ -108,10 +113,10 @@ func(cc *CongestionControllerIetf) onAckReceived(acks ackRanges, delay time.Dura
 	/* find and proccess newly acked packets */
 	for _, ackBlock := range acks {
 		for pn := ackBlock.lastPacket; pn > (ackBlock.lastPacket - ackBlock.count); pn-- {
-			fmt.Printf("OnAckRecieved: I am seeing the ack for %d\n", pn)
+			cc.conn.log(logTypeCongestion, "Ack for pn %d received", pn)
 			_, present := cc.sentPackets[pn]
 			if present {
-				fmt.Printf("OnAckRecieved: I am seeing the first ack for %d\n", pn)
+				cc.conn.log(logTypeCongestion, "First ack for pn %d received", pn)
 				cc.onPacketAcked(pn)
 			}
 		}
@@ -120,6 +125,11 @@ func(cc *CongestionControllerIetf) onAckReceived(acks ackRanges, delay time.Dura
 	cc.detectLostPackets()
 	cc.setLossDetectionAlarm()
 }
+
+func (cc *CongestionControllerIetf)	setLostPacketHandler(handler func(pn uint64)){
+	cc.lostPacketHandler = handler
+}
+
 
 func(cc *CongestionControllerIetf) updateRtt(latestRtt time.Duration){
 	//TODO(ekr@rtfm.com)
@@ -143,7 +153,7 @@ func(cc *CongestionControllerIetf) detectLostPackets(){
 	var lostPackets []packetEntry
 	//TODO(ekr@rtfm.com) implement loss detection different from reorderingThreshold
 	for _, packet := range cc.sentPackets {
-		if cc.largestAckedPacket - packet.pn > uint64(cc.reorderingThreshold) {
+		if packet.pn - cc.largestAckedPacket > uint64(cc.reorderingThreshold) {
 			lostPackets = append(lostPackets, packet)
 		}
 	}
@@ -158,34 +168,75 @@ func(cc *CongestionControllerIetf) detectLostPackets(){
 
 func (cc *CongestionControllerIetf) onPacketSentCC(bytes_sent int){
 	cc.bytesInFlight += bytes_sent
-	fmt.Printf("cc.onPacketSentCC: %d bytes just got send\n", bytes_sent)
+	cc.conn.log(logTypeCongestion, "%d bytes added to bytesInFlight", bytes_sent)
 }
 
 func (cc *CongestionControllerIetf) onPacketAckedCC(pn uint64){
 	cc.bytesInFlight -= cc.sentPackets[pn].bytes
-	fmt.Printf("cc.onPacketAckedCC: %d bytes just got acked in packet %d \n", cc.sentPackets[pn].bytes, pn)
-	//TODO(piet@devae.re) change window size
+	cc.conn.log(logTypeCongestion, "%d bytes from packet %d removed from bytesInFlight", cc.sentPackets[pn].bytes, pn)
+
+	if pn < cc.endOfRecovery {
+		/* Do not increase window size during recovery */
+		return
+	}
+	if cc.congestionWindow < cc.sstresh {
+		/* Slow start */
+		cc.congestionWindow += cc.sentPackets[pn].bytes
+		cc.conn.log(logTypeCongestion, "PDV Slow Start: increasing window size with %d bytes to %d",
+				cc.sentPackets[pn].bytes, cc.congestionWindow)
+	} else {
+		/* Congestion avoidance */
+		cc.congestionWindow += kDefaultMss * cc.sentPackets[pn].bytes / cc.congestionWindow
+		cc.conn.log(logTypeCongestion, "PDV Congestion Avoidance: increasing window size to %d",
+			cc.congestionWindow)
+	}
 }
 
 func (cc *CongestionControllerIetf) onPacketsLost(packets []packetEntry){
+	var largestLostPn uint64 = 0
 	for _, packet := range packets {
+
+		/* First remove lost packets from bytesInFlight and inform the connection
+		 * of the loss */
+
+		cc.conn.log(logTypeCongestion, "Packet pn: %d len: %d is lost", packet.pn, packet.bytes)
 		cc.bytesInFlight -= packet.bytes
-		fmt.Printf("onPacketsLost: lost packet pn: %d len: %d\n", packet.pn, packet.bytes)
+		if cc.lostPacketHandler != nil {
+			cc.lostPacketHandler(packet.pn)
+		}
+
+		/* and keep track of the largest lost packet */
+		if packet.pn > largestLostPn {
+			largestLostPn = packet.pn
+		}
 	}
-	//TODO(piet@devae.re)
+
+	/* Now start a new recovery epoch if the largest lost packet is larger than the
+	 * end of the previous recovery epoch */
+
+	if cc.endOfRecovery < largestLostPn {
+		cc.endOfRecovery = cc.largestSendPacket
+		cc.congestionWindow = int(float32(cc.congestionWindow) * kLossReductionFactor)
+		if kMinimumWindow > cc.congestionWindow {
+			cc.congestionWindow = kMinimumWindow
+		}
+		cc.sstresh = cc.congestionWindow
+		cc.conn.log(logTypeCongestion, "PDV Recovery started. Window size: %d, sstresh: %d, endOfRecovery %d",
+					cc.congestionWindow, cc.sstresh, cc.endOfRecovery)
+	}
 }
 
 func (cc *CongestionControllerIetf) bytesAllowedToSend() int {
-	fmt.Printf("cc.bytesAllowedToSend: Allowing %v bytes to be send\n", cc.congestionWindow - cc.bytesInFlight)
+	cc.conn.log(logTypeCongestion, "Remaining congestion window size: %d", cc.congestionWindow - cc.bytesInFlight)
 	return cc.congestionWindow - cc.bytesInFlight
 }
 
-func newCongestionControllerIetf() *CongestionControllerIetf{
+func newCongestionControllerIetf(conn *Connection) *CongestionControllerIetf{
 	return &CongestionControllerIetf{
 		0,                             // bytesInFlight
 		kInitalWindow,                 // congestionWindow
 		0,                             // endOfRecovery
-		math.MaxUint64,                // sstresh
+		int(^uint(0) >> 1),            // sstresh
 		0,                             // lossDetectionAlarm
 		0,                             // handshakeCount
 		0,                             // tlpCount
@@ -200,6 +251,8 @@ func newCongestionControllerIetf() *CongestionControllerIetf{
 		math.MaxFloat32,               // timeReorderingFraction
 		time.Unix(0,0),                // lossTime
 		make(map[uint64]packetEntry),  // sentPackets
+		nil,                           // lostPacketHandler
+		conn,                          // conn
 	}
 }
 
