@@ -155,7 +155,6 @@ func(cc *CongestionControllerIetf) detectLostPackets(){
 	for _, packet := range cc.sentPackets {
 		if (cc.largestAckedPacket > packet.pn) &&
 			(cc.largestAckedPacket - packet.pn > uint64(cc.reorderingThreshold)) {
-				fmt.Printf("Largest ack is %d, pn is %d, I thus consider the packet lost\n", cc.largestAckedPacket, packet.pn)
 				lostPackets = append(lostPackets, packet)
 		}
 	}
