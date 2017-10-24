@@ -16,9 +16,6 @@ import (
 	"time"
 )
 
-
-var DUMMY_NO_ENCRYPT bool = true
-
 const (
 	RoleClient = 1
 	RoleServer = 2
@@ -437,16 +434,8 @@ func (c *Connection) sendPacketRaw(pt uint8, connId ConnectionId, pn uint64, ver
 	assert(left >= len(payload))
 
 	p.payload = payload
-
-	var packet []byte
-	/* hack to not have encryption pietdv */
-	if DUMMY_NO_ENCRYPT {
-		fmt.Printf("WARNING WARNING WARNING: overriding encryption & protection\n")
-		packet = append(hdr, payload...)
-	} else {
-		protected := aead.Seal(nil, c.packetNonce(p.PacketNumber), p.payload, hdr)
-		packet = append(hdr, protected...)
-	}
+	protected := aead.Seal(nil, c.packetNonce(p.PacketNumber), p.payload, hdr)
+	packet := append(hdr, protected...)
 
 	c.log(logTypeTrace, "Sending packet len=%d, len=%v", len(packet), hex.EncodeToString(packet))
 	c.congestion.onPacketSent(pn, onlyAcks, len(packet))  //TODO(piet@devae.re) check isackonly
@@ -969,18 +958,11 @@ func (c *Connection) input(p []byte) error {
 		return nonFatalError(fmt.Sprintf("Duplicate packet id %x", packetNumber))
 	}
 
-	var payload []byte
-	/* hack to not have encryption pietdv */
-	if DUMMY_NO_ENCRYPT {
-		payload = p[hdrlen:]
-	} else {
-		var err error
-		payload, err = aead.Open(nil, c.packetNonce(packetNumber), p[hdrlen:], p[:hdrlen])
-		if err != nil {
-			c.log(logTypeConnection, "Could not unprotect packet")
-			c.log(logTypeTrace, "Packet %h", p)
-			return wrapE(ErrorInvalidPacket, err)
-		}
+	payload, err := aead.Open(nil, c.packetNonce(packetNumber), p[hdrlen:], p[:hdrlen])
+	if err != nil {
+		c.log(logTypeConnection, "Could not unprotect packet")
+		c.log(logTypeTrace, "Packet %h", p)
+		return wrapE(ErrorInvalidPacket, err)
 	}
 
 	// Now that we know it's valid, process stateless retry.
