@@ -153,8 +153,10 @@ func(cc *CongestionControllerIetf) detectLostPackets(){
 	var lostPackets []packetEntry
 	//TODO(ekr@rtfm.com) implement loss detection different from reorderingThreshold
 	for _, packet := range cc.sentPackets {
-		if packet.pn - cc.largestAckedPacket > uint64(cc.reorderingThreshold) {
-			lostPackets = append(lostPackets, packet)
+		if (cc.largestAckedPacket > packet.pn) &&
+			(cc.largestAckedPacket - packet.pn > uint64(cc.reorderingThreshold)) {
+				fmt.Printf("Largest ack is %d, pn is %d, I thus consider the packet lost\n", cc.largestAckedPacket, packet.pn)
+				lostPackets = append(lostPackets, packet)
 		}
 	}
 
