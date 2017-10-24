@@ -9,11 +9,13 @@ import (
 	"github.com/cloudflare/cfssl/helpers"
 	"github.com/ekr/minq"
 	"io/ioutil"
+	"io"
 	"net"
 	"os"
 	"strconv"
 	"strings"
 	"time"
+	"runtime/pprof"
 )
 
 var addr string
@@ -24,6 +26,7 @@ var logFile string
 var logOut *os.File
 var doHttp bool
 var statelessReset bool
+var cpuProfile string
 
 // Shared data structures.
 type conn struct {
@@ -214,10 +217,22 @@ func main() {
 	flag.StringVar(&logFile, "log", "", "Log file")
 	flag.BoolVar(&doHttp, "http", false, "Do HTTP/0.9")
 	flag.BoolVar(&statelessReset, "stateless-reset", false, "Do stateless reset")
+	flag.StringVar(&cpuProfile, "cpuprofile", "", "write cpu profile to file")
 	flag.Parse()
 
 	var key crypto.Signer
 	var certChain []*x509.Certificate
+
+	if cpuProfile != "" {
+        f, err := os.Create(cpuProfile)
+        if err != nil {
+            fmt.Printf("Could not create CPU profile file %v err=%v\n", cpuProfile, err)
+			return
+        }
+        pprof.StartCPUProfile(f)
+		fmt.Println("CPU profiler started")
+        defer pprof.StopCPUProfile()
+    }
 
 	config := minq.NewTlsConfig(serverName)
 	config.ForceHrr = statelessReset
@@ -286,7 +301,37 @@ func main() {
 		handler = &echoServerHandler{}
 	}
 	server := minq.NewServer(minq.NewUdpTransportFactory(usock), config, handler)
+
+	stdin := make(chan []byte)
+	go func() {
+		for {
+			b := make([]byte, 1024)
+			n, err := os.Stdin.Read(b)
+			if err == io.EOF {
+				fmt.Println("EOF received")
+				close(stdin)
+				return
+			} else if err != nil {
+				fmt.Println("Error reading from stdin")
+				return
+			}
+			b = b[:n]
+			stdin <- b
+		}
+	}()
+
+
 	for {
+
+		select {
+		case _, open := <- stdin:
+			if open == false {
+				fmt.Println("Shutdown signal received from stdin. Goodnight.")
+				return
+			}
+		default:
+		}
+
 		b := make([]byte, 8192)
 
 		usock.SetDeadline(time.Now().Add(time.Second))
