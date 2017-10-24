@@ -34,10 +34,8 @@ const (
 )
 
 type CongestionController interface {
-	//TODO(piet@devae.re) get acked only info
 	onPacketSent(pn uint64, isAckOnly bool, sentBytes int)
 	onAckReceived(acks ackRanges, delay time.Duration)
-	/* Packet |pn| has been acked */
 	bytesAllowedToSend() int
 	setLostPacketHandler(handler func(pn uint64))
 
