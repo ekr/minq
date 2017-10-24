@@ -430,7 +430,7 @@ func newAckFrame(rs ackRanges, maxackblocks uint8) (*frame, int, error) {
 
 		// Now place the actual block
 		gap = last - rs[addedRanges].lastPacket - 1
-		assert(gap < 256)
+		assert(gap <= maxAckGap)
 		b := &ackBlock{
 			4,
 			uint8(gap),

@@ -609,12 +609,6 @@ func (c *Connection) makeAckFrame(acks ackRanges, maxackblocks uint8) (*frame, i
 	return af, rangesSent, nil
 }
 
-//TODO do not forget send counter
-//TODO look at waht was going on with the bareAcks
-/*
- * Stucture: first enqueue, then decide on what to send.
- */
-
 func (c *Connection) sendQueued(bareAcks bool) (int, error) {
 	if c.state == StateInit || c.state == StateWaitClientInitial {
 		return 0, nil
@@ -641,7 +635,7 @@ func (c *Connection) sendQueued(bareAcks bool) (int, error) {
 	}
 
 	/*
-	 * STEND STUFF
+	 * SEND STUFF
 	 */
 
 	/* THIRD send enqueued data from protected streams */
