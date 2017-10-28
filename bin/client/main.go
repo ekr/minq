@@ -91,9 +91,14 @@ func main() {
 		return
 	}
 	usock, err := net.ListenUDP("udp", nil)
-	err = usock.SetReadBuffer(1000000) // TODO(piet@devae.re) do this properly
 	if err != nil {
 		fmt.Println("Couldn't create connected UDP socket")
+		return
+	}
+
+	err = usock.SetReadBuffer(1000000) //TODO(piet@devae.re) do this properly
+	if err != nil {
+		fmt.Println("Could not set larger UDP buffer: ", err)
 		return
 	}
 
