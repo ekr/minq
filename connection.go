@@ -1510,6 +1510,10 @@ func (c* Connection) processAckRange(start uint64, end uint64, protected bool){
 		if ok {
 			for _, a := range acks {
 				c.log(logTypeAck, "Ack2 for ack range last=%v len=%v", a.lastPacket, a.count)
+				if a.lastPacket < c.recvd.minNotAcked2 {
+					/* if there is nothing unacked in the range, continue */
+					continue
+				}
 				for i := uint64(0); i < a.count; i++ {
 					c.recvd.packetSetAcked2(a.lastPacket - i)
 				}

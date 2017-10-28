@@ -74,10 +74,12 @@ func (p *recvdPackets) packetSetReceived(pn uint64, protected bool, nonAcks bool
 
 func (p *recvdPackets) packetSetAcked2(pn uint64) {
 	p.log(logTypeAck, "Setting packet acked2=%v", pn)
-	pk, ok := p.packets[pn]
-	//assert(ok)
-	if ok {
-		pk.acked2 = true
+	if pn >= p.minNotAcked2 {
+		pk, ok := p.packets[pn]
+		//assert(ok)
+		if ok {
+			pk.acked2 = true
+		}
 	}
 }
 
@@ -117,9 +119,9 @@ func (p *recvdPackets) prepareAckRange(protected bool, allowAckOnly bool) ackRan
 		// If we don't know about the packet, or if the ack has been
 		// acked, we don't need to ack it.
 		if ok && !pk.acked2 {
-			newMinNotAcked2 = pn
 			if protected || !pk.protected {
 				needs_ack = true
+				newMinNotAcked2 = pn
 			}
 		}
 
