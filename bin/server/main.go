@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 	"runtime/pprof"
+	"log"
 )
 
 var addr string
@@ -27,6 +28,7 @@ var logOut *os.File
 var doHttp bool
 var statelessReset bool
 var cpuProfile string
+var echo bool
 
 // Shared data structures.
 type conn struct {
@@ -49,7 +51,7 @@ type echoServerHandler struct {
 }
 
 func (h *echoServerHandler) NewConnection(c *minq.Connection) {
-	fmt.Println("New connection")
+	log.Println("New connection")
 	c.SetHandler(&echoConnHandler{})
 	conns[c.Id()] = &conn{c, time.Now()}
 }
@@ -58,15 +60,15 @@ type echoConnHandler struct {
 }
 
 func (h *echoConnHandler) StateChanged(s minq.State) {
-	fmt.Println("State changed to ", s)
+	log.Println("State changed to ", s)
 }
 
 func (h *echoConnHandler) NewStream(s *minq.Stream) {
-	fmt.Println("Created new stream id=", s.Id())
+	log.Println("Created new stream id=", s.Id())
 }
 
 func (h *echoConnHandler) StreamReadable(s *minq.Stream) {
-	fmt.Println("Ready to read for stream id=", s.Id())
+	log.Println("Ready to read for stream id=", s.Id())
 	b := make([]byte, 1024)
 
 	n, err := s.Read(b)
@@ -76,15 +78,15 @@ func (h *echoConnHandler) StreamReadable(s *minq.Stream) {
 	case minq.ErrorWouldBlock:
 		return
 	case minq.ErrorStreamIsClosed, minq.ErrorConnIsClosed:
-		fmt.Println("<CLOSED>")
+		log.Println("<CLOSED>")
 		return
 	default:
-		fmt.Println("Error: ", err)
+		log.Println("Error: ", err)
 		return
 	}
 	b = b[:n]
 
-	fmt.Printf("Read %v bytes from peer %x\n", n, b)
+	log.Printf("Read %v bytes from peer %x\n", n, b)
 
 	// Flip the case so we can distinguish echo
 	for i, _ := range b {
@@ -96,12 +98,57 @@ func (h *echoConnHandler) StreamReadable(s *minq.Stream) {
 	s.Write(b)
 }
 
+// An feed through server.
+type feedthroughServerHandler struct {
+}
+
+func (h *feedthroughServerHandler) NewConnection(c *minq.Connection) {
+	log.Println("New connection")
+	c.SetHandler(&feedthroughConnHandler{})
+	conns[c.Id()] = &conn{c, time.Now()}
+}
+
+type feedthroughConnHandler struct {
+}
+
+func (h *feedthroughConnHandler) StateChanged(s minq.State) {
+	log.Println("State changed to ", s)
+}
+
+func (h *feedthroughConnHandler) NewStream(s *minq.Stream) {
+	log.Println("Created new stream id=", s.Id())
+}
+
+func (h *feedthroughConnHandler) StreamReadable(s *minq.Stream) {
+	log.Println("Ready to read for stream id=", s.Id())
+	b := make([]byte, 1024)
+
+	n, err := s.Read(b)
+	switch err {
+	case nil:
+		break
+	case minq.ErrorWouldBlock:
+		return
+	case minq.ErrorStreamIsClosed, minq.ErrorConnIsClosed:
+		log.Println("<CLOSED>")
+		return
+	default:
+		log.Println("Error: ", err)
+		return
+	}
+	b = b[:n]
+
+	log.Printf("Read %v bytes from peer %x\n", n, b)
+
+	os.Stdout.Write(b)
+}
+
 // An HTTP 0.9 Handler
 type httpServerHandler struct {
 }
 
 func (h *httpServerHandler) NewConnection(c *minq.Connection) {
-	fmt.Println("New connection")
+	log.Println("New connection")
 	c.SetHandler(&httpConnHandler{make(map[uint32]*httpStream, 0)})
 	conns[c.Id()] = &conn{c, time.Now()}
 }
@@ -117,7 +164,7 @@ type httpConnHandler struct {
 }
 
 func (h *httpConnHandler) StateChanged(s minq.State) {
-	fmt.Println("State changed to ", s)
+	log.Println("State changed to ", s)
 }
 
 func (h *httpConnHandler) NewStream(s *minq.Stream) {
@@ -141,7 +188,7 @@ func (h *httpStream) Error(err string) {
 // A non-number, in which case we respond with 10 repetitions
 // of that value.
 func (h *httpConnHandler) StreamReadable(s *minq.Stream) {
-	fmt.Println("Ready to read for stream id=", s.Id())
+	log.Println("Ready to read for stream id=", s.Id())
 	st := h.streams[s.Id()]
 	if st.closed {
 		return
@@ -150,11 +197,11 @@ func (h *httpConnHandler) StreamReadable(s *minq.Stream) {
 	b := make([]byte, 1024)
 	n, err := s.Read(b)
 	if err != nil && err != minq.ErrorWouldBlock {
-		fmt.Println("Error reading")
+		log.Println("Error reading")
 		return
 	}
 	b = b[:n]
-	fmt.Printf("Read %v bytes from peer %x\n", n, b)
+	log.Printf("Read %v bytes from peer %x\n", n, b)
 
 	st.buf = append(st.buf, b...)
 
@@ -216,6 +263,7 @@ func main() {
 	flag.StringVar(&certFile, "cert", "", "Cert file")
 	flag.StringVar(&logFile, "log", "", "Log file")
 	flag.BoolVar(&doHttp, "http", false, "Do HTTP/0.9")
+	flag.BoolVar(&echo, "echo", false, "Run as an echo server")
 	flag.BoolVar(&statelessReset, "stateless-reset", false, "Do stateless reset")
 	flag.StringVar(&cpuProfile, "cpuprofile", "", "write cpu profile to file")
 	flag.Parse()
@@ -226,11 +274,11 @@ func main() {
 	if cpuProfile != "" {
         f, err := os.Create(cpuProfile)
         if err != nil {
-            fmt.Printf("Could not create CPU profile file %v err=%v\n", cpuProfile, err)
+            log.Printf("Could not create CPU profile file %v err=%v\n", cpuProfile, err)
 			return
         }
         pprof.StartCPUProfile(f)
-		fmt.Println("CPU profiler started")
+		log.Println("CPU profiler started")
         defer pprof.StopCPUProfile()
     }
 
@@ -238,35 +286,35 @@ func main() {
 	config.ForceHrr = statelessReset
 
 	if keyFile != "" && certFile == "" {
-		fmt.Println("Can't specify -key without -cert")
+		log.Println("Can't specify -key without -cert")
 		return
 	}
 
 	if keyFile == "" && certFile != "" {
-		fmt.Println("Can't specify -cert without -key")
+		log.Println("Can't specify -cert without -key")
 		return
 	}
 
 	if keyFile != "" && certFile != "" {
 		keyPEM, err := ioutil.ReadFile(keyFile)
 		if err != nil {
-			fmt.Printf("Couldn't open keyFile %v err=%v", keyFile, err)
+			log.Printf("Couldn't open keyFile %v err=%v", keyFile, err)
 			return
 		}
 		key, err = helpers.ParsePrivateKeyPEM(keyPEM)
 		if err != nil {
-			fmt.Println("Couldn't parse private key: ", err)
+			log.Println("Couldn't parse private key: ", err)
 			return
 		}
 
 		certPEM, err := ioutil.ReadFile(certFile)
 		if err != nil {
-			fmt.Printf("Couldn't open certFile %v err=%v", certFile, err)
+			log.Printf("Couldn't open certFile %v err=%v", certFile, err)
 			return
 		}
 		certChain, err = helpers.ParseCertificatesPEM(certPEM)
 		if err != nil {
-			fmt.Println("Couldn't parse certificates: ", err)
+			log.Println("Couldn't parse certificates: ", err)
 			return
 		}
 		config.CertificateChain = certChain
@@ -277,28 +325,30 @@ func main() {
 		var err error
 		logOut, err = os.OpenFile(logFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 		if err != nil {
-			fmt.Println("Couldn't open file")
+			log.Println("Couldn't open file")
 			return
 		}
 		minq.SetLogOutput(logFunc)
 	}
 	uaddr, err := net.ResolveUDPAddr("udp", addr)
 	if err != nil {
-		fmt.Println("Invalid UDP addr: ", err)
+		log.Println("Invalid UDP addr: ", err)
 		return
 	}
 
 	usock, err := net.ListenUDP("udp", uaddr)
 	if err != nil {
-		fmt.Println("Couldn't listen on UDP: ", err)
+		log.Println("Couldn't listen on UDP: ", err)
 		return
 	}
 
 	var handler minq.ServerHandler
 	if doHttp {
 		handler = &httpServerHandler{}
-	} else {
+	} else if echo {
 		handler = &echoServerHandler{}
+	} else {
+		handler = &feedthroughServerHandler{}
 	}
 	server := minq.NewServer(minq.NewUdpTransportFactory(usock), config, handler)
 
@@ -308,11 +358,11 @@ func main() {
 			b := make([]byte, 1024)
 			n, err := os.Stdin.Read(b)
 			if err == io.EOF {
-				fmt.Println("EOF received")
+				log.Println("EOF received")
 				close(stdin)
 				return
 			} else if err != nil {
-				fmt.Println("Error reading from stdin")
+				log.Println("Error reading from stdin")
 				return
 			}
 			b = b[:n]
@@ -326,7 +376,7 @@ func main() {
 		select {
 		case _, open := <- stdin:
 			if open == false {
-				fmt.Println("Shutdown signal received from stdin. Goodnight.")
+				log.Println("Shutdown signal received from stdin. Goodnight.")
 				return
 			}
 		default:
@@ -339,7 +389,7 @@ func main() {
 		if err != nil {
 			e, o := err.(net.Error)
 			if !o || !e.Timeout() {
-				fmt.Println("Error reading from UDP socket: ", err)
+				log.Println("Error reading from UDP socket: ", err)
 				return
 			}
 			n = 0
@@ -348,14 +398,14 @@ func main() {
 		// If we read data, process it.
 		if n > 0 {
 			if n == len(b) {
-				fmt.Println("Underread from UDP socket")
+				log.Println("Underread from UDP socket")
 				return
 			}
 			b = b[:n]
 
 			_, err = server.Input(addr, b)
 			if err != nil {
-				fmt.Println("server.Input returned error: ", err)
+				log.Println("server.Input returned error: ", err)
 				return
 			}
 		}
