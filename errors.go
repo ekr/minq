@@ -94,9 +94,9 @@ var ErrorProtocolViolation = fatalError("Protocol violation")
 var ErrorFrameFormatError = fatalError("Frame format error")
 
 // Protocol errors
-type ErrorCode uint32
+type ErrorCode uint16
 
 const (
-	kQuicErrorNoError           = ErrorCode(0x80000000)
-	kQuicErrorProtocolViolation = ErrorCode(0x8000000A)
+	kQuicErrorNoError           = ErrorCode(0x0000)
+	kQuicErrorProtocolViolation = ErrorCode(0x000A)
 )

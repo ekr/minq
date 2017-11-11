@@ -139,7 +139,7 @@ func newPaddingFrame(stream uint32) frame {
 type rstStreamFrame struct {
 	Type        frameType
 	StreamId    uint32
-	ErrorCode   uint32
+	ErrorCode   uint16
 	FinalOffset uint64
 }
 
@@ -155,7 +155,7 @@ func newRstStreamFrame(streamId uint32, errorCode ErrorCode, finalOffset uint64)
 	return newFrame(streamId, &rstStreamFrame{
 		kFrameTypeRstStream,
 		streamId,
-		uint32(errorCode),
+		uint16(errorCode),
 		finalOffset})
 
 }
@@ -163,7 +163,7 @@ func newRstStreamFrame(streamId uint32, errorCode ErrorCode, finalOffset uint64)
 // CONNECTION_CLOSE
 type connectionCloseFrame struct {
 	Type               frameType
-	ErrorCode          uint32
+	ErrorCode          uint16
 	ReasonPhraseLength uint16
 	ReasonPhrase       []byte
 }
@@ -185,7 +185,7 @@ func newConnectionCloseFrame(errcode ErrorCode, reason string) frame {
 
 	return newFrame(0, &connectionCloseFrame{
 		kFrameTypeConnectionClose,
-		uint32(errcode),
+		uint16(errcode),
 		uint16(len(str)),
 		[]byte(str),
 	})
