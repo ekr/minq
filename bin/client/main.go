@@ -115,6 +115,12 @@ func main() {
 		return
 	}
 
+	err = usock.SetReadBuffer(1000000) //TODO(piet@devae.re) do this properly
+	if err != nil {
+		fmt.Println("Could not set larger UDP buffer: ", err)
+		return
+	}
+
 	utrans := minq.NewUdpTransport(usock, uaddr)
 
 	conn := minq.NewConnection(utrans, minq.RoleClient,
