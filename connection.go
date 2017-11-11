@@ -7,10 +7,12 @@ package minq
 
 import (
 	"bytes"
+	"crypto"
 	"crypto/cipher"
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"github.com/bifurcation/mint"
 	"time"
 )
 
@@ -33,9 +35,9 @@ const (
 )
 
 const (
-	kMinimumClientInitialLength  = 1252 // draft-ietf-quic-transport S 9.8
+	kMinimumClientInitialLength  = 1200 // draft-ietf-quic-transport S 9.0
 	kLongHeaderLength            = 17
-	kInitialIntegrityCheckLength = 8    // FNV-1a 64
+	kInitialIntegrityCheckLength = 16   // Overhead.
 	kInitialMTU                  = 1252 // 1280 - UDP headers.
 )
 
@@ -104,8 +106,8 @@ type Connection struct {
 	serverConnId     ConnectionId
 	transport        Transport
 	tls              *tlsConn
-	writeClear       cipher.AEAD
-	readClear        cipher.AEAD
+	writeClear       *cryptoState
+	readClear        *cryptoState
 	writeProtected   *cryptoState
 	readProtected    *cryptoState
 	nextSendPacket   uint64
@@ -136,8 +138,8 @@ func NewConnection(trans Transport, role uint8, tls TlsConfig, handler Connectio
 		0,
 		trans,
 		newTlsConn(tls, role),
-		&aeadFNV{},
-		&aeadFNV{},
+		nil,
+		nil,
 		nil,
 		nil,
 		uint64(0),
@@ -171,6 +173,10 @@ func NewConnection(trans Transport, role uint8, tls TlsConfig, handler Connectio
 	connId := ConnectionId(tmp)
 	if role == RoleClient {
 		c.clientConnId = connId
+		err = c.setupAeadMasking()
+		if err != nil {
+			return nil
+		}
 	} else {
 		c.serverConnId = connId
 		c.setState(StateWaitClientInitial)
@@ -319,13 +325,12 @@ func (c *Connection) sendClientInitial() error {
 	}
 
 	/*
-			 * draft-ietf-quic-transport S 9.8;
-			 *
-			 * Clients MUST ensure that the first packet in a connection, and any
-		         * etransmissions of those octets, has a QUIC packet size of least 1232
-			 * octets for an IPv6 packet and 1252 octets for an IPv4 packet.  In the
-			 * absence of extensions to the IP header, padding to exactly these
-			 * values will result in an IP packet that is 1280 octets. */
+	   unless the client has a reasonable assurance that the PMTU is larger.
+	   Sending a packet of this size ensures that the network path supports
+	   an MTU of this size and helps reduce the amplitude of amplification
+	   attacks caused by server responses toward an unverified client
+	   address.
+	*/
 	topad := kMinimumClientInitialLength - (kLongHeaderLength + l + kInitialIntegrityCheckLength)
 	c.log(logTypeHandshake, "Padding with %d padding frames", topad)
 
@@ -373,15 +378,15 @@ func (c *Connection) determineAead(pt uint8) cipher.AEAD {
 	if c.role == RoleClient {
 		switch {
 		case pt == packetTypeClientInitial:
-			aead = c.writeClear
+			aead = c.writeClear.aead
 		case pt == packetTypeClientCleartext:
-			aead = c.writeClear
+			aead = c.writeClear.aead
 		case pt == packetType0RTTProtected:
 			aead = nil // This will cause a crash b/c 0-RTT doesn't work yet
 		}
 	} else {
 		if pt == packetTypeServerCleartext || pt == packetTypeServerStatelessRetry {
-			aead = c.writeClear
+			aead = c.writeClear.aead
 		}
 	}
 
@@ -414,7 +419,6 @@ func (c *Connection) sendPacketRaw(pt uint8, connId ConnectionId, pn uint64, ver
 		return err
 	}
 	left -= len(hdr)
-
 	assert(left >= len(payload))
 
 	p.payload = payload
@@ -491,10 +495,10 @@ func (c *Connection) sendFramesInPacket(pt uint8, tosend []frame) error {
 	if c.role == RoleClient {
 		switch {
 		case pt == packetTypeClientInitial:
-			aead = c.writeClear
+			aead = c.writeClear.aead
 			connId = c.clientConnId
 		case pt == packetTypeClientCleartext:
-			aead = c.writeClear
+			aead = c.writeClear.aead
 		case pt == packetType0RTTProtected:
 			connId = c.clientConnId
 			aead = nil // This will cause a crash b/c 0-RTT doesn't work yet
@@ -503,7 +507,7 @@ func (c *Connection) sendFramesInPacket(pt uint8, tosend []frame) error {
 		}
 	} else {
 		if pt == packetTypeServerCleartext {
-			aead = c.writeClear
+			aead = c.writeClear.aead
 		} else {
 			longHeader = true
 		}
@@ -824,7 +828,21 @@ func (c *Connection) input(p []byte) error {
 		return c.processVersionNegotiation(&hdr, p[hdrlen:])
 	}
 
-	aead := c.readClear
+	if c.state == StateWaitClientInitial {
+		if typ != packetTypeClientInitial {
+			c.log(logTypeConnection, "Received unexpected packet before client initial")
+			return nil
+		}
+		// TODO(ekr@rtfm.com): This will result in connection ID flap if we
+		// receive a new connection from the same tuple with a different conn ID.
+		c.clientConnId = hdr.ConnectionID
+		err := c.setupAeadMasking()
+		if err != nil {
+			return err
+		}
+	}
+
+	aead := c.readClear.aead
 	if hdr.isProtected() {
 		if c.readProtected == nil {
 			c.log(logTypeConnection, "Received protected data before crypto state is ready")
@@ -1463,6 +1481,36 @@ func (c *Connection) setTransportParameters() {
 	_ = c.streams[0].processMaxStreamData(uint64(c.tpHandler.peerParams.maxStreamsData))
 }
 
+func (c *Connection) setupAeadMasking() (err error) {
+	params := mint.CipherSuiteParams{
+		Suite:  mint.TLS_AES_128_GCM_SHA256,
+		Cipher: nil,
+		Hash:   crypto.SHA256,
+		KeyLen: 16,
+		IvLen:  12,
+	}
+
+	var sendLabel, recvLabel string
+	if c.role == RoleClient {
+		sendLabel = clientCtSecretLabel
+		recvLabel = serverCtSecretLabel
+	} else {
+		sendLabel = serverCtSecretLabel
+		recvLabel = clientCtSecretLabel
+	}
+	connId := encodeArgs(c.clientConnId)
+	c.writeClear, err = newCryptoStateFromSecret(connId, sendLabel, &params)
+	if err != nil {
+		return
+	}
+	c.readClear, err = newCryptoStateFromSecret(connId, recvLabel, &params)
+	if err != nil {
+		return
+	}
+
+	return nil
+}
+
 // Called when the handshake is complete.
 func (c *Connection) handshakeComplete() (err error) {
 	var sendLabel, recvLabel string
@@ -1474,11 +1522,11 @@ func (c *Connection) handshakeComplete() (err error) {
 		recvLabel = clientPpSecretLabel
 	}
 
-	c.writeProtected, err = newCryptoState(c.tls, sendLabel)
+	c.writeProtected, err = newCryptoStateFromTls(c.tls, sendLabel)
 	if err != nil {
 		return
 	}
-	c.readProtected, err = newCryptoState(c.tls, recvLabel)
+	c.readProtected, err = newCryptoStateFromTls(c.tls, recvLabel)
 	if err != nil {
 		return
 	}

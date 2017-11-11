@@ -70,12 +70,6 @@ func testAeadAll(t *testing.T, aead cipher.AEAD) {
 	t.Run("CorruptTag", func(t *testing.T) { testAeadCorruptTag(t, aead) })
 }
 
-func TestaeadFNV(t *testing.T) {
-	fnv := &aeadFNV{}
-
-	testAeadAll(t, fnv)
-}
-
 func makeWrappedAead(t *testing.T, key []byte, iv []byte) cipher.AEAD {
 	a, err := newWrappedAESGCM(key, iv)
 	assertNotError(t, err, "Couldn't make AEAD")

@@ -1,56 +1,12 @@
 package minq
 
 import (
-	"bytes"
 	"crypto/aes"
 	"crypto/cipher"
-	"fmt"
-	"hash/fnv"
 )
 
 // Definition for AEAD using 64-bit FNV-1a
 type aeadFNV struct {
-}
-
-func (a *aeadFNV) NonceSize() int {
-	return 12
-}
-func (a *aeadFNV) Overhead() int {
-	return 8
-}
-
-func (a *aeadFNV) Seal(dst []byte, nonce []byte, plaintext []byte, aad []byte) []byte {
-	logf(logTypeAead, "FNV protecting aad len=%d, plaintext len=%d", len(aad), len(plaintext))
-	logf(logTypeTrace, "FNV input %x %x", aad, plaintext)
-	h := fnv.New64a()
-	h.Write(aad)
-	h.Write(plaintext)
-	res := encodeArgs(plaintext, h.Sum64())
-	dst = append(dst, res...)
-	logf(logTypeAead, "FNV ciphertext length=%d", len(dst))
-	return dst
-}
-
-func (a *aeadFNV) Open(dst []byte, nonce []byte, ciphertext []byte, aad []byte) ([]byte, error) {
-	logf(logTypeAead, "FNV unprotecting aad len=%d, ciphertext len=%d", len(aad), len(ciphertext))
-	if len(ciphertext) < 8 {
-		return nil, fmt.Errorf("Data too short to contain authentication tag")
-	}
-	pt := ciphertext[:len(ciphertext)-8]
-	at := ciphertext[len(ciphertext)-8:]
-	h := fnv.New64a()
-	h.Write(aad)
-	h.Write(pt)
-
-	at2 := encodeArgs(h.Sum64())
-
-	if !bytes.Equal(at, at2) {
-		return nil, fmt.Errorf("Invalid authentication tag")
-	}
-
-	dst = append(dst, pt...)
-	logf(logTypeAead, "FNV plaintext length=%d", len(dst))
-	return pt, nil
 }
 
 // aeadWrapper contains an existing AEAD object and does the
