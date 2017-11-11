@@ -343,7 +343,6 @@ func (f ackBlock) Length__length() uintptr {
 type ackFrame struct {
 	Type                frameType
 	NumBlocks           uint8
-	NumTS               uint8
 	LargestAcknowledged uint64
 	AckDelay            uint16
 	AckBlockLength      uint64
@@ -352,7 +351,7 @@ type ackFrame struct {
 }
 
 func (f ackFrame) String() string {
-	return fmt.Sprintf("ACK numBlocks=%d numTS=%d largestAck=%x", f.NumBlocks, f.NumTS, f.LargestAcknowledged)
+	return fmt.Sprintf("ACK numBlocks=%d largestAck=%x", f.NumBlocks, f.LargestAcknowledged)
 }
 
 func (f ackFrame) getType() frameType {
@@ -382,10 +381,6 @@ func (f ackFrame) AckBlockSection__length() uintptr {
 	return uintptr(f.NumBlocks) * (1 + f.AckBlockLength__length())
 }
 
-func (f ackFrame) TimestampSection__length() uintptr {
-	return uintptr(f.NumTS * 5)
-}
-
 func newAckFrame(rs ackRanges) (*frame, error) {
 	logf(logTypeFrame, "Making ACK frame %v", rs)
 
@@ -399,9 +394,7 @@ func newAckFrame(rs ackRanges) (*frame, error) {
 	f.LargestAcknowledged = rs[0].lastPacket
 	f.AckBlockLength = rs[0].count - 1
 	last := f.LargestAcknowledged - f.AckBlockLength
-	// TODO(ekr@rtfm.com): Fill in any of the timestamp stuff.
 	f.AckDelay = 0
-	f.NumTS = 0
 	f.TimestampSection = nil
 
 	for i := 1; i < len(rs); i++ {
