@@ -393,7 +393,7 @@ func (f ackFrame) TimestampSection__length() uintptr {
 func newAckFrame(rs ackRanges, maxackblocks uint8) (*frame, int, error) {
 	logf(logTypeFrame, "Making ACK frame %v", rs)
 
-	/* FIRST, fill in the basic info of the ACK frame */
+	// FIRST, fill in the basic info of the ACK frame
 	var f ackFrame
 	f.Type = kFrameTypeAck | 0xa
 	f.NumBlocks = 0
@@ -404,18 +404,18 @@ func newAckFrame(rs ackRanges, maxackblocks uint8) (*frame, int, error) {
 
 	addedRanges := 1
 
-	/* SECOND, add the remaining ACK blocks that fit and that we have */
+	// SECOND, add the remaining ACK blocks that fit and that we have
 	for (maxackblocks > f.NumBlocks) && (addedRanges < len(rs)) {
 
-		/* calculate blocks needed for the next range */
+		// calculate blocks needed for the next range
 		gap := last - rs[addedRanges].lastPacket - 1
 		blocksneeded := uint64((gap / maxAckGap) + 1)
 		if blocksneeded > uint64(maxackblocks) {
-			/* break if there is no space */
+			// break if there is no space
 			break
 		}
 
-		/* place the needed empty blocks */
+		// place the needed empty blocks
 		for i := uint64(0); i < blocksneeded - 1; i++ {
 			b := &ackBlock{
 				4, // Fixed 32-bit width (see 0xb above)
@@ -432,7 +432,7 @@ func newAckFrame(rs ackRanges, maxackblocks uint8) (*frame, int, error) {
 			f.AckBlockSection = append(f.AckBlockSection, encoded...)
 		}
 
-		/* Now place the actual block */
+		// Now place the actual block
 		gap = last - rs[addedRanges].lastPacket - 1
 		assert(gap < 256)
 		b := &ackBlock{

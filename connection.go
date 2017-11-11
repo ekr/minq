@@ -75,8 +75,8 @@ type ConnectionHandler interface {
 
 // Internal structures indicating ranges to ACK
 type ackRange struct {
-	lastPacket uint64	/* Packet with highest pn in range */
-	count      uint64	/* Total number of packets in range */
+	lastPacket uint64	// Packet with highest pn in range
+	count      uint64	// Total number of packets in range
 }
 
 type ackRanges []ackRange
@@ -395,7 +395,7 @@ func (c *Connection) determineAead(pt uint8) cipher.AEAD {
 
 func (c *Connection) sendPacketRaw(pt uint8, connId ConnectionId, pn uint64, version VersionNumber, payload []byte) error {
 	c.log(logTypeConnection, "Sending packet PT=%v PN=%x: %s", pt, c.nextSendPacket, dumpPacket(payload))
-	left := c.mtu /* track how much space is left for payload */
+	left := c.mtu // track how much space is left for payload
 
 	aead := c.determineAead(pt)
 	left -= aead.Overhead()
@@ -1456,11 +1456,11 @@ func (c *Connection) processAckFrame(f *ackFrame, protected bool) error {
 	end := f.LargestAcknowledged
 	start := end - f.AckBlockLength
 
-	/* Process the First ACK Block */
+	// Process the First ACK Block
 	c.log(logTypeAck, "%s: processing ACK range %x-%x", c.label(), start, end)
 	c.processAckRange(start, end, protected)
 
-	/* Process aditional ACK Blocks */
+	// Process aditional ACK Blocks
 	last := start
 	rawAckBlocks := f.AckBlockSection
 	assert(len(rawAckBlocks) == int(f.NumBlocks * 5)) //TODO manage non 32-bit ack blocks
@@ -1475,7 +1475,7 @@ func (c *Connection) processAckFrame(f *ackFrame, protected bool) error {
 		end = last - uint64(decoded.Gap) - 1
 		start = end - decoded.Length + 1
 
-		/* This happens if a gap is larger than 255 */
+		// This happens if a gap is larger than 255
 		if start > end {
 			last -= uint64(decoded.Gap)
 			c.log(logTypeAck, "%s: encountered extra large ACK gap", c.label())
