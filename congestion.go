@@ -11,9 +11,7 @@ import (
 //	"fmt"
 )
 
-
-
-/* congestion control related constants */
+// congestion control related constants
 const (
 	kDefaultMss            = 1460   // bytes
 	kInitalWindow          = 10 * kDefaultMss
@@ -22,7 +20,7 @@ const (
 	kLossReductionFactor   = 0.5
 )
 
-/* loss dectection related constants */
+// loss dectection related constants
 const (
 	kMaxTLPs                 = 2
 	kReorderingThreshold     = 3
@@ -42,13 +40,13 @@ type CongestionController interface {
 }
 
 type CongestionControllerIetf struct {
-	/* Congestion control related */
+	// Congestion control related
 	bytesInFlight          int
 	congestionWindow       int
 	endOfRecovery          uint64
 	sstresh                int
 
-	/* Loss detection related */
+	// Loss detection related
 	lossDetectionAlarm     int //TODO(ekr@rtfm.com) set this to the right type
 	handshakeCount         int
 	tlpCount               int
@@ -65,7 +63,7 @@ type CongestionControllerIetf struct {
 	lossTime               time.Time
 	sentPackets            map[uint64]packetEntry
 
-	/* others */
+	// others
 	lostPacketHandler      func(pn uint64)
 	conn                   *Connection
 }
@@ -90,15 +88,16 @@ func (cc *CongestionControllerIetf) onPacketSent(pn uint64, isAckOnly bool, sent
 	cc.sentPackets[pn] = packetData
 }
 
-/* acks is received to be a sorted list, where the largest packet numbers are at the beginning */
+
+// acks is received to be a sorted list, where the largest packet numbers are at the beginning
 func(cc *CongestionControllerIetf) onAckReceived(acks ackRanges, delay time.Duration){
 
-	/* keep track of largest packet acked overall */
+	// keep track of largest packet acked overall
 	if acks[0].lastPacket > cc.largestAckedPacket {
 		cc.largestAckedPacket = acks[0].lastPacket
 	}
 
-	/* If the largest acked is newly acked update rtt */
+	// If the largest acked is newly acked update rtt
 	_, present := cc.sentPackets[acks[0].lastPacket]
 	if present {
 		//TODO(ekr@rtfm.com) RTT stuff
@@ -108,7 +107,7 @@ func(cc *CongestionControllerIetf) onAckReceived(acks ackRanges, delay time.Dura
 		//	cc.updateRtt(latestRtt)
 	}
 
-	/* find and proccess newly acked packets */
+	// find and proccess newly acked packets
 	for _, ackBlock := range acks {
 		for pn := ackBlock.lastPacket; pn > (ackBlock.lastPacket - ackBlock.count); pn-- {
 			cc.conn.log(logTypeCongestion, "Ack for pn %d received", pn)
@@ -175,16 +174,17 @@ func (cc *CongestionControllerIetf) onPacketAckedCC(pn uint64){
 	cc.conn.log(logTypeCongestion, "%d bytes from packet %d removed from bytesInFlight", cc.sentPackets[pn].bytes, pn)
 
 	if pn < cc.endOfRecovery {
-		/* Do not increase window size during recovery */
+		// Do not increase window size during recovery
 		return
 	}
 	if cc.congestionWindow < cc.sstresh {
-		/* Slow start */
+		// Slow start
 		cc.congestionWindow += cc.sentPackets[pn].bytes
 		cc.conn.log(logTypeCongestion, "PDV Slow Start: increasing window size with %d bytes to %d",
 				cc.sentPackets[pn].bytes, cc.congestionWindow)
 	} else {
-		/* Congestion avoidance */
+
+		// Congestion avoidance
 		cc.congestionWindow += kDefaultMss * cc.sentPackets[pn].bytes / cc.congestionWindow
 		cc.conn.log(logTypeCongestion, "PDV Congestion Avoidance: increasing window size to %d",
 			cc.congestionWindow)
@@ -195,24 +195,22 @@ func (cc *CongestionControllerIetf) onPacketsLost(packets []packetEntry){
 	var largestLostPn uint64 = 0
 	for _, packet := range packets {
 
-		/* First remove lost packets from bytesInFlight and inform the connection
-		 * of the loss */
-
+		// First remove lost packets from bytesInFlight and inform the connection
+		// of the loss
 		cc.conn.log(logTypeCongestion, "Packet pn: %d len: %d is lost", packet.pn, packet.bytes)
 		cc.bytesInFlight -= packet.bytes
 		if cc.lostPacketHandler != nil {
 			cc.lostPacketHandler(packet.pn)
 		}
 
-		/* and keep track of the largest lost packet */
+		// and keep track of the largest lost packet
 		if packet.pn > largestLostPn {
 			largestLostPn = packet.pn
 		}
 	}
 
-	/* Now start a new recovery epoch if the largest lost packet is larger than the
-	 * end of the previous recovery epoch */
-
+	// Now start a new recovery epoch if the largest lost packet is larger than the
+	// end of the previous recovery epoch
 	if cc.endOfRecovery < largestLostPn {
 		cc.endOfRecovery = cc.largestSendPacket
 		cc.congestionWindow = int(float32(cc.congestionWindow) * kLossReductionFactor)

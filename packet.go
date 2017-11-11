@@ -213,15 +213,17 @@ func decodePacket(c ConnectionState, aead Aead, b []byte) (*Packet, error) {
 */
 
 func dumpPacket(payload []byte) string {
-	ret := "["
+	first := true
+	ret := fmt.Sprintf("%d=[", len(payload))
 
 	for len(payload) > 0 {
-		if len(ret) > 1 {
+		if !first {
 			ret += ", "
 		}
+		first = false
 		n, f, err := decodeFrame(payload)
 		if err != nil {
-			ret += "Couldn't decode remainder\n"
+			ret += fmt.Sprintf("Undecoded: [%x]", payload)
 			break
 		}
 		payload = payload[n:]

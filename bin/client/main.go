@@ -6,6 +6,7 @@ import (
 	"github.com/ekr/minq"
 	"net"
 	"os"
+	"runtime/pprof"
 	"time"
 )
 
@@ -14,35 +15,41 @@ var serverName string
 var doHttp string
 var httpCount int
 var heartbeat int
+var cpuProfile string
 
 type connHandler struct {
+	bytesRead int
 }
 
 func (h *connHandler) StateChanged(s minq.State) {
-	fmt.Println("State changed to ", s)
+	fmt.Println("State changed to ", minq.StateName(s))
 }
 
 func (h *connHandler) NewStream(s *minq.Stream) {
 }
 
 func (h *connHandler) StreamReadable(s *minq.Stream) {
-	b := make([]byte, 1024)
+	for {
+		b := make([]byte, 1024)
 
-	n, err := s.Read(b)
-	switch err {
-	case nil:
-		break
-	case minq.ErrorWouldBlock:
-		return
-	case minq.ErrorStreamIsClosed, minq.ErrorConnIsClosed:
-		fmt.Println("<CLOSED>")
-		return
-	default:
-		fmt.Println("Error: ", err)
-		return
+		n, err := s.Read(b)
+		switch err {
+		case nil:
+			break
+		case minq.ErrorWouldBlock:
+			return
+		case minq.ErrorStreamIsClosed, minq.ErrorConnIsClosed:
+			fmt.Println("<CLOSED>")
+			return
+		default:
+			fmt.Println("Error: ", err)
+			return
+		}
+		b = b[:n]
+		h.bytesRead += n
+		os.Stdout.Write(b)
+		os.Stderr.Write([]byte(fmt.Sprintf("Total bytes read = %d\n", h.bytesRead)))
 	}
-	b = b[:n]
-	os.Stdout.Write(b)
 }
 
 func readUDP(s *net.UDPConn) ([]byte, error) {
@@ -74,7 +81,19 @@ func main() {
 	flag.StringVar(&doHttp, "http", "", "Do HTTP/0.9 with provided URL")
 	flag.IntVar(&httpCount, "httpCount", 1, "Number of parallel HTTP requests to start")
 	flag.IntVar(&heartbeat, "heartbeat", 0, "heartbeat frequency [ms]")
+	flag.StringVar(&cpuProfile, "cpuprofile", "", "write cpu profile to file")
 	flag.Parse()
+
+	if cpuProfile != "" {
+		f, err := os.Create(cpuProfile)
+		if err != nil {
+			fmt.Printf("Could not create CPU profile file %v err=%v\n", cpuProfile, err)
+			return
+		}
+		pprof.StartCPUProfile(f)
+		fmt.Println("CPU profiler started")
+		defer pprof.StopCPUProfile()
+	}
 
 	// Default to the host component of addr.
 	if serverName == "" {
@@ -158,7 +177,7 @@ func main() {
 		}
 	}()
 
-	if heartbeat > 0 && doHttp == ""{
+	if heartbeat > 0 && doHttp == "" {
 		ticker := time.NewTicker(time.Millisecond * time.Duration(heartbeat))
 		go func() {
 			for t := range ticker.C {

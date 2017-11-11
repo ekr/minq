@@ -29,9 +29,13 @@ const (
 	kFrameTypeFlagD = frameType(0x01)
 )
 
+const (
+	maxAckGap = 255
+)
+
 type innerFrame interface {
 	getType() frameType
-	String() string
+ 	String() string
 }
 
 type frame struct {
@@ -88,6 +92,8 @@ func decodeFrame(data []byte) (uintptr, *frame, error) {
 		inner = &maxDataFrame{}
 	case t == uint8(kFrameTypeMaxStreamData):
 		inner = &maxStreamDataFrame{}
+	case t == uint8(kFrameTypeMaxStreamId):
+		inner = &maxStreamIdFrame{}
 	case t == uint8(kFrameTypePing):
 		inner = &pingFrame{}
 	case t == uint8(kFrameTypeBlocked):
@@ -138,7 +144,7 @@ func newPaddingFrame(stream uint32) frame {
 type rstStreamFrame struct {
 	Type        frameType
 	StreamId    uint32
-	ErrorCode   uint32
+	ErrorCode   uint16
 	FinalOffset uint64
 }
 
@@ -154,7 +160,7 @@ func newRstStreamFrame(streamId uint32, errorCode ErrorCode, finalOffset uint64)
 	return newFrame(streamId, &rstStreamFrame{
 		kFrameTypeRstStream,
 		streamId,
-		uint32(errorCode),
+		uint16(errorCode),
 		finalOffset})
 
 }
@@ -162,7 +168,7 @@ func newRstStreamFrame(streamId uint32, errorCode ErrorCode, finalOffset uint64)
 // CONNECTION_CLOSE
 type connectionCloseFrame struct {
 	Type               frameType
-	ErrorCode          uint32
+	ErrorCode          uint16
 	ReasonPhraseLength uint16
 	ReasonPhrase       []byte
 }
@@ -184,7 +190,7 @@ func newConnectionCloseFrame(errcode ErrorCode, reason string) frame {
 
 	return newFrame(0, &connectionCloseFrame{
 		kFrameTypeConnectionClose,
-		uint32(errcode),
+		uint16(errcode),
 		uint16(len(str)),
 		[]byte(str),
 	})
@@ -344,16 +350,14 @@ func (f ackBlock) Length__length() uintptr {
 type ackFrame struct {
 	Type                frameType
 	NumBlocks           uint8
-	NumTS               uint8
 	LargestAcknowledged uint64
 	AckDelay            uint16
 	AckBlockLength      uint64
 	AckBlockSection     []byte
-	TimestampSection    []byte
 }
 
 func (f ackFrame) String() string {
-	return fmt.Sprintf("ACK numBlocks=%d numTS=%d largestAck=%x", f.NumBlocks, f.NumTS, f.LargestAcknowledged)
+	return fmt.Sprintf("ACK numBlocks=%d largestAck=%x", f.NumBlocks, f.LargestAcknowledged)
 }
 
 func (f ackFrame) getType() frameType {
@@ -383,43 +387,31 @@ func (f ackFrame) AckBlockSection__length() uintptr {
 	return uintptr(f.NumBlocks) * (1 + f.AckBlockLength__length())
 }
 
-func (f ackFrame) TimestampSection__length() uintptr {
-	return uintptr(f.NumTS * 5)
-}
-
-const (
-	maxAckGap = 255
-)
-
 func newAckFrame(rs ackRanges, maxackblocks uint8) (*frame, int, error) {
 	logf(logTypeFrame, "Making ACK frame %v", rs)
 
-	/* FIRST, fill in the basic info of the ACK frame */
+	// FIRST, fill in the basic info of the ACK frame
 	var f ackFrame
 	f.Type = kFrameTypeAck | 0xa
 	f.NumBlocks = 0
 	f.LargestAcknowledged = rs[0].lastPacket
 	f.AckBlockLength = rs[0].count - 1
 	last := f.LargestAcknowledged - f.AckBlockLength
-	// TODO(ekr@rtfm.com): Fill in any of the timestamp stuff.
 	f.AckDelay = 0
-	f.NumTS = 0
-	f.TimestampSection = nil
 
 	addedRanges := 1
 
-	/* SECOND, add the remaining ACK blocks that fit and that we have */
+	// SECOND, add the remaining ACK blocks that fit and that we have
 	for (maxackblocks > f.NumBlocks) && (addedRanges < len(rs)) {
-
-		/* calculate blocks needed for the next range */
+		// calculate blocks needed for the next range
 		gap := last - rs[addedRanges].lastPacket - 1
-		blocksneeded := uint64((gap / maxAckGap) + 1)
+		blocksneeded := uint64((gap + (maxAckGap - 1)) / maxAckGap)
 		if blocksneeded > uint64(maxackblocks) {
-			/* break if there is no space */
+			// break if there is no space
 			break
 		}
 
-		/* place the needed empty blocks */
+		// place the needed empty blocks
 		for i := uint64(0); i < blocksneeded - 1; i++ {
 			b := &ackBlock{
 				4, // Fixed 32-bit width (see 0xb above)
@@ -436,7 +428,7 @@ func newAckFrame(rs ackRanges, maxackblocks uint8) (*frame, int, error) {
 			f.AckBlockSection = append(f.AckBlockSection, encoded...)
 		}
 
-		/* Now place the actual block */
+		// Now place the actual block
 		gap = last - rs[addedRanges].lastPacket - 1
 		assert(gap <= maxAckGap)
 		b := &ackBlock{
