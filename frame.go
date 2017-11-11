@@ -35,7 +35,7 @@ const (
 
 type innerFrame interface {
 	getType() frameType
-// 	String() string
+ 	String() string
 }
 
 type frame struct {
@@ -384,10 +384,6 @@ func (f ackFrame) AckBlockLength__length() uintptr {
 
 func (f ackFrame) AckBlockSection__length() uintptr {
 	return uintptr(f.NumBlocks) * (1 + f.AckBlockLength__length())
-}
-
-func (f ackFrame) TimestampSection__length() uintptr {
-	return uintptr(f.NumTS * 5)
 }
 
 func newAckFrame(rs ackRanges, maxackblocks uint8) (*frame, int, error) {
