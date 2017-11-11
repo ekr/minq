@@ -221,6 +221,7 @@ func encodeArgs(args ...interface{}) []byte {
 }
 
 func arrayDecode(buf *bytes.Reader, v reflect.Value, encodingSize uintptr) (uintptr, error) {
+	logf(logTypeCodec, "encodingSize = %v", encodingSize)
 	if encodingSize == codecDefaultSize {
 		encodingSize = uintptr(buf.Len())
 	}

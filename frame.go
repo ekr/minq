@@ -349,7 +349,6 @@ type ackFrame struct {
 	AckDelay            uint16
 	AckBlockLength      uint64
 	AckBlockSection     []byte
-	TimestampSection    []byte
 }
 
 func (f ackFrame) String() string {
@@ -397,7 +396,6 @@ func newAckFrame(rs ackRanges) (*frame, error) {
 	f.AckBlockLength = rs[0].count - 1
 	last := f.LargestAcknowledged - f.AckBlockLength
 	f.AckDelay = 0
-	f.TimestampSection = nil
 
 	for i := 1; i < len(rs); i++ {
 		gap := last - rs[i].lastPacket
