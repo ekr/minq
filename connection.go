@@ -609,13 +609,13 @@ func (c *Connection) sendQueued(bareAcks bool) (int, error) {
 	 * ENQUEUE STUFF
 	 */
 
-	/* FIRST enqueue data for stream 0 */
+	// FIRST enqueue data for stream 0
 	err := c.queueStreamFrames(false)
 	if err != nil {
 		return sent, err
 	}
 
-	/* SECOND enqueue data for protected streams */
+	// SECOND enqueue data for protected streams
 	if c.state == StateEstablished {
 		err := c.queueStreamFrames(true)
 		if err != nil {
@@ -627,7 +627,7 @@ func (c *Connection) sendQueued(bareAcks bool) (int, error) {
 	 * SEND STUFF
 	 */
 
-	/* THIRD send enqueued data from protected streams */
+	// THIRD send enqueued data from protected streams
 	if c.state == StateEstablished{
 		s, err := c.sendQueuedFrames(packetType1RTTProtectedPhase0, true, bareAcks)
 		if err != nil {
@@ -638,7 +638,7 @@ func (c *Connection) sendQueued(bareAcks bool) (int, error) {
 		bareAcks = false
 	}
 
-	/* FOURTH send enqueued data from stream 0 */
+	// FOURTH send enqueued data from stream 0
 	pt := uint8(packetTypeClientCleartext)
 	if c.role == RoleServer {
 		pt = packetTypeServerCleartext
@@ -691,7 +691,7 @@ func (c *Connection) queueFrame(q *[]frame, f frame) {
 
 }
 
-/* Send all the queued data on a set of streams with packet type |pt| */
+// Send all the queued data on a set of streams with packet type |pt|
 func (c *Connection) queueStreamFrames(protected bool) error {
 	c.log(logTypeConnection, "%v: queueStreamFrames, protected=%v",
 		c.label(), protected)
@@ -733,7 +733,7 @@ func (c *Connection) sendQueuedFrames(pt uint8, protected bool, bareAcks bool) (
 	sent := int(0)
 	spaceInCongestionWindow := c.congestion.bytesAllowedToSend()
 
-	/* Select the queue we will send from */
+	// Select the queue we will send from
 	var queue *[]frame
 	if protected {
 		queue = &c.outputProtectedQ
@@ -747,9 +747,9 @@ func (c *Connection) sendQueuedFrames(pt uint8, protected bool, bareAcks bool) (
 	 * packets when the maximum packet size is reached, or we are not
 	 * allowed to send more from the congestion controller */
 
-	/* Stores frames that will be send in the next packet */
+	// Stores frames that will be send in the next packet
 	frames := make([]frame, 0)
-	/* The lenght of the next packet to be send */
+	// The lenght of the next packet to be send
 	spaceInPacket := c.mtu - aeadOverhead - kLongHeaderLength // TODO(ekr@rtfm.com): check header type
 	spaceInCongestionWindow -= (aeadOverhead + kLongHeaderLength)
 
@@ -762,8 +762,8 @@ func (c *Connection) sendQueuedFrames(pt uint8, protected bool, bareAcks bool) (
 			return 0, err
 		}
 
-		/* if there is no more space in the congestion window, stop
-		 * trying to send stuff */
+		// if there is no more space in the congestion window, stop
+		// trying to send stuff
 		if (spaceInCongestionWindow < frameLenght){
 			break
 		}
@@ -780,8 +780,8 @@ func (c *Connection) sendQueuedFrames(pt uint8, protected bool, bareAcks bool) (
 		f.time = now
 		f.needsTransmit = false
 
-		/* if there is no more space for the next frame in the packet,
-		 * send it and start forming a new packet */
+		// if there is no more space for the next frame in the packet,
+		// send it and start forming a new packet
 		if spaceInPacket < frameLenght {
 			asent, err := c.sendCombinedPacket(pt, frames, acks, spaceInPacket)
 			if err != nil {
@@ -795,11 +795,11 @@ func (c *Connection) sendQueuedFrames(pt uint8, protected bool, bareAcks bool) (
 			spaceInCongestionWindow -= (aeadOverhead + kLongHeaderLength)
 		}
 
-		/* add the frame to the packet */
+		// add the frame to the packet
 		frames = append(frames, *f)
 		spaceInPacket -= frameLenght
 		spaceInCongestionWindow -= frameLenght
-		/* Record that we send this chunk in the current packet */
+		// Record that we send this chunk in the current packet
 		f.pns = append(f.pns, c.nextSendPacket)
 		sf, ok := f.f.(*streamFrame)
 		if ok && sf.hasFin() {
