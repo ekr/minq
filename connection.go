@@ -580,10 +580,6 @@ func (c *Connection) sendOnStream(streamId uint32, data []byte) error {
 }
 
 func (c *Connection) makeAckFrame(acks ackRanges, maxackblocks uint8) (*frame, int, error) {
-//	if len(acks) > maxackblocks {
-//		acks = acks[:maxackblocks]
-//	}
-
 	af, rangesSent, err := newAckFrame(acks, maxackblocks)
 	if err != nil {
 		c.log(logTypeConnection, "Couldn't prepare ACK frame %v", err)
@@ -1463,7 +1459,7 @@ func (c *Connection) processAckFrame(f *ackFrame, protected bool) error {
 	// Process aditional ACK Blocks
 	last := start
 	rawAckBlocks := f.AckBlockSection
-	assert(len(rawAckBlocks) == int(f.NumBlocks * 5)) //TODO manage non 32-bit ack blocks
+	assert(len(rawAckBlocks) == int(f.NumBlocks * 5)) //TODO(ekr@rtmf.com) manage non 32-bit ack blocks
 	for i := f.NumBlocks ; i > 0; i-- {
 		var decoded ackBlock
 		bytesread, err := decode(&decoded, rawAckBlocks)
@@ -1476,7 +1472,7 @@ func (c *Connection) processAckFrame(f *ackFrame, protected bool) error {
 		start = end - decoded.Length + 1
 
 		// This happens if a gap is larger than 255
-		if start > end {
+		if decoded.Length == 0 {
 			last -= uint64(decoded.Gap)
 			c.log(logTypeAck, "%s: encountered extra large ACK gap", c.label())
 			continue
