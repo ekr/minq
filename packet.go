@@ -221,7 +221,8 @@ func dumpPacket(payload []byte) string {
 		}
 		n, f, err := decodeFrame(payload)
 		if err != nil {
-			ret += "Couldn't decode remainder\n"
+			ret += "Couldn't decode remainder"
+			fmt.Printf("EKR: couldn't decode: %x\n", payload)
 			break
 		}
 		payload = payload[n:]

@@ -18,6 +18,7 @@ var heartbeat int
 var cpuProfile string
 
 type connHandler struct {
+	bytesRead int
 }
 
 func (h *connHandler) StateChanged(s minq.State) {
@@ -28,23 +29,27 @@ func (h *connHandler) NewStream(s *minq.Stream) {
 }
 
 func (h *connHandler) StreamReadable(s *minq.Stream) {
-	b := make([]byte, 1024)
+	for {
+		b := make([]byte, 1024)
 
-	n, err := s.Read(b)
-	switch err {
-	case nil:
-		break
-	case minq.ErrorWouldBlock:
-		return
-	case minq.ErrorStreamIsClosed, minq.ErrorConnIsClosed:
-		fmt.Println("<CLOSED>")
-		return
-	default:
-		fmt.Println("Error: ", err)
-		return
+		n, err := s.Read(b)
+		switch err {
+		case nil:
+			break
+		case minq.ErrorWouldBlock:
+			return
+		case minq.ErrorStreamIsClosed, minq.ErrorConnIsClosed:
+			fmt.Println("<CLOSED>")
+			return
+		default:
+			fmt.Println("Error: ", err)
+			return
+		}
+		b = b[:n]
+		h.bytesRead += n
+		os.Stdout.Write(b)
+		os.Stderr.Write([]byte(fmt.Sprintf("Total bytes read = %d\n", h.bytesRead)))
 	}
-	b = b[:n]
-	os.Stdout.Write(b)
 }
 
 func readUDP(s *net.UDPConn) ([]byte, error) {

@@ -87,6 +87,8 @@ func decodeFrame(data []byte) (uintptr, *frame, error) {
 		inner = &maxDataFrame{}
 	case t == uint8(kFrameTypeMaxStreamData):
 		inner = &maxStreamDataFrame{}
+	case t == uint8(kFrameTypeMaxStreamId):
+		inner = &maxStreamIdFrame{}
 	case t == uint8(kFrameTypePing):
 		inner = &pingFrame{}
 	case t == uint8(kFrameTypeBlocked):
