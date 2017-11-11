@@ -21,7 +21,7 @@ type connHandler struct {
 }
 
 func (h *connHandler) StateChanged(s minq.State) {
-	fmt.Println("State changed to ", s)
+	fmt.Println("State changed to ", minq.StateName(s))
 }
 
 func (h *connHandler) NewStream(s *minq.Stream) {

@@ -214,14 +214,14 @@ func (c *Connection) setState(state State) {
 		return
 	}
 
-	c.log(logTypeConnection, "%s: Connection state %s -> %v", c.label(), stateName(c.state), stateName(state))
+	c.log(logTypeConnection, "%s: Connection state %s -> %v", c.label(), StateName(c.state), StateName(state))
 	if c.handler != nil {
 		c.handler.StateChanged(state)
 	}
 	c.state = state
 }
 
-func stateName(state State) string {
+func StateName(state State) string {
 	// TODO(ekr@rtfm.com): is there a way to get the name from the
 	// const value.
 	switch state {
