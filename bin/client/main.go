@@ -6,8 +6,8 @@ import (
 	"github.com/ekr/minq"
 	"net"
 	"os"
-	"time"
 	"runtime/pprof"
+	"time"
 )
 
 var addr string
@@ -75,23 +75,20 @@ func main() {
 	flag.StringVar(&serverName, "server-name", "", "SNI")
 	flag.StringVar(&doHttp, "http", "", "Do HTTP/0.9 with provided URL")
 	flag.IntVar(&httpCount, "httpCount", 1, "Number of parallel HTTP requests to start")
-<<<<<<< HEAD
 	flag.IntVar(&heartbeat, "heartbeat", 0, "heartbeat frequency [ms]")
-=======
 	flag.StringVar(&cpuProfile, "cpuprofile", "", "write cpu profile to file")
->>>>>>> adding cpuprofling to the client
 	flag.Parse()
 
 	if cpuProfile != "" {
-        f, err := os.Create(cpuProfile)
-        if err != nil {
-            fmt.Printf("Could not create CPU profile file %v err=%v\n", cpuProfile, err)
+		f, err := os.Create(cpuProfile)
+		if err != nil {
+			fmt.Printf("Could not create CPU profile file %v err=%v\n", cpuProfile, err)
 			return
-        }
-        pprof.StartCPUProfile(f)
+		}
+		pprof.StartCPUProfile(f)
 		fmt.Println("CPU profiler started")
-        defer pprof.StopCPUProfile()
-    }
+		defer pprof.StopCPUProfile()
+	}
 
 	// Default to the host component of addr.
 	if serverName == "" {
@@ -169,7 +166,7 @@ func main() {
 		}
 	}()
 
-	if heartbeat > 0 && doHttp == ""{
+	if heartbeat > 0 && doHttp == "" {
 		ticker := time.NewTicker(time.Millisecond * time.Duration(heartbeat))
 		go func() {
 			for t := range ticker.C {
