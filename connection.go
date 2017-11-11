@@ -364,8 +364,7 @@ func (c *Connection) sendSpecialClearPacket(pt uint8, connId ConnectionId, pn ui
 	return nil
 }
 
-func (c *Connection) sendPacketRaw(pt uint8, connId ConnectionId, pn uint64, version VersionNumber, payload []byte) error {
-	left := c.mtu
+func (c *Connection) determineAead(pt uint8) cipher.AEAD {
 	var aead cipher.AEAD
 	if c.writeProtected != nil {
 		aead = c.writeProtected.aead
@@ -386,6 +385,14 @@ func (c *Connection) sendPacketRaw(pt uint8, connId ConnectionId, pn uint64, ver
 		}
 	}
 
+	return aead
+}
+
+func (c *Connection) sendPacketRaw(pt uint8, connId ConnectionId, pn uint64, version VersionNumber, payload []byte) error {
+	c.log(logTypeConnection, "Sending packet PT=%v PN=%x: %s", pt, c.nextSendPacket, dumpPacket(payload))
+	left := c.mtu /* track how much space is left for payload */
+
+	aead := c.determineAead(pt)
 	left -= aead.Overhead()
 
 	// For now, just do the long header.
@@ -612,18 +619,9 @@ func (c *Connection) sendQueued(bareAcks bool) (int, error) {
 }
 
 // Send a packet of stream frames, plus whatever acks fit.
-func (c *Connection) sendCombinedPacket(pt uint8, frames []frame, acks ackRanges) (int, error) {
-	left := c.mtu
+func (c *Connection) sendCombinedPacket(pt uint8, frames []frame, acks ackRanges, left int) (int, error) {
 	asent := int(0)
 	var err error
-
-	for _, f := range frames {
-		l, err := f.length()
-		if err != nil {
-			return 0, err
-		}
-		left -= l
-	}
 
 	if len(acks) > 0 {
 		var af *frame
@@ -654,12 +652,14 @@ func (c *Connection) queueFrame(q *[]frame, f frame) {
 func (c *Connection) queueStreamFrames(pt uint8, protected bool, bareAcks bool) (int, error) {
 	c.log(logTypeConnection, "%v: sendQueuedStreamData pt=%v, protected=%v",
 		c.label(), pt, protected)
-	left := c.mtu
 	frames := make([]frame, 0)
 	sent := int(0)
 	acks := c.recvd.prepareAckRange(protected, false)
 	now := time.Now()
 	txAge := time.Duration(c.retransmitTime) * time.Millisecond
+
+	aeadOverhead := c.determineAead(pt).Overhead()
+	left := c.mtu - aeadOverhead - kLongHeaderLength // TODO(ekr@rtfm.com): check header type
 
 	var streams []*Stream
 	var q *[]frame
@@ -704,7 +704,7 @@ func (c *Connection) queueStreamFrames(pt uint8, protected bool, bareAcks bool) 
 		f.time = now
 
 		if left < l {
-			asent, err := c.sendCombinedPacket(pt, frames, acks)
+			asent, err := c.sendCombinedPacket(pt, frames, acks, left)
 			if err != nil {
 				return 0, err
 			}
@@ -712,7 +712,7 @@ func (c *Connection) queueStreamFrames(pt uint8, protected bool, bareAcks bool) 
 
 			acks = acks[asent:]
 			frames = make([]frame, 0)
-			left = c.mtu
+			left = c.mtu - aeadOverhead - kLongHeaderLength // TODO(ekr@rtfm.com): check header type
 		}
 
 		frames = append(frames, *f)
@@ -731,7 +731,7 @@ func (c *Connection) queueStreamFrames(pt uint8, protected bool, bareAcks bool) 
 	if len(frames) > 0 || (len(acks) > 0 && bareAcks) {
 		// TODO(ekr@rtfm.com): this may skip acks if there isn't
 		// room, but hopefully we eventually catch up.
-		_, err := c.sendCombinedPacket(pt, frames, acks)
+		_, err := c.sendCombinedPacket(pt, frames, acks, left)
 		if err != nil {
 			return 0, err
 		}
