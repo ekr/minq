@@ -406,10 +406,9 @@ func newAckFrame(rs ackRanges, maxackblocks uint8) (*frame, int, error) {
 
 	// SECOND, add the remaining ACK blocks that fit and that we have
 	for (maxackblocks > f.NumBlocks) && (addedRanges < len(rs)) {
-
 		// calculate blocks needed for the next range
 		gap := last - rs[addedRanges].lastPacket - 1
-		blocksneeded := uint64((gap / maxAckGap) + 1)
+		blocksneeded := uint64((gap + (maxAckGap - 1)) / maxAckGap)
 		if blocksneeded > uint64(maxackblocks) {
 			// break if there is no space
 			break
