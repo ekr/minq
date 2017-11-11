@@ -52,7 +52,7 @@ const (
 )
 
 const (
-	kQuicALPNToken = "hq-05"
+	kQuicALPNToken = "hq-07"
 )
 
 const (
