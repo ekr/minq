@@ -1455,7 +1455,6 @@ func (c *Connection) processAckFrame(f *ackFrame, protected bool) error {
 	// Process aditional ACK Blocks
 	last := start
 	rawAckBlocks := f.AckBlockSection
-	assert(len(rawAckBlocks) == int(f.NumBlocks*5)) //TODO(ekr@rtfm.com) manage non 32-bit ack blocks
 	for i := uint8(0); i < f.NumBlocks; i++ {
 		var decoded ackBlock
 		bytesread, err := decode(&decoded, rawAckBlocks)
