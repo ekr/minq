@@ -659,7 +659,9 @@ func (c *Connection) queueStreamFrames(pt uint8, protected bool, bareAcks bool) 
 	txAge := time.Duration(c.retransmitTime) * time.Millisecond
 
 	aeadOverhead := c.determineAead(pt).Overhead()
-	left := c.mtu - aeadOverhead - kLongHeaderLength // TODO(ekr@rtfm.com): check header type
+
+	leftInitial := c.mtu - aeadOverhead - kLongHeaderLength // TODO(ekr@rtfm.com): check header type
+	left := leftInitial
 
 	var streams []*Stream
 	var q *[]frame
@@ -712,7 +714,7 @@ func (c *Connection) queueStreamFrames(pt uint8, protected bool, bareAcks bool) 
 
 			acks = acks[asent:]
 			frames = make([]frame, 0)
-			left = c.mtu - aeadOverhead - kLongHeaderLength // TODO(ekr@rtfm.com): check header type
+			left = leftInitial
 		}
 
 		frames = append(frames, *f)
