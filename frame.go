@@ -387,8 +387,17 @@ func (f ackFrame) AckBlockSection__length() uintptr {
 	return uintptr(f.NumBlocks) * (1 + f.AckBlockLength__length())
 }
 
-func newAckFrame(rs ackRanges, maxackblocks uint8) (*frame, int, error) {
+func newAckFrame(rs ackRanges, left int) (*frame, int, error) {
+	if left < 16 {
+		return nil, 0, nil
+	}
 	logf(logTypeFrame, "Making ACK frame %v", rs)
+
+	// See if there is space for any acks, and if there are acks waiting
+	maxackblocks := uint8((left - 16) / 5) // We are using 32-byte values for all the variable-lengths
+	if maxackblocks > 255 {
+		maxackblocks = 255
+	}
 
 	// FIRST, fill in the basic info of the ACK frame
 	var f ackFrame

@@ -579,8 +579,8 @@ func (c *Connection) sendOnStream(streamId uint32, data []byte) error {
 	return err
 }
 
-func (c *Connection) makeAckFrame(acks ackRanges, maxackblocks uint8) (*frame, int, error) {
-	af, rangesSent, err := newAckFrame(acks, maxackblocks)
+func (c *Connection) makeAckFrame(acks ackRanges, left int) (*frame, int, error) {
+	af, rangesSent, err := newAckFrame(acks, left)
 	if err != nil {
 		c.log(logTypeConnection, "Couldn't prepare ACK frame %v", err)
 		return nil, 0, err
@@ -635,19 +635,15 @@ func (c *Connection) sendCombinedPacket(pt uint8, frames []frame, acks ackRanges
 		left -= l
 	}
 
-	// See if there is space for any acks, and if there are acks waiting
-	maxackblocks := (left - 16) / 5 // We are using 32-byte values for all the variable-lengths
-	if maxackblocks > 255 {
-		maxackblocks = 255
-	}
-
-	if len(acks) > 0 && (left-16) >= 0 {
+	if len(acks) > 0 {
 		var af *frame
-		af, asent, err = c.makeAckFrame(acks, uint8(maxackblocks))
+		af, asent, err = c.makeAckFrame(acks, left)
 		if err != nil {
 			return 0, err
 		}
-		frames = append(frames, *af)
+		if af != nil {
+			frames = append(frames, *af)
+		}
 	}
 	// Record which packets we sent ACKs in.
 	c.sentAcks[c.nextSendPacket] = acks[0:asent]
