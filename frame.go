@@ -25,8 +25,9 @@ const (
 )
 
 const (
-	kFrameTypeFlagF = frameType(0x20)
-	kFrameTypeFlagD = frameType(0x01)
+	kFrameTypeFlagF    = frameType(0x20)
+	kFrameTypeFlagD    = frameType(0x01)
+	kFrameTypeAckFlagN = frameType(0x10)
 )
 
 const (
@@ -35,7 +36,7 @@ const (
 
 type innerFrame interface {
 	getType() frameType
- 	String() string
+	String() string
 }
 
 type frame struct {
@@ -391,7 +392,7 @@ func newAckFrame(rs ackRanges, maxackblocks uint8) (*frame, int, error) {
 
 	// FIRST, fill in the basic info of the ACK frame
 	var f ackFrame
-	f.Type = kFrameTypeAck | 0xa
+	f.Type = kFrameTypeAck | 0xa // 32 bit inner fields.
 	f.NumBlocks = 0
 	f.LargestAcknowledged = rs[0].lastPacket
 	f.AckBlockLength = rs[0].count - 1
@@ -411,9 +412,9 @@ func newAckFrame(rs ackRanges, maxackblocks uint8) (*frame, int, error) {
 		}
 
 		// place the needed empty blocks
-		for i := uint64(0); i < blocksneeded - 1; i++ {
+		for i := uint64(0); i < blocksneeded-1; i++ {
 			b := &ackBlock{
-				4, // Fixed 32-bit width (see 0xb above)
+				4, // Fixed 32-bit width (see 0xa above)
 				uint8(maxAckGap),
 				0,
 			}
@@ -422,7 +423,7 @@ func newAckFrame(rs ackRanges, maxackblocks uint8) (*frame, int, error) {
 			if err != nil {
 				return nil, 0, err
 			}
-			f.Type |= 0x10
+			f.Type |= kFrameTypeAckFlagN
 			f.NumBlocks += 1
 			f.AckBlockSection = append(f.AckBlockSection, encoded...)
 		}
@@ -440,7 +441,7 @@ func newAckFrame(rs ackRanges, maxackblocks uint8) (*frame, int, error) {
 		if err != nil {
 			return nil, 0, err
 		}
-		f.Type |= 0x10
+		f.Type |= kFrameTypeAckFlagN
 		f.NumBlocks += 1
 		f.AckBlockSection = append(f.AckBlockSection, encoded...)
 

@@ -75,8 +75,8 @@ type ConnectionHandler interface {
 
 // Internal structures indicating ranges to ACK
 type ackRange struct {
-	lastPacket uint64	// Packet with highest pn in range
-	count      uint64	// Total number of packets in range
+	lastPacket uint64 // Packet with highest pn in range
+	count      uint64 // Total number of packets in range
 }
 
 type ackRanges []ackRange
@@ -641,7 +641,7 @@ func (c *Connection) sendCombinedPacket(pt uint8, frames []frame, acks ackRanges
 		maxackblocks = 255
 	}
 
-	if len(acks) > 0 && (left - 16) >= 0 {
+	if len(acks) > 0 && (left-16) >= 0 {
 		var af *frame
 		af, asent, err = c.makeAckFrame(acks, uint8(maxackblocks))
 		if err != nil {
@@ -1416,7 +1416,7 @@ func (c *Connection) removeAckedFrames(pn uint64, qp *[]frame) {
 	*qp = q
 }
 
-func (c* Connection) processAckRange(start uint64, end uint64, protected bool){
+func (c *Connection) processAckRange(start uint64, end uint64, protected bool) {
 	pn := start
 	// Unusual loop structure to avoid weirdness at 2^64-1
 	for {
@@ -1459,8 +1459,8 @@ func (c *Connection) processAckFrame(f *ackFrame, protected bool) error {
 	// Process aditional ACK Blocks
 	last := start
 	rawAckBlocks := f.AckBlockSection
-	assert(len(rawAckBlocks) == int(f.NumBlocks * 5)) //TODO(ekr@rtmf.com) manage non 32-bit ack blocks
-	for i := f.NumBlocks ; i > 0; i-- {
+	assert(len(rawAckBlocks) == int(f.NumBlocks*5)) //TODO(ekr@rtfm.com) manage non 32-bit ack blocks
+	for i := uint8(0); i < f.NumBlocks; i++ {
 		var decoded ackBlock
 		bytesread, err := decode(&decoded, rawAckBlocks)
 		if err != nil {
@@ -1474,7 +1474,7 @@ func (c *Connection) processAckFrame(f *ackFrame, protected bool) error {
 		// This happens if a gap is larger than 255
 		if decoded.Length == 0 {
 			last -= uint64(decoded.Gap)
-			c.log(logTypeAck, "%s: encountered extra large ACK gap", c.label())
+			c.log(logTypeAck, "%s: encountered empty ACK block", c.label())
 			continue
 		}
 
