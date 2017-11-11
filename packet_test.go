@@ -38,9 +38,9 @@ func TestLongHeader(t *testing.T) {
 	packetHeaderEDE(t, &p)
 }
 
-/* 
-* TODO(ekr@rtfm.com): Rewrite this code and merge it into 
-* connection.go 
+/*
+* TODO(ekr@rtfm.com): Rewrite this code and merge it into
+* connection.go
 // Mock for connection state
 type ConnectionStateMock struct {
 	aead aeadFNV
