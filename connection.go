@@ -669,7 +669,7 @@ func (c *Connection) sendCombinedPacket(pt uint8, frames []frame, acks ackRanges
 	// aditional ACK blocks.
 	if len(acks) > 0 && (left - 16) >= 0 {
 		var af *frame
-// 		af, asent, err = c.makeAckFrame(acks, uint8(maxackblocks))
+		af, asent, err = c.makeAckFrame(acks, uint8(maxackblocks))
 		if err != nil {
 			return 0, err
 		}
