@@ -400,10 +400,16 @@ func (c *Connection) sendPacketRaw(pt uint8, connId ConnectionId, pn uint64, ver
 	aead := c.determineAead(pt)
 	left -= aead.Overhead()
 
-	// For now, just do the long header.
+	// Horrible hack. Map phase0 -> short header.
+	// TODO(ekr@rtfm.com): Fix this way above here.
+	if pt == packetType1RTTProtectedPhase0 {
+		pt = 3 | packetFlagC // 4-byte packet number
+	} else {
+		pt = pt | packetFlagLongHeader
+	}
 	p := packet{
 		packetHeader{
-			pt | packetFlagLongHeader,
+			pt,
 			connId,
 			pn,
 			version,
