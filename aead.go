@@ -35,6 +35,7 @@ func (a *aeadWrapper) fmtNonce(in []byte) []byte {
 		nonce[i] ^= b
 	}
 
+	logf(logTypeAead, "Nonce=%x", nonce)
 	return nonce
 }
 
@@ -59,6 +60,7 @@ func (a *aeadWrapper) Open(dst []byte, nonce []byte, ciphertext []byte, aad []by
 }
 
 func newWrappedAESGCM(key []byte, iv []byte) (cipher.AEAD, error) {
+	logf(logTypeAead, "New AES GCM context: key=%x iv=%x", key, iv)
 	a, err := aes.NewCipher(key)
 	if err != nil {
 		return nil, err

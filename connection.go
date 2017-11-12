@@ -580,6 +580,7 @@ func (c *Connection) sendOnStream(streamId uint32, data []byte) error {
 }
 
 func (c *Connection) makeAckFrame(acks ackRanges, left int) (*frame, int, error) {
+	c.log(logTypeConnection, "Making ack frame, room=%d", left)
 	af, rangesSent, err := newAckFrame(acks, left)
 	if err != nil {
 		c.log(logTypeConnection, "Couldn't prepare ACK frame %v", err)
@@ -590,6 +591,7 @@ func (c *Connection) makeAckFrame(acks ackRanges, left int) (*frame, int, error)
 }
 
 func (c *Connection) sendQueued(bareAcks bool) (int, error) {
+	c.log(logTypeConnection, "Calling sendQueued")
 	if c.state == StateInit || c.state == StateWaitClientInitial {
 		return 0, nil
 	}
@@ -626,7 +628,6 @@ func (c *Connection) sendQueued(bareAcks bool) (int, error) {
 func (c *Connection) sendCombinedPacket(pt uint8, frames []frame, acks ackRanges, left int) (int, error) {
 	asent := int(0)
 	var err error
-
 	for _, f := range frames {
 		l, err := f.length()
 		if err != nil {
@@ -1003,7 +1004,6 @@ func (c *Connection) processClientInitial(hdr *packetHeader, payload []byte) err
 
 	c.setState(StateWaitClientSecondFlight)
 
-	_, err = c.sendQueued(false)
 	return err
 }
 

@@ -163,7 +163,7 @@ func TestSendCI(t *testing.T) {
 	assertNotError(t, err, "Couldn't send client initial packet")
 }
 
-func TestSendReceiveCI(t *testing.T) {
+func TestSendReceiveCIOnly(t *testing.T) {
 	cTrans, sTrans := newTestTransportPair(true)
 
 	client := NewConnection(cTrans, RoleClient, testTlsConfig, nil)
