@@ -720,7 +720,7 @@ func (c *Connection) queueStreamFrames(pt uint8, protected bool, bareAcks bool) 
 		f.time = now
 
 		if left < l {
-			asent, err := c.sendCombinedPacket(pt, frames, acks, left)
+			asent, err := c.sendCombinedPacket(pt, frames, acks, leftInitial)
 			if err != nil {
 				return 0, err
 			}
@@ -747,7 +747,7 @@ func (c *Connection) queueStreamFrames(pt uint8, protected bool, bareAcks bool) 
 	if len(frames) > 0 || (len(acks) > 0 && bareAcks) {
 		// TODO(ekr@rtfm.com): this may skip acks if there isn't
 		// room, but hopefully we eventually catch up.
-		_, err := c.sendCombinedPacket(pt, frames, acks, left)
+		_, err := c.sendCombinedPacket(pt, frames, acks, leftInitial)
 		if err != nil {
 			return 0, err
 		}
