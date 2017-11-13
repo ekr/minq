@@ -8,6 +8,7 @@ import (
 	"os"
 	"runtime/pprof"
 	"log"
+	"time"
 )
 
 var addr string
@@ -23,6 +24,7 @@ type connHandler struct {
 
 func (h *connHandler) StateChanged(s minq.State) {
 	log.Println("State changed to ", minq.StateName(s))
+}
 
 
 func (h *connHandler) NewStream(s *minq.Stream) {
@@ -85,14 +87,14 @@ func main() {
 	flag.Parse()
 
 	if cpuProfile != "" {
-        f, err := os.Create(cpuProfile)
-        if err != nil {
-            log.Printf("Could not create CPU profile file %v err=%v\n", cpuProfile, err)
+		f, err := os.Create(cpuProfile)
+		if err != nil {
+			log.Printf("Could not create CPU profile file %v err=%v\n", cpuProfile, err)
 			return
-        }
-        pprof.StartCPUProfile(f)
+		}
+		pprof.StartCPUProfile(f)
 		log.Println("CPU profiler started")
-        defer pprof.StopCPUProfile()
+		defer pprof.StopCPUProfile()
     }
 
 	// Default to the host component of addr.
