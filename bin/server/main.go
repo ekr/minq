@@ -46,69 +46,20 @@ func (c *conn) checkTimer() {
 
 var conns = make(map[minq.ConnectionId]*conn)
 
-// An echo server.
-type echoServerHandler struct {
-}
-
-func (h *echoServerHandler) NewConnection(c *minq.Connection) {
-	log.Println("New connection")
-	c.SetHandler(&echoConnHandler{})
-	conns[c.Id()] = &conn{c, time.Now()}
-}
-
-type echoConnHandler struct {
-}
-
-func (h *echoConnHandler) StateChanged(s minq.State) {
-	log.Println("State changed to ", s)
-}
-
-func (h *echoConnHandler) NewStream(s *minq.Stream) {
-	log.Println("Created new stream id=", s.Id())
-}
-
-func (h *echoConnHandler) StreamReadable(s *minq.Stream) {
-	log.Println("Ready to read for stream id=", s.Id())
-	b := make([]byte, 1024)
-
-	n, err := s.Read(b)
-	switch err {
-	case nil:
-		break
-	case minq.ErrorWouldBlock:
-		return
-	case minq.ErrorStreamIsClosed, minq.ErrorConnIsClosed:
-		log.Println("<CLOSED>")
-		return
-	default:
-		log.Println("Error: ", err)
-		return
-	}
-	b = b[:n]
-
-	log.Printf("Read %v bytes from peer %x\n", n, b)
-
-	// Flip the case so we can distinguish echo
-	for i, _ := range b {
-		if b[i] > 0x40 {
-			b[i] ^= 0x20
-		}
-	}
-
-	s.Write(b)
-}
-
 // An feed through server.
 type feedthroughServerHandler struct {
+	echo bool
 }
 
 func (h *feedthroughServerHandler) NewConnection(c *minq.Connection) {
 	log.Println("New connection")
-	c.SetHandler(&feedthroughConnHandler{})
+	c.SetHandler(&feedthroughConnHandler{echo, 0})
 	conns[c.Id()] = &conn{c, time.Now()}
 }
 
 type feedthroughConnHandler struct {
+	echo bool
+	bytesRead int
 }
 
 func (h *feedthroughConnHandler) StateChanged(s minq.State) {
@@ -121,26 +72,37 @@ func (h *feedthroughConnHandler) NewStream(s *minq.Stream) {
 
 func (h *feedthroughConnHandler) StreamReadable(s *minq.Stream) {
 	log.Println("Ready to read for stream id=", s.Id())
-	b := make([]byte, 1024)
+	for {
+		b := make([]byte, 1024)
 
-	n, err := s.Read(b)
-	switch err {
-	case nil:
-		break
-	case minq.ErrorWouldBlock:
-		return
-	case minq.ErrorStreamIsClosed, minq.ErrorConnIsClosed:
-		log.Println("<CLOSED>")
-		return
-	default:
-		log.Println("Error: ", err)
-		return
+		n, err := s.Read(b)
+		switch err {
+		case nil:
+			break
+		case minq.ErrorWouldBlock:
+			return
+		case minq.ErrorStreamIsClosed, minq.ErrorConnIsClosed:
+			log.Println("<CLOSED>")
+			return
+		default:
+			log.Println("Error: ", err)
+			return
+		}
+		b = b[:n]
+		h.bytesRead += n
+		os.Stdout.Write(b)
+		log.Println("Total bytes read = %d", h.bytesRead)
+
+		if echo {
+			// Flip the case so we can distinguish echo
+			for i, _ := range b {
+				if b[i] > 0x40 {
+					b[i] ^= 0x20
+				}
+			}
+			s.Write(b)
+		}
 	}
-	b = b[:n]
-
-	log.Printf("Read %v bytes from peer %x\n", n, b)
-
-	os.Stdout.Write(b)
 }
 
 // An HTTP 0.9 Handler
@@ -345,10 +307,8 @@ func main() {
 	var handler minq.ServerHandler
 	if doHttp {
 		handler = &httpServerHandler{}
-	} else if echo {
-		handler = &echoServerHandler{}
 	} else {
-		handler = &feedthroughServerHandler{}
+		handler = &feedthroughServerHandler{echo}
 	}
 	server := minq.NewServer(minq.NewUdpTransportFactory(usock), config, handler)
 
