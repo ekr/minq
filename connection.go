@@ -909,6 +909,13 @@ func (c *Connection) input(p []byte) error {
 	}
 	c.recvd.packetSetReceived(packetNumber, hdr.isProtected(), naf)
 
+	for _, stream := range c.streams {
+		if stream.readable && c.handler != nil {
+			c.handler.StreamReadable(stream)
+			stream.readable = false
+		}
+	}
+
 	// TODO(ekr@rtfm.com): Check for more on stream 0, but we need to properly handle
 	// encrypted NST.
 
@@ -1369,10 +1376,11 @@ func (c *Connection) newFrameData(s *Stream, inner *streamFrame) error {
 		return ErrorFrameFormatError
 	}
 
-	if s.newFrameData(inner.Offset, inner.hasFin(), inner.Data) && s.id > 0 &&
-		c.handler != nil {
-		c.handler.StreamReadable(s)
-	}
+	s.newFrameData(inner.Offset, inner.hasFin(), inner.Data)
+// 	if s.newFrameData(inner.Offset, inner.hasFin(), inner.Data) && s.id > 0 &&
+// 		c.handler != nil {
+// 		c.handler.StreamReadable(s)
+// 	}
 
 	remaining := s.recv.maxStreamData - s.recv.lastReceivedByte()
 	c.log(logTypeFlowControl, "Stream %d has %d bytes of credit remaining, last byte received was", s.Id(), remaining, s.recv.lastReceivedByte())

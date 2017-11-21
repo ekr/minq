@@ -95,6 +95,7 @@ type stream struct {
 	state      streamState
 	send, recv *streamHalf
 	blocked    bool // Have we returned blocked
+	readable   bool // Is this stream readable
 }
 
 // A single QUIC stream.
@@ -130,7 +131,12 @@ func (s *stream) newFrameData(offset uint64, last bool, payload []byte) bool {
 	}
 	s.recv.insertSortedChunk(offset, last, payload)
 
-	return s.recv.chunks[0].offset <= s.recv.offset
+	readable := s.recv.chunks[0].offset <= s.recv.offset
+
+	if readable && s.id > 0 {
+		s.readable = true
+	}
+	return readable
 }
 
 func (s *stream) queue(payload []byte) error {
@@ -172,6 +178,7 @@ func newStreamInt(id uint32, state streamState, maxStreamData uint64, log loggin
 		state: state,
 		id:    id,
 		log:   log,
+		readable: false,
 	}
 	s.send = newStreamHalf(&s, log, kDirSending, maxStreamData)
 	s.recv = newStreamHalf(&s, log, kDirRecving, uint64(kInitialMaxStreamData))
