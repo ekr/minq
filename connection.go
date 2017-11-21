@@ -124,6 +124,7 @@ type Connection struct {
 	tpHandler        *transportParametersHandler
 	log              loggingFunction
 	retransmitTime   uint32
+	lastSendQueues   time.Time
 }
 
 // Create a new QUIC connection. Should only be used with role=RoleClient,
@@ -156,6 +157,7 @@ func NewConnection(trans Transport, role uint8, tls TlsConfig, handler Connectio
 		nil,
 		nil,
 		kDefaultInitialRtt,
+		time.Now(),
 	}
 
 	c.log = newConnectionLogger(&c)
@@ -596,6 +598,9 @@ func (c *Connection) makeAckFrame(acks ackRanges, maxlength int) (*frame, int, e
 }
 
 func (c *Connection) sendQueued(bareAcks bool) (int, error) {
+
+	c.lastSendQueues = time.Now()
+
 	if c.state == StateInit || c.state == StateWaitClientInitial {
 		return 0, nil
 	}
@@ -909,6 +914,8 @@ func (c *Connection) input(p []byte) error {
 	}
 	c.recvd.packetSetReceived(packetNumber, hdr.isProtected(), naf)
 
+	lastsendQueues := c.lastSendQueues
+
 	for _, stream := range c.streams {
 		if stream.readable && c.handler != nil {
 			c.handler.StreamReadable(stream)
@@ -919,10 +926,13 @@ func (c *Connection) input(p []byte) error {
 	// TODO(ekr@rtfm.com): Check for more on stream 0, but we need to properly handle
 	// encrypted NST.
 
-	// Now flush our output buffers.
-	_, err = c.sendQueued(true)
-	if err != nil {
-		return err
+	// if we no data has been written to any stream
+	if lastsendQueues == c.lastSendQueues {
+		// Now flush our output buffers.
+		_, err = c.sendQueued(true)
+		if err != nil {
+			return err
+		}
 	}
 
 	return err
