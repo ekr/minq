@@ -1377,10 +1377,6 @@ func (c *Connection) newFrameData(s *Stream, inner *streamFrame) error {
 	}
 
 	s.newFrameData(inner.Offset, inner.hasFin(), inner.Data)
-// 	if s.newFrameData(inner.Offset, inner.hasFin(), inner.Data) && s.id > 0 &&
-// 		c.handler != nil {
-// 		c.handler.StreamReadable(s)
-// 	}
 
 	remaining := s.recv.maxStreamData - s.recv.lastReceivedByte()
 	c.log(logTypeFlowControl, "Stream %d has %d bytes of credit remaining, last byte received was", s.Id(), remaining, s.recv.lastReceivedByte())
