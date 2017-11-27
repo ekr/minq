@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"runtime/pprof"
+	"log"
 	"time"
 )
 
@@ -22,8 +23,9 @@ type connHandler struct {
 }
 
 func (h *connHandler) StateChanged(s minq.State) {
-	fmt.Println("State changed to ", minq.StateName(s))
+	log.Println("State changed to ", minq.StateName(s))
 }
+
 
 func (h *connHandler) NewStream(s *minq.Stream) {
 }
@@ -39,10 +41,10 @@ func (h *connHandler) StreamReadable(s *minq.Stream) {
 		case minq.ErrorWouldBlock:
 			return
 		case minq.ErrorStreamIsClosed, minq.ErrorConnIsClosed:
-			fmt.Println("<CLOSED>")
+			log.Println("<CLOSED>")
 			return
 		default:
-			fmt.Println("Error: ", err)
+			log.Println("Error: ", err)
 			return
 		}
 		b = b[:n]
@@ -62,12 +64,12 @@ func readUDP(s *net.UDPConn) ([]byte, error) {
 		if o && e.Timeout() {
 			return nil, minq.ErrorWouldBlock
 		}
-		fmt.Println("Error reading from UDP socket: ", err)
+		log.Println("Error reading from UDP socket: ", err)
 		return nil, err
 	}
 
 	if n == len(b) {
-		fmt.Println("Underread from UDP socket")
+		log.Println("Underread from UDP socket")
 		return nil, err
 	}
 	b = b[:n]
@@ -75,7 +77,7 @@ func readUDP(s *net.UDPConn) ([]byte, error) {
 }
 
 func main() {
-	fmt.Println("PID=", os.Getpid())
+	log.Println("PID=", os.Getpid())
 	flag.StringVar(&addr, "addr", "localhost:4433", "[host:port]")
 	flag.StringVar(&serverName, "server-name", "", "SNI")
 	flag.StringVar(&doHttp, "http", "", "Do HTTP/0.9 with provided URL")
@@ -87,31 +89,31 @@ func main() {
 	if cpuProfile != "" {
 		f, err := os.Create(cpuProfile)
 		if err != nil {
-			fmt.Printf("Could not create CPU profile file %v err=%v\n", cpuProfile, err)
+			log.Printf("Could not create CPU profile file %v err=%v\n", cpuProfile, err)
 			return
 		}
 		pprof.StartCPUProfile(f)
-		fmt.Println("CPU profiler started")
+		log.Println("CPU profiler started")
 		defer pprof.StopCPUProfile()
-	}
+    }
 
 	// Default to the host component of addr.
 	if serverName == "" {
 		host, _, err := net.SplitHostPort(addr)
 		if err != nil {
-			fmt.Println("Couldn't split host/port", err)
+			log.Println("Couldn't split host/port", err)
 		}
 		serverName = host
 	}
 
 	uaddr, err := net.ResolveUDPAddr("udp", addr)
 	if err != nil {
-		fmt.Println("Invalid UDP addr", err)
+		log.Println("Invalid UDP addr", err)
 		return
 	}
 	usock, err := net.ListenUDP("udp", nil)
 	if err != nil {
-		fmt.Println("Couldn't create connected UDP socket")
+		log.Println("Couldn't create connected UDP socket")
 		return
 	}
 
@@ -120,7 +122,7 @@ func main() {
 	conn := minq.NewConnection(utrans, minq.RoleClient,
 		minq.NewTlsConfig(serverName), &connHandler{})
 
-	fmt.Printf("Client conn id=%x\n", conn.ClientId())
+	log.Printf("Client conn id=%x\n", conn.ClientId())
 
 	// Start things off.
 	_, err = conn.CheckTimer()
@@ -140,12 +142,12 @@ func main() {
 
 		err = conn.Input(b)
 		if err != nil {
-			fmt.Println("Error", err)
+			log.Println("Error", err)
 			return
 		}
 	}
 
-	fmt.Println("Connection established")
+	log.Println("Connection established")
 
 	// Make all the streams we need
 	streams := make([]*minq.Stream, httpCount)
@@ -211,17 +213,16 @@ func main() {
 				err = conn.Input(u)
 			}
 			if err != nil {
-				fmt.Println("Error", err)
+				log.Println("Error", err)
 				return
 			}
 		case i := <-stdin:
 			if i == nil {
-				conn.Close()
-				return
+			// TODO(piet@devae.re) close the apropriate stream(s)
 			}
 			streams[0].Write(i)
 			if err != nil {
-				fmt.Println("Error", err)
+				log.Println("Error", err)
 				return
 			}
 		}
