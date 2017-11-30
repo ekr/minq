@@ -429,7 +429,7 @@ func (c *Connection) sendPacketRaw(pt uint8, connId ConnectionId, pn uint64, ver
 	// Encode the header so we know how long it is.
 	// TODO(ekr@rtfm.com): this is gross.
 	hdr, err := encode(&p.packetHeader)
- 	if err != nil {
+	if err != nil {
 		return err
 	}
 	left -= len(hdr)
@@ -639,7 +639,7 @@ func (c *Connection) sendQueued(bareAcks bool) (int, error) {
 			return sent, err
 		}
 		sent += s
-		/* We still want to send out data in unprotected mode but we don't need to just ACK stuff. */
+		// We still want to send out data in unprotected mode but we don't need to just ACK stuff.
 		bareAcks = false
 	}
 
@@ -713,7 +713,7 @@ func (c *Connection) queueStreamFrames(protected bool) error {
 		q = &c.outputProtectedQ
 	}
 
-	/* Output all the stream frames that are now permitted by stream flow control */
+	// Output all the stream frames that are now permitted by stream flow control
 	for _, s := range streams {
 		if s != nil {
 			chunks, _ := s.outputWritable()
@@ -1534,7 +1534,7 @@ func (c *Connection) processAckRange(start uint64, end uint64, protected bool) {
 				c.log(logTypeAck, "Ack2 for ack range last=%v len=%v", a.lastPacket, a.count)
 
 				if a.lastPacket < c.recvd.minNotAcked2 {
-					/* if there is nothing unacked in the range, continue */
+					// if there is nothing unacked in the range, continue
 					continue
 				}
 
