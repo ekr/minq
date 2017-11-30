@@ -98,32 +98,33 @@ The application provides a handler object which the Connection
 calls to notify it of various events.
 */
 type Connection struct {
-	handler          ConnectionHandler
-	role             uint8
-	state            State
-	version          VersionNumber
-	clientConnId     ConnectionId
-	serverConnId     ConnectionId
-	transport        Transport
-	tls              *tlsConn
-	writeClear       *cryptoState
-	readClear        *cryptoState
-	writeProtected   *cryptoState
-	readProtected    *cryptoState
-	nextSendPacket   uint64
-	mtu              int
-	streams          []*Stream
-	maxStream        uint32
-	outputClearQ     []frame // For stream 0
-	outputProtectedQ []frame // For stream >= 0
-	clientInitial    []byte
-	recvd            *recvdPackets
-	sentAcks         map[uint64]ackRanges
-	lastInput        time.Time
-	idleTimeout      uint16
-	tpHandler        *transportParametersHandler
-	log              loggingFunction
-	retransmitTime   uint32
+	handler              ConnectionHandler
+	role                 uint8
+	state                State
+	version              VersionNumber
+	clientConnId         ConnectionId
+	serverConnId         ConnectionId
+	transport            Transport
+	tls                  *tlsConn
+	writeClear           *cryptoState
+	readClear            *cryptoState
+	writeProtected       *cryptoState
+	readProtected        *cryptoState
+	nextSendPacket       uint64
+	mtu                  int
+	streams              []*Stream
+	maxStream            uint32
+	outputClearQ         []frame // For stream 0
+	outputProtectedQ     []frame // For stream >= 0
+	clientInitial        []byte
+	recvd                *recvdPackets
+	sentAcks             map[uint64]ackRanges
+	lastInput            time.Time
+	idleTimeout          uint16
+	tpHandler            *transportParametersHandler
+	log                  loggingFunction
+	retransmitTime       uint32
+	lastSendQueuedTime   time.Time
 }
 
 // Create a new QUIC connection. Should only be used with role=RoleClient,
@@ -156,6 +157,7 @@ func NewConnection(trans Transport, role uint8, tls TlsConfig, handler Connectio
 		nil,
 		nil,
 		kDefaultInitialRtt,
+		time.Now(),
 	}
 
 	c.log = newConnectionLogger(&c)
@@ -590,6 +592,9 @@ func (c *Connection) makeAckFrame(acks ackRanges, left int) (*frame, int, error)
 }
 
 func (c *Connection) sendQueued(bareAcks bool) (int, error) {
+
+	c.lastSendQueuedTime = time.Now()
+
 	if c.state == StateInit || c.state == StateWaitClientInitial {
 		return 0, nil
 	}
@@ -912,13 +917,28 @@ func (c *Connection) input(p []byte) error {
 	}
 	c.recvd.packetSetReceived(packetNumber, hdr.isProtected(), naf)
 
+	lastSendQueuedTime := c.lastSendQueuedTime
+
+	for _, stream := range c.streams {
+		if stream.readable && c.handler != nil {
+			c.handler.StreamReadable(stream)
+			stream.readable = false
+		}
+	}
+
 	// TODO(ekr@rtfm.com): Check for more on stream 0, but we need to properly handle
 	// encrypted NST.
 
-	// Now flush our output buffers.
-	_, err = c.sendQueued(true)
-	if err != nil {
-		return err
+	// Check if c.SendQueued() has been called while we were handling
+	// the (STREAM) frames. If it has not been called yet, we call it
+	// because we might have to ack the current packet, and might
+	// have data waiting in the tx queues.
+	if lastSendQueuedTime == c.lastSendQueuedTime {
+		// Now flush our output buffers.
+		_, err = c.sendQueued(true)
+		if err != nil {
+			return err
+		}
 	}
 
 	return err
@@ -1372,10 +1392,7 @@ func (c *Connection) newFrameData(s *Stream, inner *streamFrame) error {
 		return ErrorFrameFormatError
 	}
 
-	if s.newFrameData(inner.Offset, inner.hasFin(), inner.Data) && s.id > 0 &&
-		c.handler != nil {
-		c.handler.StreamReadable(s)
-	}
+	s.newFrameData(inner.Offset, inner.hasFin(), inner.Data)
 
 	remaining := s.recv.maxStreamData - s.recv.lastReceivedByte()
 	c.log(logTypeFlowControl, "Stream %d has %d bytes of credit remaining, last byte received was", s.Id(), remaining, s.recv.lastReceivedByte())
