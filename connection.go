@@ -98,33 +98,33 @@ The application provides a handler object which the Connection
 calls to notify it of various events.
 */
 type Connection struct {
-	handler          ConnectionHandler
-	role             uint8
-	state            State
-	version          VersionNumber
-	clientConnId     ConnectionId
-	serverConnId     ConnectionId
-	transport        Transport
-	tls              *tlsConn
-	writeClear       *cryptoState
-	readClear        *cryptoState
-	writeProtected   *cryptoState
-	readProtected    *cryptoState
-	nextSendPacket   uint64
-	mtu              int
-	streams          []*Stream
-	maxStream        uint32
-	outputClearQ     []frame // For stream 0
-	outputProtectedQ []frame // For stream >= 0
-	clientInitial    []byte
-	recvd            *recvdPackets
-	sentAcks         map[uint64]ackRanges
-	lastInput        time.Time
-	idleTimeout      uint16
-	tpHandler        *transportParametersHandler
-	log              loggingFunction
-	retransmitTime   uint32
-	lastSendQueues   time.Time
+	handler              ConnectionHandler
+	role                 uint8
+	state                State
+	version              VersionNumber
+	clientConnId         ConnectionId
+	serverConnId         ConnectionId
+	transport            Transport
+	tls                  *tlsConn
+	writeClear           *cryptoState
+	readClear            *cryptoState
+	writeProtected       *cryptoState
+	readProtected        *cryptoState
+	nextSendPacket       uint64
+	mtu                  int
+	streams              []*Stream
+	maxStream            uint32
+	outputClearQ         []frame // For stream 0
+	outputProtectedQ     []frame // For stream >= 0
+	clientInitial        []byte
+	recvd                *recvdPackets
+	sentAcks             map[uint64]ackRanges
+	lastInput            time.Time
+	idleTimeout          uint16
+	tpHandler            *transportParametersHandler
+	log                  loggingFunction
+	retransmitTime       uint32
+	lastSendQueuedTime   time.Time
 }
 
 // Create a new QUIC connection. Should only be used with role=RoleClient,
@@ -599,7 +599,7 @@ func (c *Connection) makeAckFrame(acks ackRanges, maxlength int) (*frame, int, e
 
 func (c *Connection) sendQueued(bareAcks bool) (int, error) {
 
-	c.lastSendQueues = time.Now()
+	c.lastSendQueuedTime = time.Now()
 
 	if c.state == StateInit || c.state == StateWaitClientInitial {
 		return 0, nil
@@ -914,7 +914,7 @@ func (c *Connection) input(p []byte) error {
 	}
 	c.recvd.packetSetReceived(packetNumber, hdr.isProtected(), naf)
 
-	lastsendQueues := c.lastSendQueues
+	lastSendQueuedTime := c.lastSendQueuedTime
 
 	for _, stream := range c.streams {
 		if stream.readable && c.handler != nil {
@@ -926,8 +926,11 @@ func (c *Connection) input(p []byte) error {
 	// TODO(ekr@rtfm.com): Check for more on stream 0, but we need to properly handle
 	// encrypted NST.
 
-	// if we no data has been written to any stream
-	if lastsendQueues == c.lastSendQueues {
+	// Check if c.SendQueued() has been called while we were handling
+	// the (STREAM) frames. If it has not been called yet, we call it
+	// because we might have to ack the current packet, and might
+	// have data waiting in the tx queues.
+	if lastSendQueuedTime == c.lastSendQueuedTime {
 		// Now flush our output buffers.
 		_, err = c.sendQueued(true)
 		if err != nil {
