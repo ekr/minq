@@ -58,27 +58,30 @@ func (h *streamHalf) label() string {
 	return "send"
 }
 
-// TODO(ekr@rtfm.com): This isn't efficient in the case where the chunk
-// is the last one, either because we have lost one chunk or because
-// we are writing.
 func (h *streamHalf) insertSortedChunk(offset uint64, last bool, payload []byte) {
 	h.log(logTypeStream, "chunk insert %s stream %v with offset=%v, length=%v (current offset=%v) last=%v", h.label(), h.s.id, offset, len(payload), h.offset, last)
 	h.log(logTypeTrace, "Stream payload %v", hex.EncodeToString(payload))
 	c := streamChunk{h.s, offset, last, dup(payload)}
 
-	var i int
-	for i = 0; i < len(h.chunks); i++ {
-		if offset < h.chunks[i].offset {
-			break
+	/* First check if we can append the new slice at the end */
+	if l := len(h.chunks); l == 0 || offset > h.chunks[l - 1].offset {
+		h.chunks = append(h.chunks, c)
+	/* Otherwise find out where it should go */
+	} else {
+		var i int
+		for i = 0; i < len(h.chunks); i++ {
+			if offset < h.chunks[i].offset {
+				break
+			}
 		}
-	}
 
-	// This may not be the fastest way to do this splice.
-	tmp := make([]streamChunk, 0, len(h.chunks)+1)
-	tmp = append(tmp, h.chunks[:i]...)
-	tmp = append(tmp, c)
-	tmp = append(tmp, h.chunks[i:]...)
-	h.chunks = tmp
+		// This may not be the fastest way to do this splice.
+		tmp := make([]streamChunk, 0, len(h.chunks)+1)
+		tmp = append(tmp, h.chunks[:i]...)
+		tmp = append(tmp, c)
+		tmp = append(tmp, h.chunks[i:]...)
+		h.chunks = tmp
+	}
 	h.log(logTypeStream, "Stream now has %v chunks", len(h.chunks))
 }
 
@@ -95,6 +98,7 @@ type stream struct {
 	state      streamState
 	send, recv *streamHalf
 	blocked    bool // Have we returned blocked
+	readable   bool // Is this stream readable
 }
 
 // A single QUIC stream.
@@ -130,7 +134,12 @@ func (s *stream) newFrameData(offset uint64, last bool, payload []byte) bool {
 	}
 	s.recv.insertSortedChunk(offset, last, payload)
 
-	return s.recv.chunks[0].offset <= s.recv.offset
+	readable := s.recv.chunks[0].offset <= s.recv.offset
+
+	if readable && s.id > 0 {
+		s.readable = true
+	}
+	return readable
 }
 
 func (s *stream) queue(payload []byte) error {
@@ -172,6 +181,7 @@ func newStreamInt(id uint32, state streamState, maxStreamData uint64, log loggin
 		state: state,
 		id:    id,
 		log:   log,
+		readable: false,
 	}
 	s.send = newStreamHalf(&s, log, kDirSending, maxStreamData)
 	s.recv = newStreamHalf(&s, log, kDirRecving, uint64(kInitialMaxStreamData))
@@ -378,5 +388,5 @@ func (s *Stream) Close() {
 func (s *Stream) Reset(error ErrorCode) error {
 	s.closeSend()
 	f := newRstStreamFrame(s.id, error, s.send.offset)
-	return s.c.sendPacketNow([]frame{f})
+	return s.c.sendPacketNow([]frame{f}, false)
 }
