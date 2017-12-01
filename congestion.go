@@ -82,7 +82,7 @@ type CongestionControllerIetf struct {
 	largestAckedPacket     uint64
 //	largestRtt             time.Duration
 	smoothedRtt            time.Duration
-	rttVar                 float32
+	rttVar                 time.Duration
 	reorderingThreshold    int
 	timeReorderingFraction float32
 	lossTime               time.Time
@@ -115,7 +115,7 @@ func (cc *CongestionControllerIetf) onPacketSent(pn uint64, isAckOnly bool, sent
 
 
 // acks is received to be a sorted list, where the largest packet numbers are at the beginning
-func(cc *CongestionControllerIetf) onAckReceived(acks ackRanges, delay time.Duration){
+func(cc *CongestionControllerIetf) onAckReceived(acks ackRanges, ackDelay time.Duration){
 
 	// keep track of largest packet acked overall
 	if acks[0].lastPacket > cc.largestAckedPacket {
@@ -125,11 +125,11 @@ func(cc *CongestionControllerIetf) onAckReceived(acks ackRanges, delay time.Dura
 	// If the largest acked is newly acked update rtt
 	_, present := cc.sentPackets[acks[0].lastPacket]
 	if present {
-		//TODO(ekr@rtfm.com) RTT stuff
-		//largestRtt = time.Now - cc.sentPackets[acks[0].lastPacket].txTime
-		//if (latestRtt > delay){
-		//	latestRtt -= delay
-		//	cc.updateRtt(latestRtt)
+		latestRtt := time.Since(cc.sentPackets[acks[0].lastPacket].txTime)
+		if (latestRtt > ackDelay){
+			latestRtt -= ackDelay
+			cc.updateRtt(latestRtt)
+		}
 	}
 
 	// find and proccess newly acked packets
@@ -154,7 +154,18 @@ func (cc *CongestionControllerIetf)	setLostPacketHandler(handler func(pn uint64)
 
 
 func(cc *CongestionControllerIetf) updateRtt(latestRtt time.Duration){
-	//TODO(ekr@rtfm.com)
+	if (cc.smoothedRtt == 0){
+		cc.smoothedRtt = latestRtt
+		cc.rttVar = time.Duration(int64(latestRtt) / 2)
+	} else {
+		rttDelta := cc.smoothedRtt - latestRtt;
+		if rttDelta < 0 {
+			rttDelta = -rttDelta
+		}
+		cc.rttVar = time.Duration(3/4 * int64(cc.rttVar) + 1/4 * int64(rttDelta))
+		cc.smoothedRtt = time.Duration(7/8 * int64(cc.smoothedRtt) + 1/8 * int64(latestRtt))
+	}
+	cc.conn.log(logTypeCongestion, "New RTT estimate: %v, variance: %v", cc.smoothedRtt, cc.rttVar)
 }
 
 func(cc *CongestionControllerIetf) onPacketAcked(pn uint64){

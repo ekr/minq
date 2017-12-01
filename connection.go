@@ -1560,6 +1560,10 @@ func (c *Connection) processAckFrame(f *ackFrame, protected bool) error {
 	end := f.LargestAcknowledged
 	start := end - f.AckBlockLength
 
+	// Decode ACK Delay
+	ackDelayMicros := QuicFloat16(f.AckDelay).Float32()
+	ackDelay := time.Duration(ackDelayMicros * 1e3)
+
 	// Process the First ACK Block
 	c.log(logTypeAck, "%s: processing ACK range %x-%x", c.label(), start, end)
 	c.processAckRange(start, end, protected)
@@ -1593,7 +1597,7 @@ func (c *Connection) processAckFrame(f *ackFrame, protected bool) error {
 		receivedAcks = append(receivedAcks, ackRange{end, end - start + 1})
 	}
 
-	c.congestion.onAckReceived(receivedAcks, 0)
+	c.congestion.onAckReceived(receivedAcks, ackDelay)
 
 	return nil
 }
