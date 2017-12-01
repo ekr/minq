@@ -76,7 +76,6 @@ func (p *recvdPackets) packetSetAcked2(pn uint64) {
 	p.log(logTypeAck, "Setting packet acked2=%v", pn)
 	if pn >= p.minNotAcked2 {
 		pk, ok := p.packets[pn]
-		//assert(ok)
 		if ok {
 			pk.acked2 = true
 		}
