@@ -39,6 +39,31 @@ type CongestionController interface {
 
 }
 
+/*
+ * DUMMY congestion controller
+ */
+
+type CongestionControllerDummy struct{
+}
+
+func (cc *CongestionControllerDummy) onPacketSent(pn uint64, isAckOnly bool, sentBytes int){
+}
+
+func (cc *CongestionControllerDummy) onAckReceived(acks ackRanges, delay time.Duration){
+}
+
+func (cc *CongestionControllerDummy) bytesAllowedToSend() int{
+	/* return the the maximum int value */
+	return int(^uint(0) >> 1)
+}
+
+func (cc *CongestionControllerDummy) setLostPacketHandler(handler func(pn uint64)){
+}
+
+/*
+ * draft-ietf-quic-recovery congestion controller
+ */
+
 type CongestionControllerIetf struct {
 	// Congestion control related
 	bytesInFlight          int

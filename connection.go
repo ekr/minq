@@ -164,7 +164,8 @@ func NewConnection(trans Transport, role uint8, tls TlsConfig, handler Connectio
 
 	c.log = newConnectionLogger(&c)
 
-	c.congestion = newCongestionControllerIetf(&c)
+	//c.congestion = newCongestionControllerIetf(&c)
+	c.congestion = &CongestionControllerDummy{}
 	c.congestion.setLostPacketHandler(c.handleLostPacket)
 
 	// TODO(ekr@rtfm.com): This isn't generic, but rather tied to
