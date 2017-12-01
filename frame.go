@@ -392,7 +392,7 @@ func (f ackFrame) AckBlockSection__length() uintptr {
 	return uintptr(f.NumBlocks) * (1 + f.AckBlockLength__length())
 }
 
-func newAckFrame(rs ackRanges, left int) (*frame, int, error) {
+func newAckFrame(recvd *recvdPackets, rs ackRanges, left int) (*frame, int, error) {
 	if left < 16 {
 		return nil, 0, nil
 	}
@@ -411,8 +411,13 @@ func newAckFrame(rs ackRanges, left int) (*frame, int, error) {
 	f.LargestAcknowledged = rs[0].lastPacket
 	f.AckBlockLength = rs[0].count - 1
 	last := f.LargestAcknowledged - f.AckBlockLength
-	f.AckDelay = 0
 
+	largestAckData, ok := recvd.packets[f.LargestAcknowledged]
+	/* Should always be there. Packets only get removed after being set to ack2,
+	 * which means we should not be acking it again */
+	assert(ok)
+	ackDelayMicros := float32(time.Since(largestAckData.t).Nanoseconds())/1e3
+	f.AckDelay = uint16(NewQuicFloat16(ackDelayMicros))
 	addedRanges := 1
 
 	// SECOND, add the remaining ACK blocks that fit and that we have

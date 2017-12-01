@@ -593,7 +593,7 @@ func (c *Connection) sendOnStream(streamId uint32, data []byte) error {
 
 func (c *Connection) makeAckFrame(acks ackRanges, left int) (*frame, int, error) {
 	c.log(logTypeConnection, "Making ack frame, room=%d", left)
-	af, rangesSent, err := newAckFrame(acks, left)
+	af, rangesSent, err := newAckFrame(c.recvd, acks, left)
 	if err != nil {
 		c.log(logTypeConnection, "Couldn't prepare ACK frame %v", err)
 		return nil, 0, err

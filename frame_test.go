@@ -9,7 +9,11 @@ import (
 func TestAckFrameOneRange(t *testing.T) {
 	ar := []ackRange{{0xdeadbeef, 2}}
 
-	f, _, err := newAckFrame(ar, 21)
+	recvd := newRecvdPackets(logf)
+	recvd.init(ar[0].lastPacket)
+	recvd.packetSetReceived(ar[0].lastPacket, false, false)
+
+	f, _, err := newAckFrame(recvd, ar, 21)
 	assertNotError(t, err, "Couldn't make ack frame")
 
 	err = f.encode()
@@ -25,7 +29,11 @@ func TestAckFrameOneRange(t *testing.T) {
 func TestAckFrameTwoRanges(t *testing.T) {
 	ar := []ackRange{{0xdeadbeef, 2}, {0xdeadbee0, 1}}
 
-	f, _, err := newAckFrame(ar, 26)
+	recvd := newRecvdPackets(logf)
+	recvd.init(ar[0].lastPacket)
+	recvd.packetSetReceived(ar[0].lastPacket, false, false)
+
+	f, _, err := newAckFrame(recvd, ar, 26)
 	assertNotError(t, err, "Couldn't make ack frame")
 
 	err = f.encode()
