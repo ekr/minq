@@ -83,6 +83,8 @@ type CongestionControllerIetf struct {
 //	largestRtt             time.Duration
 	smoothedRtt            time.Duration
 	rttVar                 time.Duration
+	smoothedRttTcp         time.Duration
+	rttVarTcp              time.Duration
 	reorderingThreshold    int
 	timeReorderingFraction float32
 	lossTime               time.Time
@@ -167,6 +169,22 @@ func(cc *CongestionControllerIetf) updateRtt(latestRtt time.Duration){
 	}
 	cc.conn.log(logTypeCongestion, "New RTT estimate: %v, variance: %v", cc.smoothedRtt, cc.rttVar)
 }
+
+func(cc *CongestionControllerIetf) updateRttTcp(latestRtt time.Duration){
+	if (cc.smoothedRttTcp == 0){
+		cc.smoothedRttTcp = latestRtt
+		cc.rttVarTcp = time.Duration(int64(latestRtt) / 2)
+	} else {
+		rttDelta := cc.smoothedRttTcp - latestRtt;
+		if rttDelta < 0 {
+			rttDelta = -rttDelta
+		}
+		cc.rttVarTcp = time.Duration(3/4 * int64(cc.rttVarTcp) + 1/4 * int64(rttDelta))
+		cc.smoothedRttTcp = time.Duration(7/8 * int64(cc.smoothedRttTcp) + 1/8 * int64(latestRtt))
+	}
+	cc.conn.log(logTypeCongestion, "New RTT(TCP) estimate: %v, variance: %v", cc.smoothedRttTcp, cc.rttVarTcp)
+}
+
 
 func(cc *CongestionControllerIetf) onPacketAcked(pn uint64){
 	cc.onPacketAckedCC(pn)
@@ -280,6 +298,8 @@ func newCongestionControllerIetf(conn *Connection) *CongestionControllerIetf{
 		0,                             // largestAckedPacket
 		0,                             // smoothedRtt
 		0,                             // rttVar
+		0,                             // smoothedRttTcp
+		0,                             // rttVarTcp
 		kReorderingThreshold,          // reorderingThreshold
 		math.MaxFloat32,               // timeReorderingFraction
 		time.Unix(0,0),                // lossTime
