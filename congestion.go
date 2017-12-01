@@ -128,10 +128,13 @@ func(cc *CongestionControllerIetf) onAckReceived(acks ackRanges, ackDelay time.D
 	_, present := cc.sentPackets[acks[0].lastPacket]
 	if present {
 		latestRtt := time.Since(cc.sentPackets[acks[0].lastPacket].txTime)
+		cc.conn.log(logTypeCongestion, "latestRtt: %v, ackDelay: %v", latestRtt, ackDelay)
+		cc.updateRttTcp(latestRtt)
+
 		if (latestRtt > ackDelay){
 			latestRtt -= ackDelay
-			cc.updateRtt(latestRtt)
 		}
+		cc.updateRtt(latestRtt)
 	}
 
 	// find and proccess newly acked packets
@@ -164,8 +167,8 @@ func(cc *CongestionControllerIetf) updateRtt(latestRtt time.Duration){
 		if rttDelta < 0 {
 			rttDelta = -rttDelta
 		}
-		cc.rttVar = time.Duration(3/4 * int64(cc.rttVar) + 1/4 * int64(rttDelta))
-		cc.smoothedRtt = time.Duration(7/8 * int64(cc.smoothedRtt) + 1/8 * int64(latestRtt))
+		cc.rttVar = time.Duration(int64(cc.rttVar) * 3/4 + int64(rttDelta) * 1/4)
+		cc.smoothedRtt = time.Duration(int64(cc.smoothedRtt) * 7/8 + int64(latestRtt) * 1/8)
 	}
 	cc.conn.log(logTypeCongestion, "New RTT estimate: %v, variance: %v", cc.smoothedRtt, cc.rttVar)
 }
@@ -179,8 +182,8 @@ func(cc *CongestionControllerIetf) updateRttTcp(latestRtt time.Duration){
 		if rttDelta < 0 {
 			rttDelta = -rttDelta
 		}
-		cc.rttVarTcp = time.Duration(3/4 * int64(cc.rttVarTcp) + 1/4 * int64(rttDelta))
-		cc.smoothedRttTcp = time.Duration(7/8 * int64(cc.smoothedRttTcp) + 1/8 * int64(latestRtt))
+		cc.rttVarTcp = time.Duration(int64(cc.rttVarTcp) * 3/4 + int64(rttDelta) * 3/4)
+		cc.smoothedRttTcp = time.Duration(int64(cc.smoothedRttTcp) * 7/8 + int64(latestRtt) * 1/8)
 	}
 	cc.conn.log(logTypeCongestion, "New RTT(TCP) estimate: %v, variance: %v", cc.smoothedRttTcp, cc.rttVarTcp)
 }
