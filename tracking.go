@@ -16,20 +16,22 @@ type packetData struct {
 }
 
 type recvdPackets struct {
-	log         loggingFunction
-	initted     bool
-	minReceived uint64
-	maxReceived uint64
-	packets     map[uint64]*packetData
+	log            loggingFunction
+	initted        bool
+	minReceived    uint64
+	maxReceived    uint64
+	minNotAcked2   uint64
+	packets        map[uint64]*packetData
 }
 
 func newRecvdPackets(log loggingFunction) *recvdPackets {
 	return &recvdPackets{
-		log,
-		false,
-		0,
-		0,
-		make(map[uint64]*packetData, 0),
+		log,                                       // loggingFunction
+		false,                                     // initted
+		0,                                         // minReceived
+		0,                                         // maxReceived
+		0,                                         // minNotAcked2
+		make(map[uint64]*packetData, 0),           // packets
 	}
 }
 
@@ -41,6 +43,8 @@ func (p *recvdPackets) init(pn uint64) {
 	p.log(logTypeAck, "Initializing received packet start=%x", pn)
 	p.initted = true
 	p.minReceived = pn
+	p.maxReceived = pn
+	p.minNotAcked2 = pn
 }
 
 func (p *recvdPackets) packetNotReceived(pn uint64) bool {
@@ -55,6 +59,9 @@ func (p *recvdPackets) packetSetReceived(pn uint64, protected bool, nonAcks bool
 	if pn > p.maxReceived {
 		p.maxReceived = pn
 	}
+	if pn < p.minNotAcked2 {
+		p.minNotAcked2 = pn
+	}
 	p.log(logTypeAck, "Setting packet received=%x", pn)
 	p.packets[pn] = &packetData{
 		protected,
@@ -67,9 +74,12 @@ func (p *recvdPackets) packetSetReceived(pn uint64, protected bool, nonAcks bool
 
 func (p *recvdPackets) packetSetAcked2(pn uint64) {
 	p.log(logTypeAck, "Setting packet acked2=%v", pn)
-	pk, ok := p.packets[pn]
-	assert(ok)
-	pk.acked2 = true
+	if pn >= p.minNotAcked2 {
+		pk, ok := p.packets[pn]
+		if ok {
+			pk.acked2 = true
+		}
+	}
 }
 
 func (r *ackRange) String() string {
@@ -96,9 +106,11 @@ func (p *recvdPackets) prepareAckRange(protected bool, allowAckOnly bool) ackRan
 
 	ranges := make(ackRanges, 0)
 
+	newMinNotAcked2 := p.maxReceived
+
 	// TODO(ekr@rtfm.com): This is kind of a gross hack in case
 	// someone sends us a 0 initial packet number.
-	for pn = p.maxReceived; pn >= p.minReceived && pn > 0; pn-- {
+	for pn = p.maxReceived; pn >= p.minNotAcked2 && pn > 0; pn-- {
 		p.log(logTypeTrace, "Examining packet %x", pn)
 		pk, ok := p.packets[pn]
 		needs_ack := false
@@ -108,7 +120,12 @@ func (p *recvdPackets) prepareAckRange(protected bool, allowAckOnly bool) ackRan
 		if ok && !pk.acked2 {
 			if protected || !pk.protected {
 				needs_ack = true
+				newMinNotAcked2 = pn
 			}
+		}
+
+		if ok && pk.acked2 {
+			delete(p.packets, pn)
 		}
 
 		if needs_ack {
@@ -135,6 +152,8 @@ func (p *recvdPackets) prepareAckRange(protected bool, allowAckOnly bool) ackRan
 		p.log(logTypeTrace, "Appending final range %x-%x", last, pn+1)
 		ranges = append(ranges, ackRange{last, last - pn})
 	}
+
+	p.minNotAcked2 = newMinNotAcked2
 
 	p.log(logTypeAck, "%v ACK ranges to send", len(ranges))
 	for i, r := range ranges {

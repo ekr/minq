@@ -31,7 +31,10 @@ const (
 )
 
 const (
-	maxAckGap = 255
+	kAckHeaderLength = 20      // assume 64-bit variable length fields
+	kAckBlockEntryLength = 5   // assume 32-bit variable length fields
+	kMaxAckGap = 255
+	kMaxAckBlocks = 255
 )
 
 type innerFrame interface {
@@ -40,11 +43,13 @@ type innerFrame interface {
 }
 
 type frame struct {
-	stream  uint32
-	f       innerFrame
-	encoded []byte
-	pns     []uint64
-	time    time.Time
+	stream            uint32
+	f                 innerFrame
+	encoded           []byte
+	pns               []uint64
+	lostPns           []uint64
+	time              time.Time
+	needsTransmit     bool
 }
 
 func (f frame) String() string {
@@ -52,7 +57,7 @@ func (f frame) String() string {
 }
 
 func newFrame(stream uint32, inner innerFrame) frame {
-	return frame{stream, inner, nil, nil, time.Unix(0, 0)}
+	return frame{stream, inner, nil, nil, nil, time.Unix(0, 0), true}
 }
 
 // Encode internally if not already encoded.
@@ -118,7 +123,7 @@ func decodeFrame(data []byte) (uintptr, *frame, error) {
 		return 0, nil, err
 	}
 
-	return n, &frame{0, inner, data[:n], nil, time.Now()}, nil
+	return n, &frame{0, inner, data[:n], nil, nil, time.Now(), false}, nil
 }
 
 // Frame definitions below this point.
@@ -394,9 +399,9 @@ func newAckFrame(rs ackRanges, left int) (*frame, int, error) {
 	logf(logTypeFrame, "Making ACK frame %v", rs)
 
 	// See if there is space for any acks, and if there are acks waiting
-	maxackblocks := uint8((left - 16) / 5) // We are using 32-byte values for all the variable-lengths
-	if maxackblocks > 255 {
-		maxackblocks = 255
+	maxackblocks := uint8((left - kAckHeaderLength) / kAckBlockEntryLength)
+	if maxackblocks > kMaxAckBlocks {
+		maxackblocks = kMaxAckBlocks
 	}
 
 	// FIRST, fill in the basic info of the ACK frame
@@ -414,7 +419,7 @@ func newAckFrame(rs ackRanges, left int) (*frame, int, error) {
 	for (maxackblocks > f.NumBlocks) && (addedRanges < len(rs)) {
 		// calculate blocks needed for the next range
 		gap := last - rs[addedRanges].lastPacket - 1
-		blocksneeded := uint64((gap + (maxAckGap - 1)) / maxAckGap)
+		blocksneeded := uint64((gap + (kMaxAckGap - 1)) / kMaxAckGap)
 		if blocksneeded > uint64(maxackblocks) {
 			// break if there is no space
 			break
@@ -424,10 +429,10 @@ func newAckFrame(rs ackRanges, left int) (*frame, int, error) {
 		for i := uint64(0); i < blocksneeded-1; i++ {
 			b := &ackBlock{
 				4, // Fixed 32-bit width (see 0xa above)
-				uint8(maxAckGap),
+				uint8(kMaxAckGap),
 				0,
 			}
-			last -= maxAckGap
+			last -= kMaxAckGap
 			encoded, err := encode(b)
 			if err != nil {
 				return nil, 0, err
@@ -439,7 +444,7 @@ func newAckFrame(rs ackRanges, left int) (*frame, int, error) {
 
 		// Now place the actual block
 		gap = last - rs[addedRanges].lastPacket - 1
-		assert(gap < 256)
+		assert(gap <= kMaxAckGap)
 		b := &ackBlock{
 			4,
 			uint8(gap),
