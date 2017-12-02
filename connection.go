@@ -665,15 +665,9 @@ func (c *Connection) sendCombinedPacket(pt uint8, frames []frame, acks ackRanges
 
 	containsOnlyAcks := len(frames) == 0
 
-	// See if there is space for any acks, and if there are acks waiting
-	maxackblocks := (left - 16) / 5 // We are using 32-byte values for all the variable-lengths
-	if maxackblocks > 255 {
-		maxackblocks = 255
-	}
-
 	// (left - 16) is positive if there is place enough for a basic ACK frame without
 	// aditional ACK blocks.
-	if len(acks) > 0 && (left-16) >= 0 {
+	if len(acks) > 0 && (left-kAckHeaderLength) >= 0 {
 		var af *frame
 		af, asent, err = c.makeAckFrame(acks, left)
 		if err != nil {
