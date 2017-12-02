@@ -124,6 +124,7 @@ type Connection struct {
 	tpHandler          *transportParametersHandler
 	log                loggingFunction
 	retransmitTime     uint32
+	congestion         CongestionController
 	lastSendQueuedTime time.Time
 }
 
@@ -157,10 +158,15 @@ func NewConnection(trans Transport, role uint8, tls TlsConfig, handler Connectio
 		nil,
 		nil,
 		kDefaultInitialRtt,
+		nil,
 		time.Now(),
 	}
 
 	c.log = newConnectionLogger(&c)
+
+	//c.congestion = newCongestionControllerIetf(&c)
+	c.congestion = &CongestionControllerDummy{}
+	c.congestion.setLostPacketHandler(c.handleLostPacket)
 
 	// TODO(ekr@rtfm.com): This isn't generic, but rather tied to
 	// Mint.
@@ -347,7 +353,7 @@ func (c *Connection) sendClientInitial() error {
 
 	c.setState(StateWaitServerFirstFlight)
 
-	return c.sendPacket(packetTypeClientInitial, queued)
+	return c.sendPacket(packetTypeClientInitial, queued, false)
 }
 
 func (c *Connection) sendSpecialClearPacket(pt uint8, connId ConnectionId, pn uint64, version VersionNumber, payload []byte) error {
@@ -367,6 +373,7 @@ func (c *Connection) sendSpecialClearPacket(pt uint8, connId ConnectionId, pn ui
 		return err
 	}
 	packet = append(packet, payload...)
+	c.congestion.onPacketSent(pn, false, len(packet)) //TODO(piet@devae.re) check isackonly
 	c.transport.Send(packet)
 	return nil
 }
@@ -395,7 +402,7 @@ func (c *Connection) determineAead(pt uint8) cipher.AEAD {
 	return aead
 }
 
-func (c *Connection) sendPacketRaw(pt uint8, connId ConnectionId, pn uint64, version VersionNumber, payload []byte) error {
+func (c *Connection) sendPacketRaw(pt uint8, connId ConnectionId, pn uint64, version VersionNumber, payload []byte, containsOnlyAcks bool) error {
 	c.log(logTypeConnection, "Sending packet PT=%v PN=%x: %s", pt, c.nextSendPacket, dumpPacket(payload))
 	left := c.mtu // track how much space is left for payload
 
@@ -434,19 +441,20 @@ func (c *Connection) sendPacketRaw(pt uint8, connId ConnectionId, pn uint64, ver
 	packet := append(hdr, protected...)
 
 	c.log(logTypeTrace, "Sending packet len=%d, len=%v", len(packet), hex.EncodeToString(packet))
+	c.congestion.onPacketSent(pn, containsOnlyAcks, len(packet)) //TODO(piet@devae.re) check isackonly
 	c.transport.Send(packet)
 
 	return nil
 }
 
 // Send a packet with whatever PT seems appropriate now.
-func (c *Connection) sendPacketNow(tosend []frame) error {
+func (c *Connection) sendPacketNow(tosend []frame, containsOnlyAcks bool) error {
 	// Right now this is just 1-RTT 0-phase
-	return c.sendPacket(packetType1RTTProtectedPhase0, tosend)
+	return c.sendPacket(packetType1RTTProtectedPhase0, tosend, containsOnlyAcks)
 }
 
 // Send a packet with a specific PT.
-func (c *Connection) sendPacket(pt uint8, tosend []frame) error {
+func (c *Connection) sendPacket(pt uint8, tosend []frame, containsOnlyAcks bool) error {
 	sent := 0
 
 	payload := make([]byte, 0)
@@ -484,7 +492,7 @@ func (c *Connection) sendPacket(pt uint8, tosend []frame) error {
 	pn := c.nextSendPacket
 	c.nextSendPacket++
 
-	return c.sendPacketRaw(pt, connId, pn, c.version, payload)
+	return c.sendPacketRaw(pt, connId, pn, c.version, payload, containsOnlyAcks)
 }
 
 func (c *Connection) sendFramesInPacket(pt uint8, tosend []frame) error {
@@ -527,11 +535,12 @@ func (c *Connection) sendFramesInPacket(pt uint8, tosend []frame) error {
 	if longHeader {
 		npt |= packetFlagLongHeader
 	}
+	pn := c.nextSendPacket
 	p := packet{
 		packetHeader{
 			npt,
 			connId,
-			c.nextSendPacket,
+			pn,
 			c.version,
 		},
 		nil,
@@ -565,6 +574,7 @@ func (c *Connection) sendFramesInPacket(pt uint8, tosend []frame) error {
 	packet := append(hdr, protected...)
 
 	c.log(logTypeTrace, "Sending packet len=%d, len=%v", len(packet), hex.EncodeToString(packet))
+	c.congestion.onPacketSent(pn, false, len(packet)) //TODO(piet@devae.re) check isackonly
 	c.transport.Send(packet)
 
 	return nil
@@ -603,24 +613,43 @@ func (c *Connection) sendQueued(bareAcks bool) (int, error) {
 
 	sent := int(0)
 
-	// First send stream 0 if needed.
-	pt := uint8(packetTypeClientCleartext)
-	if c.role == RoleServer {
-		pt = packetTypeServerCleartext
+	/*
+	 * ENQUEUE STUFF
+	 */
+
+	// FIRST enqueue data for stream 0
+	err := c.queueStreamFrames(false)
+	if err != nil {
+		return sent, err
 	}
 
-	// Now send other streams if we are in encrypted mode.
+	// SECOND enqueue data for protected streams
 	if c.state == StateEstablished {
-		s, err := c.queueStreamFrames(packetType1RTTProtectedPhase0, true, bareAcks)
+		err := c.queueStreamFrames(true)
+		if err != nil {
+			return sent, err
+		}
+
+		/*
+		 * SEND STUFF
+		 */
+
+		// THIRD send enqueued data from protected streams
+		s, err := c.sendQueuedFrames(packetType1RTTProtectedPhase0, true, bareAcks)
 		if err != nil {
 			return sent, err
 		}
 		sent += s
-		bareAcks = false // We still want to send out data in unprotected mode but we don't need to just ACK stuff.
-
+		// We still want to send out data in unprotected mode but we don't need to just ACK stuff.
+		bareAcks = false
 	}
 
-	s, err := c.queueStreamFrames(pt, false, bareAcks)
+	// FOURTH send enqueued data from stream 0
+	pt := uint8(packetTypeClientCleartext)
+	if c.role == RoleServer {
+		pt = packetTypeServerCleartext
+	}
+	s, err := c.sendQueuedFrames(pt, false, bareAcks)
 	if err != nil {
 		return sent, err
 	}
@@ -633,15 +662,18 @@ func (c *Connection) sendQueued(bareAcks bool) (int, error) {
 func (c *Connection) sendCombinedPacket(pt uint8, frames []frame, acks ackRanges, left int) (int, error) {
 	asent := int(0)
 	var err error
-	for _, f := range frames {
-		l, err := f.length()
-		if err != nil {
-			return 0, err
-		}
-		left -= l
+
+	containsOnlyAcks := len(frames) == 0
+
+	// See if there is space for any acks, and if there are acks waiting
+	maxackblocks := (left - 16) / 5 // We are using 32-byte values for all the variable-lengths
+	if maxackblocks > 255 {
+		maxackblocks = 255
 	}
 
-	if len(acks) > 0 {
+	// (left - 16) is positive if there is place enough for a basic ACK frame without
+	// aditional ACK blocks.
+	if len(acks) > 0 && (left-16) >= 0 {
 		var af *frame
 		af, asent, err = c.makeAckFrame(acks, left)
 		if err != nil {
@@ -654,7 +686,7 @@ func (c *Connection) sendCombinedPacket(pt uint8, frames []frame, acks ackRanges
 	// Record which packets we sent ACKs in.
 	c.sentAcks[c.nextSendPacket] = acks[0:asent]
 
-	err = c.sendPacket(pt, frames)
+	err = c.sendPacket(pt, frames, containsOnlyAcks)
 	if err != nil {
 		return 0, err
 	}
@@ -668,19 +700,9 @@ func (c *Connection) queueFrame(q *[]frame, f frame) {
 }
 
 // Send all the queued data on a set of streams with packet type |pt|
-func (c *Connection) queueStreamFrames(pt uint8, protected bool, bareAcks bool) (int, error) {
-	c.log(logTypeConnection, "%v: sendQueuedStreamData pt=%v, protected=%v",
-		c.label(), pt, protected)
-	frames := make([]frame, 0)
-	sent := int(0)
-	acks := c.recvd.prepareAckRange(protected, false)
-	now := time.Now()
-	txAge := time.Duration(c.retransmitTime) * time.Millisecond
-
-	aeadOverhead := c.determineAead(pt).Overhead()
-
-	leftInitial := c.mtu - aeadOverhead - kLongHeaderLength // TODO(ekr@rtfm.com): check header type
-	left := leftInitial
+func (c *Connection) queueStreamFrames(protected bool) error {
+	c.log(logTypeConnection, "%v: queueStreamFrames, protected=%v",
+		c.label(), protected)
 
 	var streams []*Stream
 	var q *[]frame
@@ -692,8 +714,7 @@ func (c *Connection) queueStreamFrames(pt uint8, protected bool, bareAcks bool) 
 		q = &c.outputProtectedQ
 	}
 
-	// 1. Output all the stream frames that are now permitted by stream flow control
-	//
+	// Output all the stream frames that are now permitted by stream flow control
 	for _, s := range streams {
 		if s != nil {
 			chunks, _ := s.outputWritable()
@@ -703,29 +724,74 @@ func (c *Connection) queueStreamFrames(pt uint8, protected bool, bareAcks bool) 
 		}
 	}
 
-	// 2. Now transmit all the frames permitted by connection level flow control.
-	// We're going to need to be more sophisticated when we actually do connection
-	// level flow control.
+	return nil
+}
+
+/* Transmit all the frames permitted by connection level flow control and
+* the congestion controller. We're going to need to be more sophisticated
+* when we actually do connection level flow control. */
+func (c *Connection) sendQueuedFrames(pt uint8, protected bool, bareAcks bool) (int, error) {
+	c.log(logTypeConnection, "%v: sendQueuedFrames, pt=%v, protected=%v",
+		c.label(), pt, protected)
+
+	acks := c.recvd.prepareAckRange(protected, false)
+	now := time.Now()
+	txAge := time.Duration(c.retransmitTime) * time.Millisecond
+	aeadOverhead := c.determineAead(pt).Overhead()
+	sent := int(0)
+	spaceInCongestionWindow := c.congestion.bytesAllowedToSend()
+
+	// Select the queue we will send from
+	var queue *[]frame
+	if protected {
+		queue = &c.outputProtectedQ
+	} else {
+		queue = &c.outputClearQ
+	}
+
 	// TODO(ekr@rtfm.com): Don't retransmit non-retransmittable.
-	for i, _ := range *q {
-		f := &((*q)[i])
+
+	/* Iterate through the queue, and append frames to packet, sending
+	 * packets when the maximum packet size is reached, or we are not
+	 * allowed to send more from the congestion controller */
+
+	// Store frames that will be sent in the next packet
+	frames := make([]frame, 0)
+	// The length of the next packet to be send
+	spaceInPacket := c.mtu - aeadOverhead - kLongHeaderLength // TODO(ekr@rtfm.com): check header type
+	spaceInCongestionWindow -= (aeadOverhead + kLongHeaderLength)
+
+	for i, _ := range *queue {
+		f := &((*queue)[i])
 		// c.log(logTypeStream, "Examining frame=%v", f)
-		l, err := f.length()
+
+		frameLength, err := f.length()
 		if err != nil {
 			return 0, err
 		}
 
 		cAge := now.Sub(f.time)
-		if cAge < txAge {
+		if f.needsTransmit {
+			c.log(logTypeStream, "Frame %f requires transmission", f.String())
+		} else if cAge < txAge {
 			c.log(logTypeStream, "Skipping frame %f because sent too recently", f.String())
 			continue
 		}
 
+		// if there is no more space in the congestion window, stop
+		// trying to send stuff
+		if spaceInCongestionWindow < frameLength {
+			break
+		}
+
 		c.log(logTypeStream, "Sending frame %s, age = %v", f.String(), cAge)
 		f.time = now
+		f.needsTransmit = false
 
-		if left < l {
-			asent, err := c.sendCombinedPacket(pt, frames, acks, leftInitial)
+		// if there is no more space for the next frame in the packet,
+		// send it and start forming a new packet
+		if spaceInPacket < frameLength {
+			asent, err := c.sendCombinedPacket(pt, frames, acks, spaceInPacket)
 			if err != nil {
 				return 0, err
 			}
@@ -733,12 +799,15 @@ func (c *Connection) queueStreamFrames(pt uint8, protected bool, bareAcks bool) 
 
 			acks = acks[asent:]
 			frames = make([]frame, 0)
-			left = leftInitial
+			spaceInPacket = c.mtu - aeadOverhead - kLongHeaderLength // TODO(ekr@rtfm.com): check header type
+			spaceInCongestionWindow -= (aeadOverhead + kLongHeaderLength)
 		}
 
+		// add the frame to the packet
 		frames = append(frames, *f)
-		left -= l
-		// Record that we send this chunk in the current
+		spaceInPacket -= frameLength
+		spaceInCongestionWindow -= frameLength
+		// Record that we send this chunk in the current packet
 		f.pns = append(f.pns, c.nextSendPacket)
 		sf, ok := f.f.(*streamFrame)
 		if ok && sf.hasFin() {
@@ -747,12 +816,13 @@ func (c *Connection) queueStreamFrames(pt uint8, protected bool, bareAcks bool) 
 	}
 
 	// Send the remainder, plus any ACKs that are left.
+	// TODO(piet@devae.re) This might push the outstanding data over the congestion window
 	c.log(logTypeConnection, "%s: Remainder to send? sent=%v frames=%v acks=%v bareAcks=%v",
 		c.label(), sent, len(frames), len(acks), bareAcks)
 	if len(frames) > 0 || (len(acks) > 0 && bareAcks) {
 		// TODO(ekr@rtfm.com): this may skip acks if there isn't
 		// room, but hopefully we eventually catch up.
-		_, err := c.sendCombinedPacket(pt, frames, acks, leftInitial)
+		_, err := c.sendCombinedPacket(pt, frames, acks, spaceInPacket)
 		if err != nil {
 			return 0, err
 		}
@@ -763,6 +833,29 @@ func (c *Connection) queueStreamFrames(pt uint8, protected bool, bareAcks bool) 
 	}
 
 	return sent, nil
+}
+
+func (c *Connection) handleLostPacket(lostPn uint64) {
+	queues := [...][]frame{c.outputClearQ, c.outputProtectedQ}
+	for _, queue := range queues {
+		for _, frame := range queue {
+			for _, pn := range frame.pns {
+				if pn == lostPn {
+					/* If the packet is considered lost, remember that.
+					 * Do *not* remove the PN from the list, because
+					 * the packet might pop up later anyway, and then
+					 * we want to mark this frame as received. */
+					frame.lostPns = append(frame.lostPns, lostPn)
+				}
+				if len(frame.pns) == len(frame.lostPns) {
+					/* if we consider all packets that this frame was send in as lost,
+					 * we have to retransmit it. */
+					frame.needsTransmit = true
+					break
+				}
+			}
+		}
+	}
 }
 
 // Walk through all the streams and see how many bytes are outstanding.
@@ -1010,7 +1103,7 @@ func (c *Connection) processClientInitial(hdr *packetHeader, payload []byte) err
 		if err != nil {
 			return err
 		}
-		return c.sendPacketRaw(packetTypeServerStatelessRetry, hdr.ConnectionID, hdr.PacketNumber, kQuicVersion, sf.encoded)
+		return c.sendPacketRaw(packetTypeServerStatelessRetry, hdr.ConnectionID, hdr.PacketNumber, kQuicVersion, sf.encoded, false)
 	}
 
 	assert(c.tls.getHsState() == "ServerStateWaitFinished")
@@ -1395,7 +1488,8 @@ func (c *Connection) newFrameData(s *Stream, inner *streamFrame) error {
 	s.newFrameData(inner.Offset, inner.hasFin(), inner.Data)
 
 	remaining := s.recv.maxStreamData - s.recv.lastReceivedByte()
-	c.log(logTypeFlowControl, "Stream %d has %d bytes of credit remaining, last byte received was", s.Id(), remaining, s.recv.lastReceivedByte())
+	c.log(logTypeFlowControl, "Stream %d has %d bytes of credit remaining, last byte received was",
+		s.Id(), remaining, s.recv.lastReceivedByte())
 	if remaining < uint64(kInitialMaxStreamData) && s.Id() != 0 {
 		c.issueStreamCredit(s, int(kInitialMaxStreamData))
 	}
@@ -1448,12 +1542,17 @@ func (c *Connection) processAckRange(start uint64, end uint64, protected bool) {
 		if ok {
 			for _, a := range acks {
 				c.log(logTypeAck, "Ack2 for ack range last=%v len=%v", a.lastPacket, a.count)
+
+				if a.lastPacket < c.recvd.minNotAcked2 {
+					// if there is nothing unacked in the range, continue
+					continue
+				}
+
 				for i := uint64(0); i < a.count; i++ {
 					c.recvd.packetSetAcked2(a.lastPacket - i)
 				}
 			}
 		}
-
 		if pn == end {
 			break
 		}
@@ -1462,16 +1561,20 @@ func (c *Connection) processAckRange(start uint64, end uint64, protected bool) {
 }
 
 func (c *Connection) processAckFrame(f *ackFrame, protected bool) error {
+	var receivedAcks ackRanges
+
 	end := f.LargestAcknowledged
 	start := end - f.AckBlockLength
 
 	// Process the First ACK Block
 	c.log(logTypeAck, "%s: processing ACK range %x-%x", c.label(), start, end)
 	c.processAckRange(start, end, protected)
+	receivedAcks = append(receivedAcks, ackRange{end, end - start + 1})
 
 	// Process aditional ACK Blocks
 	last := start
 	rawAckBlocks := f.AckBlockSection
+
 	for i := uint8(0); i < f.NumBlocks; i++ {
 		var decoded ackBlock
 		bytesread, err := decode(&decoded, rawAckBlocks)
@@ -1493,8 +1596,11 @@ func (c *Connection) processAckFrame(f *ackFrame, protected bool) error {
 		last = start
 		c.log(logTypeAck, "%s: processing ACK range %x-%x", c.label(), start, end)
 		c.processAckRange(start, end, protected)
+		receivedAcks = append(receivedAcks, ackRange{end, end - start + 1})
 	}
-	// TODO(ekr@rtfm.com): Process the ACK timestamps.
+
+	c.congestion.onAckReceived(receivedAcks, 0)
+
 	return nil
 }
 
@@ -1645,7 +1751,7 @@ func (c *Connection) SetHandler(h ConnectionHandler) {
 
 func (c *Connection) close(code ErrorCode, reason string) {
 	f := newConnectionCloseFrame(code, reason)
-	c.sendPacket(packetType1RTTProtectedPhase0, []frame{f})
+	c.sendPacket(packetType1RTTProtectedPhase0, []frame{f}, false)
 }
 
 // Close a connection.

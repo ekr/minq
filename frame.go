@@ -40,11 +40,13 @@ type innerFrame interface {
 }
 
 type frame struct {
-	stream  uint32
-	f       innerFrame
-	encoded []byte
-	pns     []uint64
-	time    time.Time
+	stream            uint32
+	f                 innerFrame
+	encoded           []byte
+	pns               []uint64
+	lostPns           []uint64
+	time              time.Time
+	needsTransmit     bool
 }
 
 func (f frame) String() string {
@@ -52,7 +54,7 @@ func (f frame) String() string {
 }
 
 func newFrame(stream uint32, inner innerFrame) frame {
-	return frame{stream, inner, nil, nil, time.Unix(0, 0)}
+	return frame{stream, inner, nil, nil, nil, time.Unix(0, 0), true}
 }
 
 // Encode internally if not already encoded.
@@ -118,7 +120,7 @@ func decodeFrame(data []byte) (uintptr, *frame, error) {
 		return 0, nil, err
 	}
 
-	return n, &frame{0, inner, data[:n], nil, time.Now()}, nil
+	return n, &frame{0, inner, data[:n], nil, nil, time.Now(), false}, nil
 }
 
 // Frame definitions below this point.
@@ -439,7 +441,7 @@ func newAckFrame(rs ackRanges, left int) (*frame, int, error) {
 
 		// Now place the actual block
 		gap = last - rs[addedRanges].lastPacket - 1
-		assert(gap < 256)
+		assert(gap <= maxAckGap)
 		b := &ackBlock{
 			4,
 			uint8(gap),

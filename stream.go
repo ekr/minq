@@ -58,28 +58,34 @@ func (h *streamHalf) label() string {
 	return "send"
 }
 
-// TODO(ekr@rtfm.com): This isn't efficient in the case where the chunk
-// is the last one, either because we have lost one chunk or because
-// we are writing.
 func (h *streamHalf) insertSortedChunk(offset uint64, last bool, payload []byte) {
 	h.log(logTypeStream, "chunk insert %s stream %v with offset=%v, length=%v (current offset=%v) last=%v", h.label(), h.s.id, offset, len(payload), h.offset, last)
 	h.log(logTypeTrace, "Stream payload %v", hex.EncodeToString(payload))
 	c := streamChunk{h.s, offset, last, dup(payload)}
+	nchunks := len(h.chunks)
 
-	var i int
-	for i = 0; i < len(h.chunks); i++ {
-		if offset < h.chunks[i].offset {
-			break
+	// First check if we can append the new slice at the end
+	if l := nchunks; l == 0 || offset > h.chunks[l - 1].offset {
+
+		h.chunks = append(h.chunks, c)
+
+	} else {
+		// Otherwise find out where it should go
+		var i int
+		for i = 0; i < nchunks; i++ {
+			if offset < h.chunks[i].offset {
+				break
+			}
 		}
-	}
 
-	// This may not be the fastest way to do this splice.
-	tmp := make([]streamChunk, 0, len(h.chunks)+1)
-	tmp = append(tmp, h.chunks[:i]...)
-	tmp = append(tmp, c)
-	tmp = append(tmp, h.chunks[i:]...)
-	h.chunks = tmp
-	h.log(logTypeStream, "Stream now has %v chunks", len(h.chunks))
+		// This may not be the fastest way to do this splice.
+		tmp := make([]streamChunk, 0, nchunks+1)
+		tmp = append(tmp, h.chunks[:i]...)
+		tmp = append(tmp, c)
+		tmp = append(tmp, h.chunks[i:]...)
+		h.chunks = tmp
+	}
+	h.log(logTypeStream, "Stream now has %v chunks", nchunks)
 }
 
 // Uses to force the client initial.
@@ -385,5 +391,5 @@ func (s *Stream) Close() {
 func (s *Stream) Reset(error ErrorCode) error {
 	s.closeSend()
 	f := newRstStreamFrame(s.id, error, s.send.offset)
-	return s.c.sendPacketNow([]frame{f})
+	return s.c.sendPacketNow([]frame{f}, false)
 }
