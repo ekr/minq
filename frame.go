@@ -393,7 +393,7 @@ func (f ackFrame) AckBlockSection__length() uintptr {
 }
 
 func newAckFrame(recvd *recvdPackets, rs ackRanges, left int) (*frame, int, error) {
-	if left < 16 {
+	if left < kAckHeaderLength {
 		return nil, 0, nil
 	}
 	logf(logTypeFrame, "Making ACK frame %v", rs)
