@@ -34,6 +34,8 @@ func (c *TlsConfig) toMint() *mint.Config {
 			config.RequireCookie = true
 		}
 
+		config.CookieProtector, _ = mint.NewDefaultCookieProtector()
+
 		if c.CertificateChain != nil && c.Key != nil {
 			config.Certificates =
 				[]*mint.Certificate{
@@ -91,25 +93,37 @@ func (c *tlsConn) handshake(input []byte) ([]byte, error) {
 			return nil, err
 		}
 	}
-	alert := c.tls.Handshake()
 
-	switch alert {
-	case mint.AlertNoAlert:
-		logf(logTypeTls, "TLS handshake complete")
-		st := c.tls.State()
-		logf(logTypeTls, "Negotiated ALPN = %v", st.NextProto)
-		// TODO(ekr@rtfm.com): Abort on ALPN mismatch when others do.
-		if st.NextProto != kQuicALPNToken {
-			logf(logTypeTls, "ALPN mismatch %v != %v", st.NextProto, kQuicALPNToken)
+outer:
+	for {
+		logf(logTypeTls, "Calling Mint handshake")
+		alert := c.tls.Handshake()
+		hst := c.tls.GetHsState()
+		switch alert {
+		case mint.AlertNoAlert, mint.AlertStatelessRetry:
+			if hst == mint.StateServerConnected || hst == mint.StateClientConnected {
+				st := c.tls.State()
+
+				logf(logTypeTls, "TLS handshake complete")
+				logf(logTypeTls, "Negotiated ALPN = %v", st.NextProto)
+				// TODO(ekr@rtfm.com): Abort on ALPN mismatch when others do.
+				if st.NextProto != kQuicALPNToken {
+					logf(logTypeTls, "ALPN mismatch %v != %v", st.NextProto, kQuicALPNToken)
+				}
+				cs := st.CipherSuite
+				c.cs = &cs
+				c.finished = true
+				break outer
+			}
+			// Loop
+		case mint.AlertWouldBlock:
+			logf(logTypeTls, "TLS would have blocked")
+			break outer
+		default:
+			return nil, fmt.Errorf("TLS sent an alert %v", alert)
 		}
-		cs := st.CipherSuite
-		c.cs = &cs
-		c.finished = true
-	case mint.AlertWouldBlock:
-		logf(logTypeTls, "TLS would have blocked")
-	default:
-		return nil, fmt.Errorf("TLS sent an alert %v", alert)
 	}
+
 	logf(logTypeTls, "TLS wrote %d bytes", c.conn.OutputLen())
 
 	return c.conn.getOutput(), nil
@@ -120,5 +134,5 @@ func (c *tlsConn) computeExporter(label string) ([]byte, error) {
 }
 
 func (c *tlsConn) getHsState() string {
-	return c.tls.GetHsState()
+	return c.tls.GetHsState().String()
 }

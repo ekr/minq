@@ -1088,8 +1088,7 @@ func (c *Connection) processClientInitial(hdr *packetHeader, payload []byte) err
 		return err
 	}
 	c.log(logTypeTrace, "Output of server handshake: %v", hex.EncodeToString(sflt))
-
-	if c.tls.getHsState() == "ServerStateStart" {
+	if c.tls.getHsState() == "Server START" {
 		c.log(logTypeConnection, "Sending Stateless Retry")
 		// We sent HRR
 		sf := newStreamFrame(0, 0, sflt, false)
@@ -1100,7 +1099,6 @@ func (c *Connection) processClientInitial(hdr *packetHeader, payload []byte) err
 		return c.sendPacketRaw(packetTypeServerStatelessRetry, hdr.ConnectionID, hdr.PacketNumber, kQuicVersion, sf.encoded, false)
 	}
 
-	assert(c.tls.getHsState() == "ServerStateWaitFinished")
 	c.streams[0].recv.setOffset(uint64(len(sf.Data)))
 	c.setTransportParameters()
 
@@ -1316,7 +1314,7 @@ func (c *Connection) processStatelessRetry(hdr *packetHeader, payload []byte) er
 
 	// TODO(ekr@rtfm.com): add some more state checks that we don't get
 	// multiple SRs
-	assert(c.tls.getHsState() == "ClientStateWaitSH")
+	assert(c.tls.getHsState() == "Client WAIT_SH")
 
 	// Pass this data to the TLS connection, which gets us another CH which
 	// we insert in ClientInitial
