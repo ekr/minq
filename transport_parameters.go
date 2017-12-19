@@ -195,58 +195,65 @@ func (h *transportParametersHandler) Receive(hs mint.HandshakeType, el *mint.Ext
 	logf(logTypeHandshake, "TransportParametersHandler message=%d", hs)
 	// First see if the other side sent the extension.
 	var body transportParametersXtnBody
-	ok := el.Find(&body)
+	found, err := el.Find(&body)
 
-	h.log(logTypeTrace, "Retrieved transport parameters len=%d %v", len(body.body), hex.EncodeToString(body.body))
+	if err != nil {
+		return fmt.Errorf("Invalid transport parameters")
+	}
+
+	if found {
+		h.log(logTypeTrace, "Retrieved transport parameters len=%d %v", len(body.body), hex.EncodeToString(body.body))
+	}
+
 	var params *TransportParameterList
 
 	if h.role == RoleClient {
 		if hs == mint.HandshakeTypeEncryptedExtensions {
-			if !ok {
+			if !found {
 				h.log(logTypeHandshake, "Missing transport parameters")
 				return fmt.Errorf("Missing transport parameters")
 			}
 			var eeParams encryptedExtensionsTransportParameters
-			_, err := syntax.Unmarshal(body.body, &eeParams)
+			_, err = syntax.Unmarshal(body.body, &eeParams)
 			if err != nil {
 				return err
 			}
 			params = &eeParams.Parameters
 			// TODO(ekr@rtfm.com): Process version #s
 		} else if hs == mint.HandshakeTypeNewSessionTicket {
-			if !ok {
+			if !found {
 				h.log(logTypeHandshake, "Missing transport parameters")
 				return fmt.Errorf("Missing transport parameters")
 			}
 			var nstParams newSessionTicketTransportParameters
-			_, err := syntax.Unmarshal(body.body, &nstParams)
+			_, err = syntax.Unmarshal(body.body, &nstParams)
 			if err != nil {
 				return err
 			}
 			params = &nstParams.Parameters
 		} else {
-			if ok {
+			if found {
 				return fmt.Errorf("Received quic_transport_parameters in inappropriate message %v", hs)
 			}
 			return nil
 		}
 	} else {
 		if hs == mint.HandshakeTypeClientHello {
-			if !ok {
+			if !found {
 				h.log(logTypeHandshake, "Missing transport parameters")
 				return fmt.Errorf("Missing transport parameters")
 			}
 
 			// TODO(ekr@rtfm.com): Process version #s
 			var chParams clientHelloTransportParameters
-			_, err := syntax.Unmarshal(body.body, &chParams)
+			_, err = syntax.Unmarshal(body.body, &chParams)
 			if err != nil {
 				h.log(logTypeHandshake, "Couldn't unmarshal %v", err)
 				return err
 			}
 			params = &chParams.Parameters
 		} else {
-			if ok {
+			if found {
 				return fmt.Errorf("Received quic_transport_parameters in inappropriate message %v", hs)
 			}
 			return nil
@@ -256,7 +263,6 @@ func (h *transportParametersHandler) Receive(hs mint.HandshakeType, el *mint.Ext
 	// Now try to process each param.
 	// TODO(ekr@rtfm.com): Enforce that each param appears only once.
 	var tp transportParameters
-	var err error
 	h.log(logTypeHandshake, "Reading transport parameters values")
 	tp.maxStreamsData, err = params.getUintParameter(kTpIdInitialMaxStreamsData, 4)
 	if err != nil {
