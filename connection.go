@@ -45,14 +45,14 @@ const (
 type VersionNumber uint32
 
 const (
-	kQuicDraftVersion   = 7
+	kQuicDraftVersion   = 8
 	kQuicVersion        = VersionNumber(0xff000000 | kQuicDraftVersion)
 	kQuicGreaseVersion1 = VersionNumber(0x1a1a1a1a)
 	kQuicGreaseVersion2 = VersionNumber(0x2a2a2a2a)
 )
 
 const (
-	kQuicALPNToken = "hq-07"
+	kQuicALPNToken = "hq-08"
 )
 
 const (
