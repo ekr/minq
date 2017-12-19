@@ -362,8 +362,8 @@ func (c *Connection) sendSpecialClearPacket(pt uint8, connId ConnectionId, pn ui
 		packetHeader{
 			pt | packetFlagLongHeader,
 			connId,
-			pn,
 			version,
+			pn,
 		},
 		payload,
 	}
@@ -420,8 +420,8 @@ func (c *Connection) sendPacketRaw(pt uint8, connId ConnectionId, pn uint64, ver
 		packetHeader{
 			pt,
 			connId,
-			pn,
 			version,
+			pn,
 		},
 		nil,
 	}
@@ -540,8 +540,8 @@ func (c *Connection) sendFramesInPacket(pt uint8, tosend []frame) error {
 		packetHeader{
 			npt,
 			connId,
-			pn,
 			c.version,
+			pn,
 		},
 		nil,
 	}
