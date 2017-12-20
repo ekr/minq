@@ -50,15 +50,11 @@ const (
 )
 
 const (
-	packetTypeVersionNegotiation   = 1
-	packetTypeClientInitial        = 2
-	packetTypeServerStatelessRetry = 3
-	packetTypeServerCleartext      = 4
-	packetTypeClientCleartext      = 5
-	packetType0RTTProtected        = 6
-	packetType1RTTProtectedPhase0  = 7
-	packetType1RTTProtectedPhase1  = 8
-	packetTypePublicReset          = 9
+	packetTypeInitial        = 0x7f
+	packetTypeRetry          = 0x7e
+	packetTypeHandshake      = 0x7d
+	packetType0RTTProtected  = 0x7c
+	packetTypeProtectedShort = 0xff // Not a real type
 )
 
 type ConnectionId uint64
@@ -101,7 +97,7 @@ func (p *packetHeader) isProtected() bool {
 	}
 
 	switch p.Type & 0x7f {
-	case packetTypeClientInitial, packetTypeClientCleartext, packetTypeServerCleartext, packetTypeServerStatelessRetry, packetTypeVersionNegotiation:
+	case packetTypeInitial, packetTypeHandshake, packetTypeRetry:
 		return false
 	}
 	return true
@@ -121,11 +117,7 @@ func (p *packetHeader) getHeaderType() byte {
 	if isLongHeader(p) {
 		return p.Type & 0x7f
 	}
-	// Short header.
-	if (p.Type & packetFlagK) != 0 {
-		return packetType1RTTProtectedPhase1
-	}
-	return packetType1RTTProtectedPhase0
+	return packetTypeProtectedShort
 }
 
 func (p packetHeader) ConnectionID__length() uintptr {

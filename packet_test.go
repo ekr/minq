@@ -33,7 +33,7 @@ func packetHeaderEDE(t *testing.T, p *packetHeader) {
 func TestLongHeader(t *testing.T) {
 	p := kTestpacketHeader
 
-	p.setLongHeaderType(packetTypeClientInitial)
+	p.setLongHeaderType(packetTypeInitial)
 
 	packetHeaderEDE(t, &p)
 }

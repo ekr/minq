@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"reflect"
+	"runtime"
 	"strconv"
 	"strings"
 	"unicode"
@@ -169,6 +170,7 @@ func uintDecodeInt(buf *bytes.Reader, size uintptr) (uint64, error) {
 		return 0, err
 	}
 	if rv != int(size) {
+		logf(logTypeCodec, "Short read at:\n"+backtrace())
 		return 0, fmt.Errorf("Not enough bytes in buffer")
 	}
 
@@ -290,4 +292,16 @@ func decode(i interface{}, data []byte) (uintptr, error) {
 	}
 
 	return bytesread, nil
+}
+
+func backtrace() string {
+	bt := string("")
+	for i := 1; ; i++ {
+		_, file, line, ok := runtime.Caller(i)
+		if !ok {
+			break
+		}
+		bt = fmt.Sprintf("%v: %d\n", file, line) + bt
+	}
+	return bt
 }

@@ -353,7 +353,7 @@ func (c *Connection) sendClientInitial() error {
 
 	c.setState(StateWaitServerFirstFlight)
 
-	return c.sendPacket(packetTypeClientInitial, queued, false)
+	return c.sendPacket(packetTypeInitial, queued, false)
 }
 
 func (c *Connection) sendSpecialClearPacket(pt uint8, connId ConnectionId, pn uint64, version VersionNumber, payload []byte) error {
@@ -386,15 +386,15 @@ func (c *Connection) determineAead(pt uint8) cipher.AEAD {
 
 	if c.role == RoleClient {
 		switch {
-		case pt == packetTypeClientInitial:
+		case pt == packetTypeInitial:
 			aead = c.writeClear.aead
-		case pt == packetTypeClientCleartext:
+		case pt == packetTypeHandshake:
 			aead = c.writeClear.aead
 		case pt == packetType0RTTProtected:
 			aead = nil // This will cause a crash b/c 0-RTT doesn't work yet
 		}
 	} else {
-		if pt == packetTypeServerCleartext || pt == packetTypeServerStatelessRetry {
+		if pt == packetTypeHandshake || pt == packetTypeRetry {
 			aead = c.writeClear.aead
 		}
 	}
@@ -409,9 +409,7 @@ func (c *Connection) sendPacketRaw(pt uint8, connId ConnectionId, pn uint64, ver
 	aead := c.determineAead(pt)
 	left -= aead.Overhead()
 
-	// Horrible hack. Map phase0 -> short header.
-	// TODO(ekr@rtfm.com): Fix this way above here.
-	if pt == packetType1RTTProtectedPhase0 {
+	if pt == packetTypeProtectedShort {
 		pt = 3 | packetFlagC // 4-byte packet number
 	} else {
 		pt = pt | packetFlagLongHeader
@@ -449,8 +447,7 @@ func (c *Connection) sendPacketRaw(pt uint8, connId ConnectionId, pn uint64, ver
 
 // Send a packet with whatever PT seems appropriate now.
 func (c *Connection) sendPacketNow(tosend []frame, containsOnlyAcks bool) error {
-	// Right now this is just 1-RTT 0-phase
-	return c.sendPacket(packetType1RTTProtectedPhase0, tosend, containsOnlyAcks)
+	return c.sendPacket(packetTypeProtectedShort, tosend, containsOnlyAcks)
 }
 
 // Send a packet with a specific PT.
@@ -480,11 +477,11 @@ func (c *Connection) sendPacket(pt uint8, tosend []frame, containsOnlyAcks bool)
 
 	connId := c.serverConnId
 	if c.role == RoleClient {
-		if pt == packetTypeClientInitial {
+		if pt == packetTypeInitial {
 			connId = c.clientConnId
 		}
 	} else {
-		if pt == packetTypeServerStatelessRetry {
+		if pt == packetTypeRetry {
 			connId = c.clientConnId
 		}
 	}
@@ -510,10 +507,10 @@ func (c *Connection) sendFramesInPacket(pt uint8, tosend []frame) error {
 	longHeader := true
 	if c.role == RoleClient {
 		switch {
-		case pt == packetTypeClientInitial:
+		case pt == packetTypeInitial:
 			aead = c.writeClear.aead
 			connId = c.clientConnId
-		case pt == packetTypeClientCleartext:
+		case pt == packetTypeHandshake:
 			aead = c.writeClear.aead
 		case pt == packetType0RTTProtected:
 			connId = c.clientConnId
@@ -522,7 +519,7 @@ func (c *Connection) sendFramesInPacket(pt uint8, tosend []frame) error {
 			longHeader = false
 		}
 	} else {
-		if pt == packetTypeServerCleartext {
+		if pt == packetTypeHandshake {
 			aead = c.writeClear.aead
 		} else {
 			longHeader = true
@@ -635,7 +632,7 @@ func (c *Connection) sendQueued(bareAcks bool) (int, error) {
 		 */
 
 		// THIRD send enqueued data from protected streams
-		s, err := c.sendQueuedFrames(packetType1RTTProtectedPhase0, true, bareAcks)
+		s, err := c.sendQueuedFrames(packetTypeProtectedShort, true, bareAcks)
 		if err != nil {
 			return sent, err
 		}
@@ -645,11 +642,7 @@ func (c *Connection) sendQueued(bareAcks bool) (int, error) {
 	}
 
 	// FOURTH send enqueued data from stream 0
-	pt := uint8(packetTypeClientCleartext)
-	if c.role == RoleServer {
-		pt = packetTypeServerCleartext
-	}
-	s, err := c.sendQueuedFrames(pt, false, bareAcks)
+	s, err := c.sendQueuedFrames(packetTypeHandshake, false, bareAcks)
 	if err != nil {
 		return sent, err
 	}
@@ -916,7 +909,7 @@ func (c *Connection) input(p []byte) error {
 		} else {
 			// If we're a client, choke on unknown versions, unless
 			// they come in version negotiation packets.
-			if hdr.getHeaderType() != packetTypeVersionNegotiation {
+			if hdr.Version != 0 {
 				return fmt.Errorf("Received packet with unexpected version %v", hdr.Version)
 			}
 		}
@@ -926,12 +919,12 @@ func (c *Connection) input(p []byte) error {
 	c.log(logTypeFlowControl, "EKR: Received packet %x len=%d", hdr.PacketNumber, len(p))
 	c.log(logTypeConnection, "Packet header %v, %d", hdr, typ)
 
-	if typ == packetTypeVersionNegotiation {
+	if isLongHeader(&hdr) && hdr.Version == 0 {
 		return c.processVersionNegotiation(&hdr, p[hdrlen:])
 	}
 
 	if c.state == StateWaitClientInitial {
-		if typ != packetTypeClientInitial {
+		if typ != packetTypeInitial {
 			c.log(logTypeConnection, "Received unexpected packet before client initial")
 			return nil
 		}
@@ -978,7 +971,7 @@ func (c *Connection) input(p []byte) error {
 	}
 
 	// Now that we know it's valid, process stateless retry.
-	if typ == packetTypeServerStatelessRetry {
+	if typ == packetTypeRetry {
 		return c.processStatelessRetry(&hdr, payload)
 	}
 
@@ -993,11 +986,11 @@ func (c *Connection) input(p []byte) error {
 
 	naf := true
 	switch typ {
-	case packetTypeClientInitial:
+	case packetTypeInitial:
 		err = c.processClientInitial(&hdr, payload)
-	case packetTypeServerCleartext, packetTypeClientCleartext:
+	case packetTypeHandshake:
 		err = c.processCleartext(&hdr, payload, &naf)
-	case packetType1RTTProtectedPhase0, packetType1RTTProtectedPhase1:
+	case packetTypeProtectedShort:
 		err = c.processUnprotected(&hdr, packetNumber, payload, &naf)
 	default:
 		c.log(logTypeConnection, "Unsupported packet type %v", typ)
@@ -1096,7 +1089,7 @@ func (c *Connection) processClientInitial(hdr *packetHeader, payload []byte) err
 		if err != nil {
 			return err
 		}
-		return c.sendPacketRaw(packetTypeServerStatelessRetry, hdr.ConnectionID, hdr.PacketNumber, kQuicVersion, sf.encoded, false)
+		return c.sendPacketRaw(packetTypeRetry, hdr.ConnectionID, hdr.PacketNumber, kQuicVersion, sf.encoded, false)
 	}
 
 	c.streams[0].recv.setOffset(uint64(len(sf.Data)))
@@ -1161,7 +1154,7 @@ func (c *Connection) processCleartext(hdr *packetHeader, payload []byte, naf *bo
 					// clearly a protocol error, but also allows on-path
 					// connection termination, so ust ignore the rest of the
 					// packet.
-					c.log(logTypeConnection, "Received ServerClearText after handshake finished")
+					c.log(logTypeConnection, "Received server Handshake after handshake finished")
 					return nil
 				}
 				// This is the first packet from the server, so.
@@ -1180,7 +1173,7 @@ func (c *Connection) processCleartext(hdr *packetHeader, payload []byte, naf *bo
 					// clearly a protocol error, but also allows on-path
 					// connection termination, so ust ignore the rest of the
 					// packet.
-					c.log(logTypeConnection, "Received ClientClearText after handshake finished")
+					c.log(logTypeConnection, "Received client Handshake after handshake finished")
 					return nil
 				}
 			}
@@ -1254,7 +1247,13 @@ func (c *Connection) sendVersionNegotiation(connId ConnectionId, pn uint64, vers
 		return err
 	}
 
-	return c.sendSpecialClearPacket(packetTypeVersionNegotiation, connId, pn, version, b)
+	// Generate a random packet type.
+	pt, err := generateRand64()
+	if err != nil {
+		return err
+	}
+
+	return c.sendSpecialClearPacket(uint8((pt&0x7f)|packetFlagLongHeader), connId, pn, 0, b)
 }
 
 func (c *Connection) processVersionNegotiation(hdr *packetHeader, payload []byte) error {
@@ -1747,7 +1746,7 @@ func (c *Connection) SetHandler(h ConnectionHandler) {
 
 func (c *Connection) close(code ErrorCode, reason string) {
 	f := newConnectionCloseFrame(code, reason)
-	c.sendPacket(packetType1RTTProtectedPhase0, []frame{f}, false)
+	c.sendPacket(packetTypeProtectedShort, []frame{f}, false)
 }
 
 // Close a connection.

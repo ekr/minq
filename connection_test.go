@@ -516,7 +516,7 @@ func TestVersionNegotiationPacket(t *testing.T) {
 	_, err = decode(&hdr, cap[0])
 	assertNotError(t, err, "Couldn't decode VN")
 	// Check the error.
-	assertEquals(t, hdr.Version, kQuicGreaseVersion2)
+	assertEquals(t, hdr.Version, VersionNumber(0))
 	assertEquals(t, hdr.ConnectionID, client.clientConnId)
 }
 
