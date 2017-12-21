@@ -107,7 +107,7 @@ func (p *packetHeader) hasConnId() bool {
 	if isLongHeader(p) {
 		return true
 	}
-	if (p.Type & packetFlagC) != 0 {
+	if (p.Type & packetFlagC) == 0 {
 		return true
 	}
 	return false
