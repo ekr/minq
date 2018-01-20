@@ -360,6 +360,7 @@ func (f ackFrame) getType() frameType {
 // ACK frames can't presently be decoded with syntax, so we need
 // a custom decoder.
 func (f *ackFrame) unmarshal(buf []byte) (int, error) {
+	logf(logTypeHandshake, "Decoding ACK")
 	// First, decode the header
 	read := int(0)
 	n, err := syntax.Unmarshal(buf, &f.ackFrameHeader)
