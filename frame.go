@@ -360,7 +360,6 @@ func (f ackFrame) getType() frameType {
 // ACK frames can't presently be decoded with syntax, so we need
 // a custom decoder.
 func (f *ackFrame) unmarshal(buf []byte) (int, error) {
-	logf(logTypeHandshake, "Decoding ACK")
 	// First, decode the header
 	read := int(0)
 	n, err := syntax.Unmarshal(buf, &f.ackFrameHeader)
@@ -371,7 +370,7 @@ func (f *ackFrame) unmarshal(buf []byte) (int, error) {
 	read += n
 
 	// Now decode each block
-	for i := uint64(1); i < f.AckBlockCount; i++ {
+	for i := uint64(0); i < f.AckBlockCount; i++ {
 		blk := &ackBlock{}
 		n, err := syntax.Unmarshal(buf, blk)
 		if err != nil {
@@ -400,7 +399,7 @@ func newAckFrame(recvd *recvdPackets, rs ackRanges, left int) (*frame, int, erro
 	f.LargestAcknowledged = rs[0].lastPacket
 	f.FirstAckBlock = rs[0].count - 1
 	last := f.LargestAcknowledged - f.FirstAckBlock
-	f.AckBlockCount = 1
+	f.AckBlockCount = 0
 	addedRanges := 1
 
 	/* TODO(ekr@rtfm.com): Adapt to new encoding

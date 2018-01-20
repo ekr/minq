@@ -1798,7 +1798,7 @@ func (c *Connection) handleError(e error) error {
 }
 
 func (c *Connection) logPacket(dir string, hdr *packetHeader, pn uint64, payload []byte) {
-	l := fmt.Sprintf("Packet %s: PN=%x hdr[%s]: %s", dir, pn, hdr.String(), dumpPacket(payload))
+	l := fmt.Sprintf("Packet %s: PN=%x LEN=%d hdr[%s]: %s", dir, pn, len(payload), hdr.String(), dumpPacket(payload))
 	c.log(logTypePacket, l)
 	c.log(logTypeConnection, l)
 }

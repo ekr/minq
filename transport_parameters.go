@@ -39,9 +39,9 @@ var (
 	kTransportParameterDefaults = []tpDef{
 		{kTpIdInitialMaxStreamsData, kInitialMaxStreamData, 4},
 		{kTpIdInitialMaxData, 8192, 4},
-		{kTpIdInitialMaxStreamIdBidi, 16, 4},
+		//		{kTpIdInitialMaxStreamIdBidi, 16, 4},
 		{kTpIdIdleTimeout, 10, 2},
-		{kTpIdInitialMaxStreamIdUni, 16, 4},
+		//		{kTpIdInitialMaxStreamIdUni, 16, 4},
 	}
 )
 
@@ -60,9 +60,8 @@ type transportParameter struct {
 }
 
 type clientHelloTransportParameters struct {
-	NegotiatedVersion VersionNumber
-	InitialVersion    VersionNumber
-	Parameters        TransportParameterList `tls:"head=2"`
+	InitialVersion VersionNumber
+	Parameters     TransportParameterList `tls:"head=2"`
 }
 
 type encryptedExtensionsTransportParameters struct {
@@ -294,7 +293,6 @@ func (h *transportParametersHandler) Receive(hs mint.HandshakeType, el *mint.Ext
 
 func (h *transportParametersHandler) createClientHelloTransportParameters() ([]byte, error) {
 	chtp := clientHelloTransportParameters{
-		h.version,
 		h.version,
 		nil,
 	}
