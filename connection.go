@@ -1787,7 +1787,7 @@ func (c *Connection) handleError(e error) error {
 	}
 
 	if !isFatalError(e) {
-		return e
+		return nil
 	}
 
 	// Connection has failed.
