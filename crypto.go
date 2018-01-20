@@ -13,8 +13,8 @@ type cryptoState struct {
 
 const kQuicVersionSalt = "afc824ec5fc77eca1e9d36f37fb2d46518c36639"
 
-const clientCtSecretLabel = "QUIC client cleartext Secret"
-const serverCtSecretLabel = "QUIC server cleartext Secret"
+const clientCtSecretLabel = "QUIC client handshake secret"
+const serverCtSecretLabel = "QUIC server handshake secret"
 
 const clientPpSecretLabel = "EXPORTER-QUIC client 1-RTT Secret"
 const serverPpSecretLabel = "EXPORTER-QUIC server 1-RTT Secret"
