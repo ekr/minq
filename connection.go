@@ -1564,6 +1564,7 @@ func (c *Connection) processAckFrame(f *ackFrame, protected bool) error {
 
 	// This is illegal.
 	if f.FirstAckBlock == 0 {
+		logf(logTypeAck, "First ACK block has 0 length")
 		return ErrorInvalidEncoding
 	}
 
