@@ -16,13 +16,15 @@ const (
 type TransportParameterId uint16
 
 const (
-	kTpIdInitialMaxStreamsData = TransportParameterId(0x0000)
-	kTpIdInitialMaxData        = TransportParameterId(0x0001)
-	kTpIdInitialMaxStreamId    = TransportParameterId(0x0002)
-	kTpIdIdleTimeout           = TransportParameterId(0x0003)
-	kTpIdOmitConnectionId      = TransportParameterId(0x0004)
-	kTpIdMaxPacketSize         = TransportParameterId(0x0005)
-	kTpIdStatelessResetToken   = TransportParameterId(0x0006)
+	kTpIdInitialMaxStreamsData  = TransportParameterId(0x0000)
+	kTpIdInitialMaxData         = TransportParameterId(0x0001)
+	kTpIdInitialMaxStreamIdBidi = TransportParameterId(0x0002)
+	kTpIdIdleTimeout            = TransportParameterId(0x0003)
+	kTpIdOmitConnectionId       = TransportParameterId(0x0004)
+	kTpIdMaxPacketSize          = TransportParameterId(0x0005)
+	kTpIdStatelessResetToken    = TransportParameterId(0x0006)
+	kTpIdAckDelayExponent       = TransportParameterId(0x0007)
+	kTpIdInitialMaxStreamIdUni  = TransportParameterId(0x0008)
 )
 
 type tpDef struct {
@@ -37,8 +39,9 @@ var (
 	kTransportParameterDefaults = []tpDef{
 		{kTpIdInitialMaxStreamsData, kInitialMaxStreamData, 4},
 		{kTpIdInitialMaxData, 8192, 4},
-		{kTpIdInitialMaxStreamId, 16, 4},
+		{kTpIdInitialMaxStreamIdBidi, 16, 4},
 		{kTpIdIdleTimeout, 10, 2},
+		{kTpIdInitialMaxStreamIdUni, 16, 4},
 	}
 )
 
@@ -63,6 +66,7 @@ type clientHelloTransportParameters struct {
 }
 
 type encryptedExtensionsTransportParameters struct {
+	NegotiatedVersion VersionNumber
 	SupportedVersions []VersionNumber        `tls:"head=1"`
 	Parameters        TransportParameterList `tls:"head=2"`
 }
@@ -95,10 +99,12 @@ func (tp *TransportParameterList) getUintParameter(id TransportParameterId, size
 
 	b := tp.getParameter(id)
 	if b == nil {
+		logf(logTypeHandshake, "Missing transport parameter %v", id)
 		return 0, ErrorMissingValue
 	}
 
 	if len(b) != int(size) {
+		logf(logTypeHandshake, "Bogus transport parameter %v", id)
 		return 0, ErrorInvalidEncoding
 	}
 
@@ -216,6 +222,7 @@ func (h *transportParametersHandler) Receive(hs mint.HandshakeType, el *mint.Ext
 			var eeParams encryptedExtensionsTransportParameters
 			_, err = syntax.Unmarshal(body.body, &eeParams)
 			if err != nil {
+				h.log(logTypeHandshake, "Failed to decode parameters")
 				return err
 			}
 			params = &eeParams.Parameters
@@ -228,6 +235,7 @@ func (h *transportParametersHandler) Receive(hs mint.HandshakeType, el *mint.Ext
 			var nstParams newSessionTicketTransportParameters
 			_, err = syntax.Unmarshal(body.body, &nstParams)
 			if err != nil {
+				h.log(logTypeHandshake, "Failed to decode parameters")
 				return err
 			}
 			params = &nstParams.Parameters
@@ -272,10 +280,6 @@ func (h *transportParametersHandler) Receive(hs mint.HandshakeType, el *mint.Ext
 	if err != nil {
 		return err
 	}
-	tp.maxStreamId, err = params.getUintParameter(kTpIdInitialMaxStreamId, 4)
-	if err != nil {
-		return err
-	}
 	var tmp uint32
 	tmp, err = params.getUintParameter(kTpIdIdleTimeout, 2)
 	if err != nil {
@@ -309,6 +313,7 @@ func (h *transportParametersHandler) createClientHelloTransportParameters() ([]b
 
 func (h *transportParametersHandler) createEncryptedExtensionsTransportParameters() ([]byte, error) {
 	eetp := encryptedExtensionsTransportParameters{
+		h.version,
 		[]VersionNumber{
 			h.version,
 		},
