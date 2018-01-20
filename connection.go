@@ -13,6 +13,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"github.com/bifurcation/mint"
+	"github.com/bifurcation/mint/syntax"
 	"time"
 )
 
@@ -113,7 +114,7 @@ type Connection struct {
 	nextSendPacket     uint64
 	mtu                int
 	streams            []*Stream
-	maxStream          uint32
+	maxStream          uint64
 	outputClearQ       []frame // For stream 0
 	outputProtectedQ   []frame // For stream >= 0
 	clientInitial      []byte
@@ -252,15 +253,15 @@ func StateName(state State) string {
 	}
 }
 
-func (c *Connection) myStream(id uint32) bool {
+func (c *Connection) myStream(id uint64) bool {
 	return id == 0 || (((id & 1) == 1) == (c.role == RoleClient))
 }
 
-func (c *Connection) ensureStream(id uint32, remote bool) (*Stream, bool, error) {
+func (c *Connection) ensureStream(id uint64, remote bool) (*Stream, bool, error) {
 	c.log(logTypeTrace, "Ensuring stream %d exists", id)
 	// TODO(ekr@rtfm.com): this is not really done, because we never clean up
 	// Resize to fit.
-	if uint32(len(c.streams)) >= id+1 {
+	if uint64(len(c.streams)) >= id+1 {
 		return c.streams[id], false, nil
 	}
 
@@ -269,7 +270,7 @@ func (c *Connection) ensureStream(id uint32, remote bool) (*Stream, bool, error)
 		return nil, false, ErrorProtocolViolation
 	}
 
-	needed := id - uint32(len(c.streams)) + 1
+	needed := id - uint64(len(c.streams)) + 1
 	c.log(logTypeTrace, "Needed=%d", needed)
 	c.streams = append(c.streams, make([]*Stream, needed)...)
 	// Now make all the streams in the same direction
@@ -577,7 +578,7 @@ func (c *Connection) sendFramesInPacket(pt uint8, tosend []frame) error {
 	return nil
 }
 
-func (c *Connection) sendOnStream(streamId uint32, data []byte) error {
+func (c *Connection) sendOnStream(streamId uint64, data []byte) error {
 	c.log(logTypeConnection, "%v: sending %v bytes on stream %v", c.label(), len(data), streamId)
 	stream, newStream, _ := c.ensureStream(streamId, false)
 	if newStream {
@@ -658,9 +659,7 @@ func (c *Connection) sendCombinedPacket(pt uint8, frames []frame, acks ackRanges
 
 	containsOnlyAcks := len(frames) == 0
 
-	// (left - 16) is positive if there is place enough for a basic ACK frame without
-	// aditional ACK blocks.
-	if len(acks) > 0 && (left-kAckHeaderLength) >= 0 {
+	if len(acks) > 0 && (left-kMaxAckHeaderLength) >= 0 {
 		var af *frame
 		af, asent, err = c.makeAckFrame(acks, left)
 		if err != nil {
@@ -997,6 +996,9 @@ func (c *Connection) input(p []byte) error {
 		err = internalError("Unsupported packet type %v", typ)
 	}
 	c.recvd.packetSetReceived(packetNumber, hdr.isProtected(), naf)
+	if err != nil {
+		return err
+	}
 
 	lastSendQueuedTime := c.lastSendQueuedTime
 
@@ -1043,14 +1045,15 @@ func (c *Connection) processClientInitial(hdr *packetHeader, payload []byte) err
 	}
 	payload = payload[i:]
 
-	n, err := decode(&sf, payload)
+	n, err := syntax.Unmarshal(payload, &sf)
+	c.log(logTypeHandshake, "Client initial payload=%v", n)
+
 	if err != nil {
 		c.log(logTypeConnection, "Failure decoding initial stream frame in ClientInitial")
 		return err
 	}
-
 	if sf.StreamId != 0 {
-		return nonFatalError("Received ClientInitial with stream id != 0")
+		return nonFatalError("Received ClientInitial with stream id %v != 0", sf.StreamId)
 	}
 
 	if sf.Offset != 0 {
@@ -1061,6 +1064,7 @@ func (c *Connection) processClientInitial(hdr *packetHeader, payload []byte) err
 		if uint64(len(sf.Data)) > c.streams[0].recv.offset {
 			return nonFatalError("Received second ClientInitial which seems to be too long, offset=%v len=%v", c.streams[0].recv.offset, n)
 		}
+		c.log(logTypeConnection, "Received ClientInitial but state = %v", c.GetState())
 		return nil
 	}
 
@@ -1213,7 +1217,7 @@ func (c *Connection) processCleartext(hdr *packetHeader, payload []byte, naf *bo
 			}
 
 		case *ackFrame:
-			c.log(logTypeAck, "Received ACK, first range=%x-%x", inner.LargestAcknowledged-inner.AckBlockLength, inner.LargestAcknowledged)
+			//			c.log(logTypeAck, "Received ACK, first range=%x-%x", inner.LargestAcknowledged-inner.AckBlockLength, inner.LargestAcknowledged)
 
 			err = c.processAckFrame(inner, false)
 			if err != nil {
@@ -1293,7 +1297,7 @@ func (c *Connection) processStatelessRetry(hdr *packetHeader, payload []byte) er
 	// the stream processor.
 	var sf streamFrame
 
-	n, err := decode(&sf, payload)
+	n, err := syntax.Unmarshal(payload, &sf)
 	if err != nil {
 		c.log(logTypeConnection, "Failure decoding stream frame in Stateless Retry")
 		return err
@@ -1426,7 +1430,7 @@ func (c *Connection) processUnprotected(hdr *packetHeader, packetNumber uint64, 
 			}
 
 		case *ackFrame:
-			c.log(logTypeConnection, "Received ACK, first range=%v-%v", inner.LargestAcknowledged-inner.AckBlockLength, inner.LargestAcknowledged)
+			//			c.log(logTypeConnection, "Received ACK, first range=%v-%v", inner.LargestAcknowledged-inner.AckBlockLength, inner.LargestAcknowledged)
 			err = c.processAckFrame(inner, true)
 			if err != nil {
 				return err
@@ -1515,6 +1519,8 @@ func (c *Connection) removeAckedFrames(pn uint64, qp *[]frame) {
 }
 
 func (c *Connection) processAckRange(start uint64, end uint64, protected bool) {
+	assert(start <= end)
+	c.log(logTypeConnection, "Process ACK range %v-%v", start, end)
 	pn := start
 	// Unusual loop structure to avoid weirdness at 2^64-1
 	for {
@@ -1553,9 +1559,15 @@ func (c *Connection) processAckRange(start uint64, end uint64, protected bool) {
 
 func (c *Connection) processAckFrame(f *ackFrame, protected bool) error {
 	var receivedAcks ackRanges
-
+	c.log(logTypeAck, "%s: processing ACK last=%x first ack block=%d", c.label(), f.LargestAcknowledged, f.FirstAckBlock)
 	end := f.LargestAcknowledged
-	start := end - f.AckBlockLength
+
+	// This is illegal.
+	if f.FirstAckBlock == 0 {
+		return ErrorInvalidEncoding
+	}
+
+	start := (end - f.FirstAckBlock) + 1
 
 	// Decode ACK Delay
 	ackDelayMicros := QuicFloat16(f.AckDelay).Float32()
@@ -1564,26 +1576,18 @@ func (c *Connection) processAckFrame(f *ackFrame, protected bool) error {
 	// Process the First ACK Block
 	c.log(logTypeAck, "%s: processing ACK range %x-%x", c.label(), start, end)
 	c.processAckRange(start, end, protected)
-	receivedAcks = append(receivedAcks, ackRange{end, end - start + 1})
+	receivedAcks = append(receivedAcks, ackRange{end, end - start})
 
 	// Process aditional ACK Blocks
 	last := start
-	rawAckBlocks := f.AckBlockSection
 
-	for i := uint8(0); i < f.NumBlocks; i++ {
-		var decoded ackBlock
-		bytesread, err := decode(&decoded, rawAckBlocks)
-		if err != nil {
-			return err
-		}
-		rawAckBlocks = rawAckBlocks[bytesread:]
+	for _, block := range f.AckBlockSection {
+		end = last - uint64(block.Gap) - 1
+		start = end - block.Length + 1
 
-		end = last - uint64(decoded.Gap) - 1
-		start = end - decoded.Length + 1
-
-		// This happens if a gap is larger than 255
-		if decoded.Length == 0 {
-			last -= uint64(decoded.Gap)
+		// Not clear why the peer did this, but ignore.
+		if block.Length == 0 {
+			last -= uint64(block.Gap)
 			c.log(logTypeAck, "%s: encountered empty ACK block", c.label())
 			continue
 		}
@@ -1780,6 +1784,7 @@ func (c *Connection) ClientId() ConnectionId {
 }
 
 func (c *Connection) handleError(e error) error {
+	c.log(logTypeConnection, "Handling error: %v", e)
 	if e == nil {
 		return nil
 	}

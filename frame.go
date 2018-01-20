@@ -2,16 +2,20 @@ package minq
 
 import (
 	"fmt"
+	"github.com/bifurcation/mint/syntax"
 	"time"
 )
 
 type frameType uint8
 
+type frameNonSyntax interface {
+	unmarshal(b []byte) (int, error)
+}
+
 const (
 	kFrameTypePadding         = frameType(0x0)
 	kFrameTypeRstStream       = frameType(0x1)
 	kFrameTypeConnectionClose = frameType(0x2)
-	kFrameTypeGoaway          = frameType(0x3)
 	kFrameTypeMaxData         = frameType(0x4)
 	kFrameTypeMaxStreamData   = frameType(0x5)
 	kFrameTypeMaxStreamId     = frameType(0x6)
@@ -20,21 +24,23 @@ const (
 	kFrameTypeStreamBlocked   = frameType(0x9)
 	kFrameTypeStreamIdNeeded  = frameType(0xa)
 	kFrameTypeNewConnectionId = frameType(0xb)
-	kFrameTypeAck             = frameType(0xa0)
-	kFrameTypeStream          = frameType(0xc0)
+	kFrameTypeAck             = frameType(0xe)
+	kFrameTypeStream          = frameType(0x10)
+	kFrameTypeStreamMax       = frameType(0x17)
 )
 
 const (
-	kFrameTypeFlagF    = frameType(0x20)
-	kFrameTypeFlagD    = frameType(0x01)
-	kFrameTypeAckFlagN = frameType(0x10)
+	kFrameTypeStreamFlagFIN = frameType(0x01)
+	kFrameTypeStreamFlagLEN = frameType(0x02)
+	kFrameTypeStreamFlagOFF = frameType(0x04)
 )
 
 const (
-	kAckHeaderLength = 20      // assume 64-bit variable length fields
-	kAckBlockEntryLength = 5   // assume 32-bit variable length fields
-	kMaxAckGap = 255
-	kMaxAckBlocks = 255
+	// Assume maximal sizes for these.
+	kMaxAckHeaderLength     = 17
+	kMaxAckBlockEntryLength = 8
+	kMaxAckGap              = 255
+	kMaxAckBlocks           = 255
 )
 
 type innerFrame interface {
@@ -43,20 +49,20 @@ type innerFrame interface {
 }
 
 type frame struct {
-	stream            uint32
-	f                 innerFrame
-	encoded           []byte
-	pns               []uint64
-	lostPns           []uint64
-	time              time.Time
-	needsTransmit     bool
+	stream        uint64
+	f             innerFrame
+	encoded       []byte
+	pns           []uint64
+	lostPns       []uint64
+	time          time.Time
+	needsTransmit bool
 }
 
 func (f frame) String() string {
 	return f.f.String()
 }
 
-func newFrame(stream uint32, inner innerFrame) frame {
+func newFrame(stream uint64, inner innerFrame) frame {
 	return frame{stream, inner, nil, nil, nil, time.Unix(0, 0), true}
 }
 
@@ -66,7 +72,7 @@ func (f *frame) encode() error {
 		return nil
 	}
 	var err error
-	f.encoded, err = encode(f.f)
+	f.encoded, err = syntax.Marshal(f.f)
 	logf(logTypeFrame, "Frame encoded, total length=%v", len(f.encoded))
 	return err
 }
@@ -82,6 +88,9 @@ func (f *frame) length() (int, error) {
 // Decode an arbitrary frame.
 func decodeFrame(data []byte) (uintptr, *frame, error) {
 	var inner innerFrame
+	var n int
+	var err error
+
 	t := data[0]
 	logf(logTypeFrame, "Frame type byte %v", t)
 	switch {
@@ -91,8 +100,6 @@ func decodeFrame(data []byte) (uintptr, *frame, error) {
 		inner = &rstStreamFrame{}
 	case t == uint8(kFrameTypeConnectionClose):
 		inner = &connectionCloseFrame{}
-	case t == uint8(kFrameTypeGoaway):
-		inner = &goawayFrame{}
 	case t == uint8(kFrameTypeMaxData):
 		inner = &maxDataFrame{}
 	case t == uint8(kFrameTypeMaxStreamData):
@@ -109,21 +116,27 @@ func decodeFrame(data []byte) (uintptr, *frame, error) {
 		inner = &streamIdNeededFrame{}
 	case t == uint8(kFrameTypeNewConnectionId):
 		inner = &newConnectionIdFrame{}
-	case t >= uint8(kFrameTypeAck) && t <= 0xbf:
+	case t == uint8(kFrameTypeAck):
 		inner = &ackFrame{}
-	case t >= uint8(kFrameTypeStream):
+	case t >= uint8(kFrameTypeStream) && t <= uint8(kFrameTypeStreamMax):
 		inner = &streamFrame{}
 	default:
 		logf(logTypeConnection, "Unknown frame type %v", t)
 		return 0, nil, fmt.Errorf("Received unknown frame type: %v", t)
 	}
 
-	n, err := decode(inner, data)
+	ns, ok := inner.(frameNonSyntax)
+	if ok {
+		n, err = ns.unmarshal(data)
+
+	} else {
+		n, err = syntax.Unmarshal(data, inner)
+	}
 	if err != nil {
 		return 0, nil, err
 	}
 
-	return n, &frame{0, inner, data[:n], nil, nil, time.Now(), false}, nil
+	return uintptr(n), &frame{0, inner, data[:n], nil, nil, time.Now(), false}, nil
 }
 
 // Frame definitions below this point.
@@ -141,16 +154,16 @@ func (f paddingFrame) getType() frameType {
 	return kFrameTypePadding
 }
 
-func newPaddingFrame(stream uint32) frame {
+func newPaddingFrame(stream uint64) frame {
 	return newFrame(stream, &paddingFrame{0})
 }
 
 // RST_STREAM
 type rstStreamFrame struct {
 	Type        frameType
-	StreamId    uint32
+	StreamId    uint64 `tls:"varint"`
 	ErrorCode   uint16
-	FinalOffset uint64
+	FinalOffset uint64 `tls:"varint"`
 }
 
 func (f rstStreamFrame) String() string {
@@ -161,10 +174,10 @@ func (f rstStreamFrame) getType() frameType {
 	return kFrameTypeRstStream
 }
 
-func newRstStreamFrame(streamId uint32, errorCode ErrorCode, finalOffset uint64) frame {
+func newRstStreamFrame(streamId uint64, errorCode ErrorCode, finalOffset uint64) frame {
 	return newFrame(streamId, &rstStreamFrame{
 		kFrameTypeRstStream,
-		streamId,
+		uint64(streamId),
 		uint16(errorCode),
 		finalOffset})
 
@@ -172,10 +185,9 @@ func newRstStreamFrame(streamId uint32, errorCode ErrorCode, finalOffset uint64)
 
 // CONNECTION_CLOSE
 type connectionCloseFrame struct {
-	Type               frameType
-	ErrorCode          uint16
-	ReasonPhraseLength uint16
-	ReasonPhrase       []byte
+	Type         frameType
+	ErrorCode    uint16
+	ReasonPhrase []byte `tls:"head=255"`
 }
 
 func (f connectionCloseFrame) String() string {
@@ -186,45 +198,20 @@ func (f connectionCloseFrame) getType() frameType {
 	return kFrameTypeConnectionClose
 }
 
-func (f connectionCloseFrame) ReasonPhrase__length() uintptr {
-	return uintptr(f.ReasonPhraseLength)
-}
-
 func newConnectionCloseFrame(errcode ErrorCode, reason string) frame {
 	str := []byte(reason)
 
 	return newFrame(0, &connectionCloseFrame{
 		kFrameTypeConnectionClose,
 		uint16(errcode),
-		uint16(len(str)),
 		[]byte(str),
 	})
-}
-
-// GOAWAY
-type goawayFrame struct {
-	Type                  frameType
-	LargestClientStreamId uint32
-	LargestServerStreamId uint32
-}
-
-func (f goawayFrame) String() string {
-	return "GO_AWAY"
-}
-
-func (f goawayFrame) getType() frameType {
-	return kFrameTypeGoaway
-}
-
-func newGoawayFrame(client uint32, server uint32) frame {
-	return newFrame(0,
-		&goawayFrame{kFrameTypeGoaway, client, server})
 }
 
 // MAX_DATA
 type maxDataFrame struct {
 	Type        frameType
-	MaximumData uint64
+	MaximumData uint64 `tls:"varint"`
 }
 
 func (f maxDataFrame) String() string {
@@ -238,11 +225,11 @@ func (f maxDataFrame) getType() frameType {
 // MAX_STREAM_DATA
 type maxStreamDataFrame struct {
 	Type              frameType
-	StreamId          uint32
-	MaximumStreamData uint64
+	StreamId          uint64 `tls:"varint"`
+	MaximumStreamData uint64 `tls:"varint"`
 }
 
-func newMaxStreamData(stream uint32, offset uint64) frame {
+func newMaxStreamData(stream uint64, offset uint64) frame {
 	return newFrame(stream,
 		&maxStreamDataFrame{
 			kFrameTypeMaxStreamData,
@@ -262,7 +249,7 @@ func (f maxStreamDataFrame) getType() frameType {
 // MAX_STREAM_ID
 type maxStreamIdFrame struct {
 	Type            frameType
-	MaximumStreamId uint32
+	MaximumStreamId uint32 `tls:"varint"`
 }
 
 func (f maxStreamIdFrame) String() string {
@@ -276,6 +263,7 @@ func (f maxStreamIdFrame) getType() frameType {
 // PING
 type pingFrame struct {
 	Type frameType
+	data []byte `tls:"head=2"`
 }
 
 func (f pingFrame) String() string {
@@ -302,7 +290,7 @@ func (f blockedFrame) getType() frameType {
 // STREAM_BLOCKED
 type streamBlockedFrame struct {
 	Type     frameType
-	StreamId uint32
+	StreamId uint64 `tls:"varint"`
 }
 
 func (f streamBlockedFrame) String() string {
@@ -329,8 +317,9 @@ func (f streamIdNeededFrame) getType() frameType {
 // NEW_CONNECTION_ID
 type newConnectionIdFrame struct {
 	Type         frameType
-	Sequence     uint16
+	Sequence     uint16 `tls:"varint"`
 	ConnectionId uint64
+	ResetToken   [16]byte
 }
 
 func (f newConnectionIdFrame) String() string {
@@ -343,128 +332,102 @@ func (f newConnectionIdFrame) getType() frameType {
 
 // ACK
 type ackBlock struct {
-	lengthLength uintptr
-	Gap          uint8
-	Length       uint64
+	Gap    uint64 `tls:"varint"`
+	Length uint64 `tls:"varint"`
 }
 
-func (f ackBlock) Length__length() uintptr {
-	return f.lengthLength
+type ackFrameHeader struct {
+	Type                frameType
+	LargestAcknowledged uint64 `tls:"varint"`
+	AckDelay            uint64 `tls:"varint"`
+	AckBlockCount       uint64 `tls:"varint"`
+	FirstAckBlock       uint64 `tls:"varint"`
 }
 
 type ackFrame struct {
-	Type                frameType
-	NumBlocks           uint8
-	LargestAcknowledged uint64
-	AckDelay            uint16
-	AckBlockLength      uint64
-	AckBlockSection     []byte
+	ackFrameHeader
+	AckBlockSection []*ackBlock `tls:"head=0"`
 }
 
 func (f ackFrame) String() string {
-	return fmt.Sprintf("ACK numBlocks=%d largestAck=%x", f.NumBlocks, f.LargestAcknowledged)
+	return fmt.Sprintf("ACK numBlocks=%d largestAck=%x", f.AckBlockCount, f.LargestAcknowledged)
 }
 
 func (f ackFrame) getType() frameType {
 	return kFrameTypeAck
 }
 
-func (f ackFrame) NumBlocks__length() uintptr {
-	if f.Type&0x10 == 0 {
-		return 0
+// ACK frames can't presently be decoded with syntax, so we need
+// a custom decoder.
+func (f *ackFrame) unmarshal(buf []byte) (int, error) {
+	// First, decode the header
+	read := int(0)
+	n, err := syntax.Unmarshal(buf, &f.ackFrameHeader)
+	if err != nil {
+		return 0, err
 	}
-	return 1
-}
+	buf = buf[n:]
+	read += n
 
-func ackFieldsLength(b byte) uintptr {
-	return []uintptr{1, 2, 4, 8}[b]
-}
+	// Now decode each block
+	for i := uint64(1); i < f.AckBlockCount; i++ {
+		blk := &ackBlock{}
+		n, err := syntax.Unmarshal(buf, blk)
+		if err != nil {
+			return 0, err
+		}
+		buf = buf[n:]
+		read += n
 
-func (f ackFrame) LargestAcknowledged__length() uintptr {
-	return ackFieldsLength((byte(f.Type) >> 2) & 0x3)
-}
+		f.AckBlockSection = append(f.AckBlockSection, blk)
+	}
 
-func (f ackFrame) AckBlockLength__length() uintptr {
-	return ackFieldsLength(byte(f.Type) & 0x3)
-}
-
-func (f ackFrame) AckBlockSection__length() uintptr {
-	return uintptr(f.NumBlocks) * (1 + f.AckBlockLength__length())
+	return read, nil
 }
 
 func newAckFrame(recvd *recvdPackets, rs ackRanges, left int) (*frame, int, error) {
-	if left < kAckHeaderLength {
+	if left < kMaxAckHeaderLength {
 		return nil, 0, nil
 	}
 	logf(logTypeFrame, "Making ACK frame %v", rs)
 
-	// See if there is space for any acks, and if there are acks waiting
-	maxackblocks := uint8((left - kAckHeaderLength) / kAckBlockEntryLength)
-	if maxackblocks > kMaxAckBlocks {
-		maxackblocks = kMaxAckBlocks
-	}
+	left -= kMaxAckHeaderLength
 
 	// FIRST, fill in the basic info of the ACK frame
 	var f ackFrame
 	f.Type = kFrameTypeAck | 0xa // 32 bit inner fields.
-	f.NumBlocks = 0
 	f.LargestAcknowledged = rs[0].lastPacket
-	f.AckBlockLength = rs[0].count - 1
-	last := f.LargestAcknowledged - f.AckBlockLength
-
-	largestAckData, ok := recvd.packets[f.LargestAcknowledged]
-	/* Should always be there. Packets only get removed after being set to ack2,
-	 * which means we should not be acking it again */
-	assert(ok)
-	ackDelayMicros := float32(time.Since(largestAckData.t).Nanoseconds())/1e3
-	f.AckDelay = uint16(NewQuicFloat16(ackDelayMicros))
+	f.FirstAckBlock = rs[0].count
+	last := f.LargestAcknowledged - f.FirstAckBlock
+	f.AckBlockCount = 1
 	addedRanges := 1
 
+	/* TODO(ekr@rtfm.com): Adapt to new encoding
+	largestAckData, ok := recvd.packets[f.LargestAcknowledged]
+	// Should always be there. Packets only get removed after being set to ack2,
+	// which means we should not be acking it again.
+	assert(ok)
+	ackDelayMicros := float32(time.Since(largestAckData.t).Nanoseconds()) / 1e3
+	f.AckDelay = 0
+	*/
+
 	// SECOND, add the remaining ACK blocks that fit and that we have
-	for (maxackblocks > f.NumBlocks) && (addedRanges < len(rs)) {
+	for (left > 0) && (addedRanges < len(rs)) {
 		// calculate blocks needed for the next range
 		gap := last - rs[addedRanges].lastPacket - 1
-		blocksneeded := uint64((gap + (kMaxAckGap - 1)) / kMaxAckGap)
-		if blocksneeded > uint64(maxackblocks) {
-			// break if there is no space
-			break
-		}
 
-		// place the needed empty blocks
-		for i := uint64(0); i < blocksneeded-1; i++ {
-			b := &ackBlock{
-				4, // Fixed 32-bit width (see 0xa above)
-				uint8(kMaxAckGap),
-				0,
-			}
-			last -= kMaxAckGap
-			encoded, err := encode(b)
-			if err != nil {
-				return nil, 0, err
-			}
-			f.Type |= kFrameTypeAckFlagN
-			f.NumBlocks += 1
-			f.AckBlockSection = append(f.AckBlockSection, encoded...)
-		}
-
-		// Now place the actual block
 		gap = last - rs[addedRanges].lastPacket - 1
-		assert(gap <= kMaxAckGap)
 		b := &ackBlock{
-			4,
-			uint8(gap),
+			gap,
 			rs[addedRanges].count,
 		}
-		last = rs[addedRanges].lastPacket - rs[addedRanges].count + 1
-		encoded, err := encode(b)
-		if err != nil {
-			return nil, 0, err
-		}
-		f.Type |= kFrameTypeAckFlagN
-		f.NumBlocks += 1
-		f.AckBlockSection = append(f.AckBlockSection, encoded...)
 
+		last = rs[addedRanges].lastPacket - rs[addedRanges].count + 1
+
+		f.AckBlockCount += 1
+		f.AckBlockSection = append(f.AckBlockSection, b)
 		addedRanges += 1
+		left -= kMaxAckBlockEntryLength // Assume worst-case.
 	}
 
 	ret := newFrame(0, &f)
@@ -473,11 +436,10 @@ func newAckFrame(recvd *recvdPackets, rs ackRanges, left int) (*frame, int, erro
 
 // STREAM
 type streamFrame struct {
-	Typ        frameType
-	StreamId   uint32
-	Offset     uint64
-	DataLength uint16
-	Data       []byte
+	Typ      frameType
+	StreamId uint64 `tls:"varint"`
+	Offset   uint64 `tls:"varint"`
+	Data     []byte `tls:"head=255"`
 }
 
 func (f streamFrame) String() string {
@@ -488,58 +450,91 @@ func (f streamFrame) getType() frameType {
 	return kFrameTypeStream
 }
 
-func (f streamFrame) DataLength__length() uintptr {
-	logf(logTypeFrame, "DataLength__length() called")
-	if (f.Typ & kFrameTypeFlagD) == 0 {
-		return 0
-	}
-	logf(logTypeFrame, "DataLength__length() returning 2")
-	return 2
-}
-
-func (f streamFrame) StreamId__length() uintptr {
-	lengths := []uintptr{1, 2, 3, 4}
-	val := (f.Typ >> 3) & 0x03
-	return lengths[val]
-}
-
-func (f streamFrame) Offset__length() uintptr {
-	lengths := []uintptr{0, 2, 4, 8}
-	val := (f.Typ >> 1) & 0x03
-	return lengths[val]
-}
-
-func (f streamFrame) Data__length() uintptr {
-	if f.DataLength__length() == 0 {
-		return codecDefaultSize
-	}
-	return uintptr(f.DataLength)
-}
-
 func (f streamFrame) hasFin() bool {
-	if f.Typ&kFrameTypeFlagF == 0 {
+	if f.Typ&kFrameTypeStreamFlagFIN == 0 {
 		return false
 	}
 	return true
 }
 
-func newStreamFrame(stream uint32, offset uint64, data []byte, last bool) frame {
+func newStreamFrame(stream uint64, offset uint64, data []byte, last bool) frame {
 	logf(logTypeFrame, "Creating stream frame with data length=%d", len(data))
 	assert(len(data) <= 65535)
 	// TODO(ekr@tfm.com): One might want to allow non
 	// D bit, but not for now.
 	// Set all of SSOO to 1
-	typ := kFrameTypeStream | 0x1e | kFrameTypeFlagD
+	typ := kFrameTypeStream | kFrameTypeStreamFlagLEN | kFrameTypeStreamFlagOFF
 	if last {
-		typ |= kFrameTypeFlagF
+		typ |= kFrameTypeStreamFlagFIN
 	}
 	return newFrame(
 		stream,
 		&streamFrame{
 			typ,
-			uint32(stream),
+			stream,
 			offset,
-			uint16(len(data)),
 			dup(data),
 		})
+}
+
+func decodeVarint(buf []byte) (int, uint64, error) {
+	var vi struct {
+		Val uint64 `tls:"varint"`
+	}
+
+	n, err := syntax.Unmarshal(buf, &vi)
+	if err != nil {
+		return 0, 0, err
+	}
+
+	return n, vi.Val, nil
+}
+
+// Stream frames can't presently be decoded with syntax, so we need
+// a custom decoder.
+func (f *streamFrame) unmarshal(buf []byte) (int, error) {
+	f.Typ = frameType(buf[0])
+	buf = buf[1:]
+	var read = int(1)
+	var n int
+	var err error
+
+	n, f.StreamId, err = decodeVarint(buf)
+	if err != nil {
+		return 0, err
+	}
+	buf = buf[n:]
+	read += n
+
+	if f.Typ&kFrameTypeStreamFlagOFF != 0 {
+		n, f.Offset, err = decodeVarint(buf)
+		if err != nil {
+			return 0, err
+		}
+		buf = buf[n:]
+		read += n
+	}
+
+	if f.Typ&kFrameTypeStreamFlagLEN != 0 {
+		var l uint64
+		n, l, err = decodeVarint(buf)
+		if err != nil {
+			return 0, err
+		}
+		buf = buf[n:]
+		read += n
+
+		logf(logTypeFrame, "Expecting %v bytes", l)
+
+		if l > uint64(len(buf)) {
+			return 0, fmt.Errorf("Insufficient bytes left")
+		}
+		f.Data = dup(buf[:l])
+		read += int(l)
+	} else {
+		f.Data = dup(buf)
+		read += len(buf)
+	}
+
+	return read, nil
 }

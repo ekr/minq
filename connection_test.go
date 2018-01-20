@@ -230,6 +230,11 @@ func TestSendReceiveCISI(t *testing.T) {
 	err = inputAll(server)
 	assertNotError(t, err, "Error processing CFIN")
 
+	fmt.Println("Checking client state")
+	assertEquals(t, client.state, StateEstablished)
+	fmt.Println("Checking server state")
+	assertEquals(t, server.state, StateEstablished)
+
 	// All the server's and client's data should be acked.
 	n := server.outstandingQueuedBytes()
 	assertEquals(t, 0, n)
@@ -237,11 +242,6 @@ func TestSendReceiveCISI(t *testing.T) {
 	// But the client still has-unacked-data
 	n = client.outstandingQueuedBytes()
 	assertEquals(t, 0, n)
-
-	fmt.Println("Checking client state")
-	assertEquals(t, client.state, StateEstablished)
-	fmt.Println("Checking server state")
-	assertEquals(t, server.state, StateEstablished)
 
 	// Run the client's checkTimer, which shouldn't do
 	// anything because you don't ACK acks.
@@ -291,7 +291,7 @@ func TestSendReceiveData(t *testing.T) {
 
 	// Check that we only create streams in one direction
 	cs = pair.client.CreateStream()
-	assertEquals(t, uint32(3), cs.Id())
+	assertEquals(t, uint64(3), cs.Id())
 	assertNotNil(t, pair.client.GetStream(3), "Stream 3 should exist")
 	assertX(t, pair.client.GetStream(2) == nil, "Stream 2 should not exist")
 

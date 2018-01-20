@@ -65,7 +65,7 @@ func (h *streamHalf) insertSortedChunk(offset uint64, last bool, payload []byte)
 	nchunks := len(h.chunks)
 
 	// First check if we can append the new slice at the end
-	if l := nchunks; l == 0 || offset > h.chunks[l - 1].offset {
+	if l := nchunks; l == 0 || offset > h.chunks[l-1].offset {
 
 		h.chunks = append(h.chunks, c)
 
@@ -96,7 +96,7 @@ func (h *streamHalf) setOffset(offset uint64) {
 
 // A single QUIC stream (internal)
 type stream struct {
-	id         uint32
+	id         uint64
 	log        loggingFunction
 	state      streamState
 	send, recv *streamHalf
@@ -179,11 +179,11 @@ func (s *stream) setState(state streamState) *stream {
 	return s
 }
 
-func newStreamInt(id uint32, state streamState, maxStreamData uint64, log loggingFunction) stream {
+func newStreamInt(id uint64, state streamState, maxStreamData uint64, log loggingFunction) stream {
 	s := stream{
-		state: state,
-		id:    id,
-		log:   log,
+		state:    state,
+		id:       id,
+		log:      log,
 		readable: false,
 	}
 	s.send = newStreamHalf(&s, log, kDirSending, maxStreamData)
@@ -192,7 +192,7 @@ func newStreamInt(id uint32, state streamState, maxStreamData uint64, log loggin
 	return s
 }
 
-func newStream(c *Connection, id uint32, maxStreamData uint64, state streamState) *Stream {
+func newStream(c *Connection, id uint64, maxStreamData uint64, state streamState) *Stream {
 	s := &Stream{
 		c,
 		newStreamInt(id, state, maxStreamData, c.log),
@@ -378,7 +378,7 @@ func (s *Stream) Read(b []byte) (int, error) {
 }
 
 // Get the ID of a stream.
-func (s *Stream) Id() uint32 {
+func (s *Stream) Id() uint64 {
 	return s.id
 }
 
