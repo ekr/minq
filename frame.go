@@ -398,7 +398,7 @@ func newAckFrame(recvd *recvdPackets, rs ackRanges, left int) (*frame, int, erro
 	var f ackFrame
 	f.Type = kFrameTypeAck | 0xa // 32 bit inner fields.
 	f.LargestAcknowledged = rs[0].lastPacket
-	f.FirstAckBlock = rs[0].count
+	f.FirstAckBlock = rs[0].count - 1
 	last := f.LargestAcknowledged - f.FirstAckBlock
 	f.AckBlockCount = 1
 	addedRanges := 1
@@ -420,10 +420,10 @@ func newAckFrame(recvd *recvdPackets, rs ackRanges, left int) (*frame, int, erro
 		gap = last - rs[addedRanges].lastPacket - 1
 		b := &ackBlock{
 			gap,
-			rs[addedRanges].count,
+			rs[addedRanges].count - 1,
 		}
 
-		last = rs[addedRanges].lastPacket - rs[addedRanges].count + 1
+		last = rs[addedRanges].lastPacket - rs[addedRanges].count
 
 		f.AckBlockCount += 1
 		f.AckBlockSection = append(f.AckBlockSection, b)

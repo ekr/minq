@@ -1562,13 +1562,7 @@ func (c *Connection) processAckFrame(f *ackFrame, protected bool) error {
 	c.log(logTypeAck, "%s: processing ACK last=%x first ack block=%d", c.label(), f.LargestAcknowledged, f.FirstAckBlock)
 	end := f.LargestAcknowledged
 
-	// This is illegal.
-	if f.FirstAckBlock == 0 {
-		logf(logTypeAck, "First ACK block has 0 length")
-		return ErrorInvalidEncoding
-	}
-
-	start := (end - f.FirstAckBlock) + 1
+	start := (end - f.FirstAckBlock)
 
 	// Decode ACK Delay
 	ackDelayMicros := QuicFloat16(f.AckDelay).Float32()
@@ -1579,12 +1573,14 @@ func (c *Connection) processAckFrame(f *ackFrame, protected bool) error {
 	c.processAckRange(start, end, protected)
 	receivedAcks = append(receivedAcks, ackRange{end, end - start})
 
+	// TODO(ekr@rtfm.com): Check for underflow.
+
 	// Process aditional ACK Blocks
 	last := start
 
 	for _, block := range f.AckBlockSection {
-		end = last - uint64(block.Gap) - 1
-		start = end - block.Length + 1
+		end = last - uint64(block.Gap) - 2
+		start = end - block.Length
 
 		// Not clear why the peer did this, but ignore.
 		if block.Length == 0 {
@@ -1596,7 +1592,7 @@ func (c *Connection) processAckFrame(f *ackFrame, protected bool) error {
 		last = start
 		c.log(logTypeAck, "%s: processing ACK range %x-%x", c.label(), start, end)
 		c.processAckRange(start, end, protected)
-		receivedAcks = append(receivedAcks, ackRange{end, end - start + 1})
+		receivedAcks = append(receivedAcks, ackRange{end, end - start})
 	}
 
 	c.congestion.onAckReceived(receivedAcks, ackDelay)
