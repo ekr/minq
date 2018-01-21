@@ -29,6 +29,8 @@ func (c *TlsConfig) toMint() *mint.Config {
 			NonBlocking:        true,
 			NextProtos:         []string{kQuicALPNToken},
 			SendSessionTickets: true,
+			UseDTLS:            true,
+			AllowEarlyData:     true,
 		}
 
 		if c.ForceHrr {
@@ -100,76 +102,93 @@ func (c *tlsConn) setTransportParametersHandler(h *transportParametersHandler) {
 	c.config.mintConfig.ExtensionHandler = h
 }
 
-func (c *tlsConn) handshake(input []byte) ([]byte, error) {
-	logf(logTypeTls, "TLS handshake input len=%v", len(input))
-	logf(logTypeTrace, "TLS handshake input = %v", hex.EncodeToString(input))
+func (c *tlsConn) isConnected() bool {
+	hst := c.tls.GetHsState()
+	return hst == mint.StateServerConnected || hst == mint.StateClientConnected
+}
+
+func (c *tlsConn) newBytes(input []byte) (uint64, []byte, []byte, error) {
+	logf(logTypeTls, "TLS input [%v] = %x", len(input), input)
+	logf(logTypeTrace, "TLS input = %v", hex.EncodeToString(input))
+
 	if input != nil {
 		err := c.conn.input(input)
 		if err != nil {
-			return nil, err
+			return 0, nil, nil, err
 		}
 	}
 
-outer:
-	for {
-		logf(logTypeTls, "Calling Mint handshake")
-		alert := c.tls.Handshake()
-		hst := c.tls.GetHsState()
-		switch alert {
-		case mint.AlertNoAlert, mint.AlertStatelessRetry:
-			if hst == mint.StateServerConnected || hst == mint.StateClientConnected {
-				st := c.tls.ConnectionState()
+	if !c.isConnected() {
+	outer:
+		for {
+			logf(logTypeTls, "Calling Mint handshake")
+			alert := c.tls.Handshake()
+			hst := c.tls.GetHsState()
+			switch alert {
+			case mint.AlertNoAlert, mint.AlertStatelessRetry:
+				if hst == mint.StateServerConnected || hst == mint.StateClientConnected {
+					st := c.tls.ConnectionState()
 
-				logf(logTypeTls, "TLS handshake complete")
-				logf(logTypeTls, "Negotiated ALPN = %v", st.NextProto)
-				// TODO(ekr@rtfm.com): Abort on ALPN mismatch when others do.
-				if st.NextProto != kQuicALPNToken {
-					logf(logTypeTls, "ALPN mismatch %v != %v", st.NextProto, kQuicALPNToken)
+					logf(logTypeTls, "TLS handshake complete")
+					logf(logTypeTls, "Negotiated ALPN = %v", st.NextProto)
+					// TODO(ekr@rtfm.com): Abort on ALPN mismatch when others do.
+					if st.NextProto != kQuicALPNToken {
+						logf(logTypeTls, "ALPN mismatch %v != %v", st.NextProto, kQuicALPNToken)
+					}
+					cs := st.CipherSuite
+					c.cs = &cs
+					c.finished = true
+
+					break outer
 				}
-				cs := st.CipherSuite
-				c.cs = &cs
-				c.finished = true
-
+				// Loop
+			case mint.AlertWouldBlock:
+				logf(logTypeTls, "TLS would have blocked")
 				break outer
+			default:
+				return 0, nil, nil, fmt.Errorf("TLS sent an alert %v", alert)
 			}
-			// Loop
-		case mint.AlertWouldBlock:
-			logf(logTypeTls, "TLS would have blocked")
-			break outer
-		default:
-			return nil, fmt.Errorf("TLS sent an alert %v", alert)
+
 		}
+		logf(logTypeTls, "TLS wrote %d bytes", c.conn.OutputLen())
+		return 0, nil, c.conn.getOutput(), nil
 	}
 
-	logf(logTypeTls, "TLS wrote %d bytes", c.conn.OutputLen())
+	// Otherwise, we are complete and try to read the application data.
+	buf := make([]byte, len(input))
+	n, err := c.tls.Read(buf)
+	if err == mint.AlertWouldBlock {
+		return 0, nil, nil, ErrorWouldBlock
+	}
+	if err != nil {
+		return 0, nil, nil, err
+	}
+	buf = buf[:n]
+	logf(logTypeTls, "Read bytes from peer: %x", buf)
 
-	return c.conn.getOutput(), nil
+	// TODO(ekr@rtfm.com): return output
+	return 0, buf, nil, nil // TODO(ekr@rtfm.com): return packet number
 }
 
-func (c *tlsConn) readPostHandshake(input []byte) error {
-	// TODO(ekr@rtfm.com): Fix this
-	/*
-		logf(logTypeTls, "TLS post-handshake input len=%v", len(input))
-		if input != nil {
-			err := c.conn.input(input)
-			if err != nil {
-				return err
-			}
-		}
+func (c *tlsConn) sendPacket(p []byte) (uint64, []byte, error) {
+	logf(logTypeTls, "Writing bytes to peer: %x", p)
+	n, err := c.tls.Write(p)
+	assert(n == len(p))
+	if err != nil {
+		return 0, nil, err
+	}
 
-		buf := make([]byte, 1)
-		n, err := c.tls.Read(buf)
-		if n != 0 {
-			return fmt.Errorf("Received TLS application data")
-		}
-		if err != mint.AlertWouldBlock || err == mint.WouldBlock {
-			return err
-		}*/
-	return nil
+	output := c.conn.getOutput()
+	logf(logTypeTls, "Ciphertext: [%v] %x", len(output), output)
+	return 0, output, nil
 }
 
-func (c *tlsConn) computeExporter(label string) ([]byte, error) {
-	return c.tls.ComputeExporter(label, []byte{}, c.cs.Hash.Size())
+func (c *tlsConn) writable() bool {
+	return c.tls.Writable()
+}
+
+func (c *tlsConn) overhead() int {
+	return 64 // TODO(ekr@rtfm.com).
 }
 
 func (c *tlsConn) getHsState() string {

@@ -53,7 +53,7 @@ type testTransport struct {
 }
 
 func (t *testTransport) Send(p []byte) error {
-	t.w.Send(&testPacket{p})
+	t.w.Send(&testPacket{dup(p)})
 	return nil
 }
 
@@ -144,18 +144,149 @@ func newCsPair(t *testing.T) *csPair {
 }
 
 func (pair *csPair) handshake(t *testing.T) {
-	err := pair.client.sendClientInitial()
-	assertNotError(t, err, "Couldn't send client initial packet")
+	err := pair.client.Input([]byte{})
+	assertNotError(t, err, "Couldn't send CH")
 
 	for pair.client.state != StateEstablished || pair.server.state != StateEstablished {
 		err = inputAll(pair.server)
-		assertNotError(t, err, "Error processing CI")
+		if err != nil && err != ErrorWouldBlock {
+			t.Fatalf("Server TLS error: %v", err)
+		}
 
 		err = inputAll(pair.client)
-		assertNotError(t, err, "Error processing SH")
+		if err != nil && err != ErrorWouldBlock {
+			t.Fatalf("Client TLS error: %v", err)
+		}
 	}
 }
 
+func TestConnect(t *testing.T) {
+	pair := newCsPair(t)
+	pair.handshake(t)
+}
+
+func TestConnectSendReceive(t *testing.T) {
+	pair := newCsPair(t)
+	pair.handshake(t)
+	var err error
+	testString := []byte("abcdefghijk")
+
+	// Write data C->S
+	cs := pair.client.CreateStream()
+	assertNotNil(t, cs, "Failed to create a stream")
+	cs.Write(testString)
+
+	// Read data C->S
+	err = inputAll(pair.server)
+	assertNotError(t, err, "Couldn't read input packets")
+	ss := pair.server.GetStream(4)
+	b := ss.readAll()
+	assertNotNil(t, b, "Read data from server")
+	assertByteEquals(t, []byte(testString), b)
+
+	// Write data S->C
+	for i, _ := range b {
+		b[i] ^= 0xff
+	}
+	ss.Write(b)
+
+	// Read data C->S
+	err = inputAll(pair.client)
+	err = inputAll(pair.client)
+	b2 := cs.readAll()
+	assertNotNil(t, b2, "Read data from client")
+	fmt.Printf("Data read %x\n", b2)
+	assertByteEquals(t, b, b2)
+
+	// Check that we only create streams in one direction
+	cs = pair.client.CreateStream()
+	assertEquals(t, uint64(8), cs.Id())
+	assertNotNil(t, pair.client.GetStream(3), "Stream 3 should exist")
+	assertX(t, pair.client.GetStream(2) == nil, "Stream 2 should not exist")
+}
+
+func TestConnectResumption(t *testing.T) {
+	// Make our first connection.
+	cTrans, sTrans := newTestTransportPair(true)
+
+	cconfig := testTlsConfig()
+	client := NewConnection(cTrans, RoleClient, cconfig, nil)
+	assertNotNil(t, client, "Couldn't make client")
+
+	sconfig := testTlsConfig()
+	server := NewConnection(sTrans, RoleServer, sconfig, nil)
+	assertNotNil(t, server, "Couldn't make server")
+
+	pair := &csPair{
+		client,
+		server,
+	}
+	pair.handshake(t)
+	assertX(t, !client.tls.tls.ConnectionState().UsingPSK, "Using PSK")
+	inputAll(pair.client) // Read NST.
+	// Now a second connection.
+
+	assertEquals(t, cconfig.mintConfig.PSKs.Size(), 1)
+	assertEquals(t, sconfig.mintConfig.PSKs.Size(), 1)
+
+	// Now rehandshake
+	client = NewConnection(cTrans, RoleClient, cconfig, nil)
+	assertNotNil(t, client, "Couldn't make client")
+
+	server = NewConnection(sTrans, RoleServer, sconfig, nil)
+	assertNotNil(t, server, "Couldn't make server")
+
+	pair = &csPair{
+		client,
+		server,
+	}
+	pair.handshake(t)
+	assertX(t, client.tls.tls.ConnectionState().UsingPSK, "Not using PSK")
+}
+
+func TestConnect0RTT(t *testing.T) {
+	// Make our first connection.
+	cTrans, sTrans := newTestTransportPair(true)
+
+	cconfig := testTlsConfig()
+	client := NewConnection(cTrans, RoleClient, cconfig, nil)
+	assertNotNil(t, client, "Couldn't make client")
+
+	sconfig := testTlsConfig()
+	server := NewConnection(sTrans, RoleServer, sconfig, nil)
+	assertNotNil(t, server, "Couldn't make server")
+
+	pair := &csPair{
+		client,
+		server,
+	}
+	pair.handshake(t)
+	assertX(t, !client.tls.tls.ConnectionState().UsingPSK, "Using PSK")
+	inputAll(pair.client) // Read NST.
+	// Now a second connection.
+
+	assertEquals(t, cconfig.mintConfig.PSKs.Size(), 1)
+	assertEquals(t, sconfig.mintConfig.PSKs.Size(), 1)
+
+	fmt.Println("Starting second handshake")
+
+	// Now rehandshake
+	client = NewConnection(cTrans, RoleClient, cconfig, nil)
+	assertNotNil(t, client, "Couldn't make client")
+
+	server = NewConnection(sTrans, RoleServer, sconfig, nil)
+	assertNotNil(t, server, "Couldn't make server")
+
+	pair = &csPair{
+		client,
+		server,
+	}
+	pair.handshake(t)
+	assertX(t, client.tls.tls.ConnectionState().UsingPSK, "Not using PSK")
+	assertX(t, client.tls.tls.ConnectionState().UsingEarlyData, "Not using Early data")
+}
+
+/*
 func TestSendCI(t *testing.T) {
 	cTrans, _ := newTestTransportPair(true)
 
@@ -308,7 +439,7 @@ func TestSendReceiveData(t *testing.T) {
 	assertNotError(t, err, "Read close")
 	assertEquals(t, pair.server.GetState(), StateClosed)
 }
-
+*/
 type testReceiveHandler struct {
 	t    *testing.T
 	buf  []byte
@@ -347,6 +478,7 @@ func (h *testReceiveHandler) StreamReadable(s *Stream) {
 	}
 }
 
+/*
 func TestSendReceiveBigData(t *testing.T) {
 	pair := newCsPair(t)
 	pair.handshake(t)
@@ -495,6 +627,7 @@ func TestSendReceiveStreamRst(t *testing.T) {
 	assertEquals(t, 0, n)
 }
 
+/*
 func TestVersionNegotiationPacket(t *testing.T) {
 	cTrans, sTrans := newTestTransportPair(true)
 
@@ -524,7 +657,7 @@ func TestVersionNegotiationPacket(t *testing.T) {
 	assertEquals(t, hdr.Version, VersionNumber(0))
 	assertEquals(t, hdr.ConnectionID, client.clientConnId)
 }
-
+*/
 func TestCantMakeRemoteStream(t *testing.T) {
 	cTrans, _ := newTestTransportPair(true)
 	client := NewConnection(cTrans, RoleClient, testTlsConfig(), nil)
@@ -533,6 +666,7 @@ func TestCantMakeRemoteStream(t *testing.T) {
 	assertEquals(t, ErrorProtocolViolation, err)
 }
 
+/*
 func TestStatelessRetry(t *testing.T) {
 	cTrans, sTrans := newTestTransportPair(true)
 
@@ -598,5 +732,6 @@ func TestSessionResumption(t *testing.T) {
 		assertNotNil(t, server, "Couldn't make server")
 		pair = csPair{client, server}
 		pair.handshake(t)
-	*/
+   ,,,
 }
+*/
