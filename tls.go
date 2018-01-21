@@ -115,6 +115,7 @@ outer:
 				cs := st.CipherSuite
 				c.cs = &cs
 				c.finished = true
+
 				break outer
 			}
 			// Loop
