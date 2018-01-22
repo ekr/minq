@@ -276,7 +276,8 @@ func (f pingFrame) getType() frameType {
 
 // BLOCKED
 type blockedFrame struct {
-	Type frameType
+	Type   frameType
+	Offset uint64 `tls:"varint"`
 }
 
 func (f blockedFrame) String() string {
@@ -291,6 +292,7 @@ func (f blockedFrame) getType() frameType {
 type streamBlockedFrame struct {
 	Type     frameType
 	StreamId uint64 `tls:"varint"`
+	Offset   uint64 `tls:"varint"`
 }
 
 func (f streamBlockedFrame) String() string {
