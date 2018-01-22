@@ -125,7 +125,7 @@ func (p *packetHeader) getHeaderType() byte {
 }
 
 func (p packetHeader) ConnectionID__length() uintptr {
-	if isLongHeader(&p) || isSet(p.Type, packetFlagC) {
+	if isLongHeader(&p) || !isSet(p.Type, packetFlagC) {
 		return 8
 	}
 	return codecDefaultSize
@@ -137,12 +137,12 @@ func (p packetHeader) PacketNumber__length() uintptr {
 		return 4
 	}
 
-	switch p.Type & 0xf {
-	case 1:
+	switch p.Type & 0x3f {
+	case 0x1f:
 		return 1
-	case 2:
+	case 0x1e:
 		return 2
-	case 3:
+	case 0x1d:
 		return 4
 	default:
 		return 4 // TODO(ekr@rtfm.com): This is actually currently an error.
