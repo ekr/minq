@@ -193,6 +193,7 @@ func newStreamInt(id uint64, state streamState, maxStreamData uint64, log loggin
 }
 
 func newStream(c *Connection, id uint64, maxStreamData uint64, state streamState) *Stream {
+	c.log(logTypeStream, "Creating stream %v", id)
 	s := &Stream{
 		c,
 		newStreamInt(id, state, maxStreamData, c.log),

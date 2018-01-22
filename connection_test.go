@@ -277,7 +277,7 @@ func TestSendReceiveData(t *testing.T) {
 	// Read data C->S
 	err = inputAll(pair.server)
 	assertNotError(t, err, "Couldn't read input packets")
-	ss := pair.server.GetStream(1)
+	ss := pair.server.GetStream(4)
 	b := ss.readAll()
 	assertNotNil(t, b, "Read data from server")
 	assertByteEquals(t, []byte(testString), b)
@@ -296,8 +296,8 @@ func TestSendReceiveData(t *testing.T) {
 
 	// Check that we only create streams in one direction
 	cs = pair.client.CreateStream()
-	assertEquals(t, uint64(3), cs.Id())
-	assertNotNil(t, pair.client.GetStream(3), "Stream 3 should exist")
+	assertEquals(t, uint64(8), cs.Id())
+	assertNotNil(t, pair.client.GetStream(1), "Stream 8 should exist")
 	assertX(t, pair.client.GetStream(2) == nil, "Stream 2 should not exist")
 
 	// Close the client.
@@ -396,7 +396,7 @@ func TestSendReceiveRetransmit(t *testing.T) {
 	// Read data C->S
 	err = inputAll(pair.server)
 	assertNotError(t, err, "Couldn't read input packets")
-	ss := pair.server.GetStream(1)
+	ss := pair.server.GetStream(4)
 	b := make([]byte, 1024)
 	n, err := ss.Read(b)
 	assertNotError(t, err, "Error reading")
@@ -449,7 +449,7 @@ func TestSendReceiveStreamFin(t *testing.T) {
 	// Read data C->S
 	err = inputAll(pair.server)
 	assertNotError(t, err, "Couldn't read input packets")
-	ss := pair.server.GetStream(1)
+	ss := pair.server.GetStream(4)
 	b := make([]byte, 1024)
 	n, err = ss.Read(b)
 	assertNotError(t, err, "Couldn't read from client")
@@ -488,7 +488,7 @@ func TestSendReceiveStreamRst(t *testing.T) {
 	// Read data C->S. Should result in no data.
 	err = inputAll(pair.server)
 	assertNotError(t, err, "Couldn't read input packets")
-	ss := pair.server.GetStream(1)
+	ss := pair.server.GetStream(4)
 	b := make([]byte, 1024)
 	n, err = ss.Read(b)
 	assertEquals(t, err, ErrorStreamIsClosed)
@@ -529,7 +529,7 @@ func TestCantMakeRemoteStream(t *testing.T) {
 	cTrans, _ := newTestTransportPair(true)
 	client := NewConnection(cTrans, RoleClient, testTlsConfig(), nil)
 
-	_, _, err := client.ensureStream(1, true)
+	_, _, err := client.ensureStream(4, true)
 	assertEquals(t, ErrorProtocolViolation, err)
 }
 
