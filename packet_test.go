@@ -38,6 +38,14 @@ func TestLongHeader(t *testing.T) {
 	packetHeaderEDE(t, &p)
 }
 
+func TestShortHeader(t *testing.T) {
+	p := kTestpacketHeader
+
+	p.Type = 0x1e
+
+	packetHeaderEDE(t, &p)
+}
+
 /*
 * TODO(ekr@rtfm.com): Rewrite this code and merge it into
 * connection.go
