@@ -254,11 +254,26 @@ func StateName(state State) string {
 }
 
 func (c *Connection) myStream(id uint64) bool {
-	return id == 0 || (((id & 1) == 1) == (c.role == RoleClient))
+	return id == 0 || (((id & 1) == 1) == (c.role == RoleServer))
+}
+
+func (c *Connection) sameTypeStream(id1 uint64, id2 uint64) bool {
+	return (id1 & 0x3) == (id2 & 0x3)
+}
+
+func (c *Connection) streamSuffix(initiator uint8, bidi bool) uint64 {
+	var suff uint64
+	if bidi {
+		suff |= 2
+	}
+	if initiator == RoleServer {
+		suff |= 1
+	}
+	return suff
 }
 
 func (c *Connection) ensureStream(id uint64, remote bool) (*Stream, bool, error) {
-	c.log(logTypeTrace, "Ensuring stream %d exists", id)
+	c.log(logTypeStream, "Ensuring stream %d exists", id)
 	// TODO(ekr@rtfm.com): this is not really done, because we never clean up
 	// Resize to fit.
 	if uint64(len(c.streams)) >= id+1 {
@@ -289,7 +304,7 @@ func (c *Connection) ensureStream(id uint64, remote bool) (*Stream, bool, error)
 			break
 		}
 
-		if (i & 1) == (id & 1) {
+		if c.sameTypeStream(i, id) {
 			s := newStream(c, i, initialMax, kStreamStateIdle)
 			c.streams[i] = s
 			if id != i {
@@ -1003,7 +1018,7 @@ func (c *Connection) input(p []byte) error {
 	lastSendQueuedTime := c.lastSendQueuedTime
 
 	for _, stream := range c.streams {
-		if stream.readable && c.handler != nil {
+		if stream != nil && stream.readable && c.handler != nil {
 			c.handler.StreamReadable(stream)
 			stream.readable = false
 		}
@@ -1702,20 +1717,28 @@ func (c *Connection) packetNonce(pn uint64) []byte {
 // Create a stream on a given connection. Returns the created
 // stream.
 func (c *Connection) CreateStream() *Stream {
-	nextStream := c.maxStream + 1
-
-	// Client opens odd streams
-	if c.role == RoleClient {
-		if (nextStream & 1) == 0 {
-			nextStream++
+	// First see if there is a stream that we haven't
+	// created with this suffix.
+	suff := c.streamSuffix(c.role, false)
+	var i uint64
+	for i = 0; i <= c.maxStream; i++ {
+		if (i & 0x3) != suff {
+			continue
 		}
-	} else {
-		if (nextStream & 1) == 1 {
-			nextStream++
+		if c.streams[i] == nil {
+			s, _, _ := c.ensureStream(i, false)
+			s.setState(kStreamStateOpen)
+			return s
 		}
 	}
 
-	s, _, _ := c.ensureStream(nextStream, false)
+	// TODO(ekr@rtfm.com): Too tired to figure out the math here
+	// for the same parity.
+	for i = c.maxStream + 1; (i & 0x3) != suff; i++ {
+	}
+
+	c.log(logTypeStream, "Creating stream %v", i)
+	s, _, _ := c.ensureStream(i, false)
 	s.setState(kStreamStateOpen)
 	return s
 }
