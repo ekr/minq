@@ -411,7 +411,7 @@ func (c *Connection) sendPacketRaw(pt uint8, connId ConnectionId, pn uint64, ver
 	left -= aead.Overhead()
 
 	if pt == packetTypeProtectedShort {
-		pt = 3 | packetFlagC // 4-byte packet number
+		pt = 0x1d
 	} else {
 		pt = pt | packetFlagLongHeader
 	}
@@ -964,7 +964,7 @@ func (c *Connection) input(p []byte) error {
 
 	payload, err := aead.Open(nil, c.packetNonce(packetNumber), p[hdrlen:], p[:hdrlen])
 	if err != nil {
-		c.log(logTypeConnection, "Could not unprotect packet")
+		c.log(logTypeConnection, "Could not unprotect packet %x", p)
 		c.log(logTypeTrace, "Packet %h", p)
 		return wrapE(ErrorInvalidPacket, err)
 	}

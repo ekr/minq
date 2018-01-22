@@ -81,7 +81,7 @@ func isFatalError(e interface{}) bool {
 }
 
 // Return codes.
-var ErrorWouldBlock = nonFatalError("Would have blocked")
+var ErrorWouldBlock = nonFatalError("Would have blocked (QUIC)")
 var ErrorDestroyConnection = fatalError("Terminate connection")
 var ErrorReceivedVersionNegotiation = fatalError("Received a version negotiation packet advertising a different version than ours")
 var ErrorConnIsClosed = fatalError("Connection is closed")

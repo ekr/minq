@@ -263,7 +263,7 @@ func (f maxStreamIdFrame) getType() frameType {
 // PING
 type pingFrame struct {
 	Type frameType
-	data []byte `tls:"head=2"`
+	Data []byte `tls:"head=1"`
 }
 
 func (f pingFrame) String() string {
