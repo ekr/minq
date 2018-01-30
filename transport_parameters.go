@@ -195,7 +195,10 @@ func (h *transportParametersHandler) Receive(hs mint.HandshakeType, el *mint.Ext
 	logf(logTypeHandshake, "TransportParametersHandler message=%d", hs)
 	// First see if the other side sent the extension.
 	var body transportParametersXtnBody
-	ok := el.Find(&body)
+	ok, ferr := el.Find(&body)
+	if ferr != nil {
+		return ferr;
+	}
 
 	h.log(logTypeTrace, "Retrieved transport parameters len=%d %v", len(body.body), hex.EncodeToString(body.body))
 	var params *TransportParameterList
