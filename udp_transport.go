@@ -31,7 +31,7 @@ type UdpTransportFactory struct {
 	local *net.UDPConn
 }
 
-func (f *UdpTransportFactory) makeTransport(remote *net.UDPAddr) (Transport, error) {
+func (f *UdpTransportFactory) MakeTransport(remote *net.UDPAddr) (Transport, error) {
 	logf(logTypeUdp, "Making transport with remote addr %v", remote)
 	return NewUdpTransport(f.local, remote), nil
 }
