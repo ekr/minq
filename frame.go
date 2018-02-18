@@ -187,7 +187,7 @@ func newRstStreamFrame(streamId uint64, errorCode ErrorCode, finalOffset uint64)
 type connectionCloseFrame struct {
 	Type         frameType
 	ErrorCode    uint16
-	ReasonPhrase []byte `tls:"head=255"`
+	ReasonPhrase []byte `tls:"head=varint"`
 }
 
 func (f connectionCloseFrame) String() string {
@@ -439,7 +439,7 @@ type streamFrame struct {
 	Typ      frameType
 	StreamId uint64 `tls:"varint"`
 	Offset   uint64 `tls:"varint"`
-	Data     []byte `tls:"head=255"`
+	Data     []byte `tls:"head=varint"`
 }
 
 func (f streamFrame) String() string {
