@@ -73,17 +73,18 @@ func newTlsConn(conf *TlsConfig, role uint8) *tlsConn {
 
 	c := newConnBuffer()
 
+	conf2 := *conf
 	return &tlsConn{
-		conf,
+		&conf2,
 		c,
-		mint.NewConn(c, conf.toMint(), isClient),
+		mint.NewConn(c, conf2.toMint(), isClient),
 		false,
 		nil,
 	}
 }
 
 func (c *tlsConn) setTransportParametersHandler(h *transportParametersHandler) {
-	c.tls.SetExtensionHandler(h)
+	c.config.mintConfig.ExtensionHandler = h
 }
 
 func (c *tlsConn) handshake(input []byte) ([]byte, error) {
@@ -104,7 +105,7 @@ outer:
 		switch alert {
 		case mint.AlertNoAlert, mint.AlertStatelessRetry:
 			if hst == mint.StateServerConnected || hst == mint.StateClientConnected {
-				st := c.tls.State()
+				st := c.tls.ConnectionState()
 
 				logf(logTypeTls, "TLS handshake complete")
 				logf(logTypeTls, "Negotiated ALPN = %v", st.NextProto)
