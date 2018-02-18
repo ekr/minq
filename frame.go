@@ -346,7 +346,7 @@ type ackFrameHeader struct {
 
 type ackFrame struct {
 	ackFrameHeader
-	AckBlockSection []*ackBlock `tls:"head=0"`
+	AckBlockSection []*ackBlock `tls:"head=none"`
 }
 
 func (f ackFrame) String() string {
