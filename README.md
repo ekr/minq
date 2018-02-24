@@ -30,7 +30,8 @@ Other defects include:
 ## WARNING
 
 Minq is absolutely not suitable for any kind of production use and should
-only be used for testing.
+only be used for testing. In particular, it explicitly doesn't validate
+certificates.
 
 
 
@@ -38,10 +39,9 @@ only be used for testing.
 
 
     cd ${GOPATH}/src
-    # The following line will produce a complaint about mint.CipherSuiteParams. Ignore it.
     go get github.com/ekr/minq
     cd github.com/bifurcation/mint
-       cd ../../ekr/minq
+    cd ../../ekr/minq
     go test
 
 This should produce something like this:
