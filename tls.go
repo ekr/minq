@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"github.com/bifurcation/mint"
+	"log"
 )
 
 type TlsConfig struct {
@@ -35,6 +36,7 @@ func (c *TlsConfig) toMint() *mint.Config {
 		}
 
 		config.CookieProtector, _ = mint.NewDefaultCookieProtector()
+		config.InsecureSkipVerify = true // TODO(ekr@rtfm.com): This is horribly insecure, but Minq is right now for testing
 
 		if c.CertificateChain != nil && c.Key != nil {
 			config.Certificates =
@@ -44,6 +46,17 @@ func (c *TlsConfig) toMint() *mint.Config {
 						PrivateKey: c.Key,
 					},
 				}
+		} else {
+			priv, cert, err := mint.MakeNewSelfSignedCert(c.ServerName, mint.ECDSA_P256_SHA256)
+			if err != nil {
+				log.Fatalf("Couldn't make self-signed cert %v", err)
+			}
+			config.Certificates = []*mint.Certificate{
+				{
+					Chain:      []*x509.Certificate{cert},
+					PrivateKey: priv,
+				},
+			}
 		}
 		config.Init(false)
 		c.mintConfig = &config
