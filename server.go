@@ -29,6 +29,11 @@ type ServerHandler interface {
 	NewConnection(c *Connection)
 }
 
+// SetHandler sets a handler function.
+func (s *Server) SetHandler(h ServerHandler) {
+	s.handler = h
+}
+
 // Pass an incoming packet to the Server.
 func (s *Server) Input(addr *net.UDPAddr, data []byte) (*Connection, error) {
 	logf(logTypeServer, "Received packet from %v", addr)
