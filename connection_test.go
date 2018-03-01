@@ -3,6 +3,7 @@ package minq
 import (
 	"fmt"
 	"testing"
+	"time"
 )
 
 type testPacket struct {
@@ -259,6 +260,14 @@ func TestSendReceiveCISI(t *testing.T) {
 	assertEquals(t, 0, n)
 }
 
+func drain(t *testing.T, c *Connection) {
+	// Reach into the connection and frob the timer so that we don't have to wait.
+	c.closingEnd = time.Now()
+	_, err := c.CheckTimer()
+	assertEquals(t, err, ErrorConnIsClosed)
+	assertEquals(t, c.GetState(), StateClosed)
+}
+
 func TestSendReceiveData(t *testing.T) {
 	testString := []byte("abcdef")
 	pair := newCsPair(t)
@@ -302,11 +311,15 @@ func TestSendReceiveData(t *testing.T) {
 
 	// Close the client.
 	pair.client.Close()
+	assertEquals(t, pair.client.GetState(), StateClosing)
 
 	// Read the close.
 	err = inputAll(pair.server)
 	assertNotError(t, err, "Read close")
-	assertEquals(t, pair.server.GetState(), StateClosed)
+	assertEquals(t, pair.server.GetState(), StateClosing)
+
+	drain(t, pair.client)
+	drain(t, pair.server)
 }
 
 type testReceiveHandler struct {
