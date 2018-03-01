@@ -8,26 +8,26 @@ package minq
 import (
 	"math"
 	"time"
-//	"fmt"
+	//	"fmt"
 )
 
 // congestion control related constants
 const (
-	kDefaultMss            = 1460   // bytes
-	kInitalWindow          = 10 * kDefaultMss
-	kMinimumWindow         =  2 * kDefaultMss
-	kMaximumWindow         = kInitalWindow
-	kLossReductionFactor   = 0.5
+	kDefaultMss          = 1460 // bytes
+	kInitalWindow        = 10 * kDefaultMss
+	kMinimumWindow       = 2 * kDefaultMss
+	kMaximumWindow       = kInitalWindow
+	kLossReductionFactor = 0.5
 )
 
 // loss dectection related constants
 const (
-	kMaxTLPs                 = 2
-	kReorderingThreshold     = 3
-	kTimeReorderingFraction  = 0.125
-	kMinTLPTimeout           = 10   // ms
-	kMinRTOTimeout           = 200  // ms
-	kDelayedAckTimeout       = 25   // ms
+	kMaxTLPs                = 2
+	kReorderingThreshold    = 3
+	kTimeReorderingFraction = 0.125
+	kMinTLPTimeout          = 10  // ms
+	kMinRTOTimeout          = 200 // ms
+	kDelayedAckTimeout      = 25  // ms
 //	kDefaultInitialRtt       = 100  // ms // already in connection.go
 )
 
@@ -36,28 +36,27 @@ type CongestionController interface {
 	onAckReceived(acks ackRanges, delay time.Duration)
 	bytesAllowedToSend() int
 	setLostPacketHandler(handler func(pn uint64))
-
 }
 
 /*
  * DUMMY congestion controller
  */
 
-type CongestionControllerDummy struct{
+type CongestionControllerDummy struct {
 }
 
-func (cc *CongestionControllerDummy) onPacketSent(pn uint64, isAckOnly bool, sentBytes int){
+func (cc *CongestionControllerDummy) onPacketSent(pn uint64, isAckOnly bool, sentBytes int) {
 }
 
-func (cc *CongestionControllerDummy) onAckReceived(acks ackRanges, delay time.Duration){
+func (cc *CongestionControllerDummy) onAckReceived(acks ackRanges, delay time.Duration) {
 }
 
-func (cc *CongestionControllerDummy) bytesAllowedToSend() int{
+func (cc *CongestionControllerDummy) bytesAllowedToSend() int {
 	/* return the the maximum int value */
 	return int(^uint(0) >> 1)
 }
 
-func (cc *CongestionControllerDummy) setLostPacketHandler(handler func(pn uint64)){
+func (cc *CongestionControllerDummy) setLostPacketHandler(handler func(pn uint64)) {
 }
 
 /*
@@ -66,21 +65,21 @@ func (cc *CongestionControllerDummy) setLostPacketHandler(handler func(pn uint64
 
 type CongestionControllerIetf struct {
 	// Congestion control related
-	bytesInFlight          int
-	congestionWindow       int
-	endOfRecovery          uint64
-	sstresh                int
+	bytesInFlight    int
+	congestionWindow int
+	endOfRecovery    uint64
+	sstresh          int
 
 	// Loss detection related
-	lossDetectionAlarm     int //TODO(ekr@rtfm.com) set this to the right type
-	handshakeCount         int
-	tlpCount               int
-	rtoCount               int
-	largestSendBeforeRto   uint64
-	timeOfLastSentPacket   time.Time
-	largestSendPacket      uint64
-	largestAckedPacket     uint64
-//	largestRtt             time.Duration
+	lossDetectionAlarm   int //TODO(ekr@rtfm.com) set this to the right type
+	handshakeCount       int
+	tlpCount             int
+	rtoCount             int
+	largestSendBeforeRto uint64
+	timeOfLastSentPacket time.Time
+	largestSendPacket    uint64
+	largestAckedPacket   uint64
+	//	largestRtt             time.Duration
 	smoothedRtt            time.Duration
 	rttVar                 time.Duration
 	smoothedRttTcp         time.Duration
@@ -91,23 +90,22 @@ type CongestionControllerIetf struct {
 	sentPackets            map[uint64]packetEntry
 
 	// others
-	lostPacketHandler      func(pn uint64)
-	conn                   *Connection
+	lostPacketHandler func(pn uint64)
+	conn              *Connection
 }
 
-type packetEntry struct{
-	pn         uint64
-	txTime     time.Time
-	bytes      int
+type packetEntry struct {
+	pn     uint64
+	txTime time.Time
+	bytes  int
 }
 
-
-func (cc *CongestionControllerIetf) onPacketSent(pn uint64, isAckOnly bool, sentBytes int){
+func (cc *CongestionControllerIetf) onPacketSent(pn uint64, isAckOnly bool, sentBytes int) {
 	cc.timeOfLastSentPacket = time.Now()
 	cc.largestSendPacket = pn
 	packetData := packetEntry{pn, time.Now(), 0}
 	cc.conn.log(logTypeCongestion, "Packet send pn: %d len:%d ackonly: %v\n", pn, sentBytes, isAckOnly)
-	if !isAckOnly{
+	if !isAckOnly {
 		cc.onPacketSentCC(sentBytes)
 		packetData.bytes = sentBytes
 		cc.setLossDetectionAlarm()
@@ -115,9 +113,8 @@ func (cc *CongestionControllerIetf) onPacketSent(pn uint64, isAckOnly bool, sent
 	cc.sentPackets[pn] = packetData
 }
 
-
 // acks is received to be a sorted list, where the largest packet numbers are at the beginning
-func(cc *CongestionControllerIetf) onAckReceived(acks ackRanges, ackDelay time.Duration){
+func (cc *CongestionControllerIetf) onAckReceived(acks ackRanges, ackDelay time.Duration) {
 
 	// keep track of largest packet acked overall
 	if acks[0].lastPacket > cc.largestAckedPacket {
@@ -131,7 +128,7 @@ func(cc *CongestionControllerIetf) onAckReceived(acks ackRanges, ackDelay time.D
 		cc.conn.log(logTypeCongestion, "latestRtt: %v, ackDelay: %v", latestRtt, ackDelay)
 		cc.updateRttTcp(latestRtt)
 
-		if (latestRtt > ackDelay){
+		if latestRtt > ackDelay {
 			latestRtt -= ackDelay
 		}
 		cc.updateRtt(latestRtt)
@@ -153,67 +150,65 @@ func(cc *CongestionControllerIetf) onAckReceived(acks ackRanges, ackDelay time.D
 	cc.setLossDetectionAlarm()
 }
 
-func (cc *CongestionControllerIetf)	setLostPacketHandler(handler func(pn uint64)){
+func (cc *CongestionControllerIetf) setLostPacketHandler(handler func(pn uint64)) {
 	cc.lostPacketHandler = handler
 }
 
-
-func(cc *CongestionControllerIetf) updateRtt(latestRtt time.Duration){
-	if (cc.smoothedRtt == 0){
+func (cc *CongestionControllerIetf) updateRtt(latestRtt time.Duration) {
+	if cc.smoothedRtt == 0 {
 		cc.smoothedRtt = latestRtt
 		cc.rttVar = time.Duration(int64(latestRtt) / 2)
 	} else {
-		rttDelta := cc.smoothedRtt - latestRtt;
+		rttDelta := cc.smoothedRtt - latestRtt
 		if rttDelta < 0 {
 			rttDelta = -rttDelta
 		}
-		cc.rttVar = time.Duration(int64(cc.rttVar) * 3/4 + int64(rttDelta) * 1/4)
-		cc.smoothedRtt = time.Duration(int64(cc.smoothedRtt) * 7/8 + int64(latestRtt) * 1/8)
+		cc.rttVar = time.Duration(int64(cc.rttVar)*3/4 + int64(rttDelta)*1/4)
+		cc.smoothedRtt = time.Duration(int64(cc.smoothedRtt)*7/8 + int64(latestRtt)*1/8)
 	}
 	cc.conn.log(logTypeCongestion, "New RTT estimate: %v, variance: %v", cc.smoothedRtt, cc.rttVar)
 }
 
-func(cc *CongestionControllerIetf) updateRttTcp(latestRtt time.Duration){
-	if (cc.smoothedRttTcp == 0){
+func (cc *CongestionControllerIetf) updateRttTcp(latestRtt time.Duration) {
+	if cc.smoothedRttTcp == 0 {
 		cc.smoothedRttTcp = latestRtt
 		cc.rttVarTcp = time.Duration(int64(latestRtt) / 2)
 	} else {
-		rttDelta := cc.smoothedRttTcp - latestRtt;
+		rttDelta := cc.smoothedRttTcp - latestRtt
 		if rttDelta < 0 {
 			rttDelta = -rttDelta
 		}
-		cc.rttVarTcp = time.Duration(int64(cc.rttVarTcp) * 3/4 + int64(rttDelta) * 3/4)
-		cc.smoothedRttTcp = time.Duration(int64(cc.smoothedRttTcp) * 7/8 + int64(latestRtt) * 1/8)
+		cc.rttVarTcp = time.Duration(int64(cc.rttVarTcp)*3/4 + int64(rttDelta)*3/4)
+		cc.smoothedRttTcp = time.Duration(int64(cc.smoothedRttTcp)*7/8 + int64(latestRtt)*1/8)
 	}
 	cc.conn.log(logTypeCongestion, "New RTT(TCP) estimate: %v, variance: %v", cc.smoothedRttTcp, cc.rttVarTcp)
 }
 
-
-func(cc *CongestionControllerIetf) onPacketAcked(pn uint64){
+func (cc *CongestionControllerIetf) onPacketAcked(pn uint64) {
 	cc.onPacketAckedCC(pn)
 	//TODO(ekr@rtfm.com) some RTO stuff here
 	delete(cc.sentPackets, pn)
 }
 
-func(cc *CongestionControllerIetf) setLossDetectionAlarm(){
+func (cc *CongestionControllerIetf) setLossDetectionAlarm() {
 	//TODO(ekr@rtfm.com)
 }
 
-func(cc *CongestionControllerIetf) onLossDetectionAlarm(){
+func (cc *CongestionControllerIetf) onLossDetectionAlarm() {
 	//TODO(ekr@rtfm.com)
 }
 
-func(cc *CongestionControllerIetf) detectLostPackets(){
+func (cc *CongestionControllerIetf) detectLostPackets() {
 	var lostPackets []packetEntry
 	//TODO(ekr@rtfm.com) implement loss detection different from reorderingThreshold
 	for _, packet := range cc.sentPackets {
 		if (cc.largestAckedPacket > packet.pn) &&
-			(cc.largestAckedPacket - packet.pn > uint64(cc.reorderingThreshold)) {
-				lostPackets = append(lostPackets, packet)
+			(cc.largestAckedPacket-packet.pn > uint64(cc.reorderingThreshold)) {
+			lostPackets = append(lostPackets, packet)
 		}
 	}
 
-	if len(lostPackets) > 0{
+	if len(lostPackets) > 0 {
 		cc.onPacketsLost(lostPackets)
 	}
 	for _, packet := range lostPackets {
@@ -221,12 +216,12 @@ func(cc *CongestionControllerIetf) detectLostPackets(){
 	}
 }
 
-func (cc *CongestionControllerIetf) onPacketSentCC(bytes_sent int){
+func (cc *CongestionControllerIetf) onPacketSentCC(bytes_sent int) {
 	cc.bytesInFlight += bytes_sent
 	cc.conn.log(logTypeCongestion, "%d bytes added to bytesInFlight", bytes_sent)
 }
 
-func (cc *CongestionControllerIetf) onPacketAckedCC(pn uint64){
+func (cc *CongestionControllerIetf) onPacketAckedCC(pn uint64) {
 	cc.bytesInFlight -= cc.sentPackets[pn].bytes
 	cc.conn.log(logTypeCongestion, "%d bytes from packet %d removed from bytesInFlight", cc.sentPackets[pn].bytes, pn)
 
@@ -238,7 +233,7 @@ func (cc *CongestionControllerIetf) onPacketAckedCC(pn uint64){
 		// Slow start
 		cc.congestionWindow += cc.sentPackets[pn].bytes
 		cc.conn.log(logTypeCongestion, "PDV Slow Start: increasing window size with %d bytes to %d",
-				cc.sentPackets[pn].bytes, cc.congestionWindow)
+			cc.sentPackets[pn].bytes, cc.congestionWindow)
 	} else {
 
 		// Congestion avoidance
@@ -248,7 +243,7 @@ func (cc *CongestionControllerIetf) onPacketAckedCC(pn uint64){
 	}
 }
 
-func (cc *CongestionControllerIetf) onPacketsLost(packets []packetEntry){
+func (cc *CongestionControllerIetf) onPacketsLost(packets []packetEntry) {
 	var largestLostPn uint64 = 0
 	for _, packet := range packets {
 
@@ -276,39 +271,38 @@ func (cc *CongestionControllerIetf) onPacketsLost(packets []packetEntry){
 		}
 		cc.sstresh = cc.congestionWindow
 		cc.conn.log(logTypeCongestion, "PDV Recovery started. Window size: %d, sstresh: %d, endOfRecovery %d",
-					cc.congestionWindow, cc.sstresh, cc.endOfRecovery)
+			cc.congestionWindow, cc.sstresh, cc.endOfRecovery)
 	}
 }
 
 func (cc *CongestionControllerIetf) bytesAllowedToSend() int {
-	cc.conn.log(logTypeCongestion, "Remaining congestion window size: %d", cc.congestionWindow - cc.bytesInFlight)
+	cc.conn.log(logTypeCongestion, "Remaining congestion window size: %d", cc.congestionWindow-cc.bytesInFlight)
 	return cc.congestionWindow - cc.bytesInFlight
 }
 
-func newCongestionControllerIetf(conn *Connection) *CongestionControllerIetf{
+func newCongestionControllerIetf(conn *Connection) *CongestionControllerIetf {
 	return &CongestionControllerIetf{
-		0,                             // bytesInFlight
-		kInitalWindow,                 // congestionWindow
-		0,                             // endOfRecovery
-		int(^uint(0) >> 1),            // sstresh
-		0,                             // lossDetectionAlarm
-		0,                             // handshakeCount
-		0,                             // tlpCount
-		0,                             // rtoCount
-		0,                             // largestSendBeforeRto
-		time.Unix(0,0),                // timeOfLastSentPacket
-		0,                             // largestSendPacket
-		0,                             // largestAckedPacket
-		0,                             // smoothedRtt
-		0,                             // rttVar
-		0,                             // smoothedRttTcp
-		0,                             // rttVarTcp
-		kReorderingThreshold,          // reorderingThreshold
-		math.MaxFloat32,               // timeReorderingFraction
-		time.Unix(0,0),                // lossTime
-		make(map[uint64]packetEntry),  // sentPackets
-		nil,                           // lostPacketHandler
-		conn,                          // conn
+		0,                            // bytesInFlight
+		kInitalWindow,                // congestionWindow
+		0,                            // endOfRecovery
+		int(^uint(0) >> 1),           // sstresh
+		0,                            // lossDetectionAlarm
+		0,                            // handshakeCount
+		0,                            // tlpCount
+		0,                            // rtoCount
+		0,                            // largestSendBeforeRto
+		time.Unix(0, 0),              // timeOfLastSentPacket
+		0,                            // largestSendPacket
+		0,                            // largestAckedPacket
+		0,                            // smoothedRtt
+		0,                            // rttVar
+		0,                            // smoothedRttTcp
+		0,                            // rttVarTcp
+		kReorderingThreshold,         // reorderingThreshold
+		math.MaxFloat32,              // timeReorderingFraction
+		time.Unix(0, 0),              // lossTime
+		make(map[uint64]packetEntry), // sentPackets
+		nil,  // lostPacketHandler
+		conn, // conn
 	}
 }
-

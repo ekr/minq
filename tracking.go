@@ -16,22 +16,22 @@ type packetData struct {
 }
 
 type recvdPackets struct {
-	log            loggingFunction
-	initted        bool
-	minReceived    uint64
-	maxReceived    uint64
-	minNotAcked2   uint64
-	packets        map[uint64]*packetData
+	log          loggingFunction
+	initted      bool
+	minReceived  uint64
+	maxReceived  uint64
+	minNotAcked2 uint64
+	packets      map[uint64]*packetData
 }
 
 func newRecvdPackets(log loggingFunction) *recvdPackets {
 	return &recvdPackets{
-		log,                                       // loggingFunction
-		false,                                     // initted
-		0,                                         // minReceived
-		0,                                         // maxReceived
-		0,                                         // minNotAcked2
-		make(map[uint64]*packetData, 0),           // packets
+		log,   // loggingFunction
+		false, // initted
+		0,     // minReceived
+		0,     // maxReceived
+		0,     // minNotAcked2
+		make(map[uint64]*packetData, 0), // packets
 	}
 }
 
