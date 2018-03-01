@@ -12,27 +12,30 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"time"
+
 	"github.com/bifurcation/mint"
 	"github.com/bifurcation/mint/syntax"
-	"time"
 )
 
+type Role uint8
+
 const (
-	RoleClient = 1
-	RoleServer = 2
+	RoleClient = Role(iota)
+	RoleServer = Role(iota)
 )
 
 // The state of a QUIC connection.
 type State uint8
 
 const (
-	StateInit                   = State(1)
-	StateWaitClientInitial      = State(2)
-	StateWaitServerFirstFlight  = State(3)
-	StateWaitClientSecondFlight = State(4)
-	StateEstablished            = State(5)
-	StateClosed                 = State(6)
-	StateError                  = State(7)
+	StateInit                   = State(iota)
+	StateWaitClientInitial      = State(iota)
+	StateWaitServerFirstFlight  = State(iota)
+	StateWaitClientSecondFlight = State(iota)
+	StateEstablished            = State(iota)
+	StateClosed                 = State(iota)
+	StateError                  = State(iota)
 )
 
 const (
@@ -100,7 +103,7 @@ calls to notify it of various events.
 */
 type Connection struct {
 	handler            ConnectionHandler
-	role               uint8
+	Role               Role
 	state              State
 	version            VersionNumber
 	clientConnId       ConnectionId
@@ -131,7 +134,7 @@ type Connection struct {
 
 // Create a new QUIC connection. Should only be used with role=RoleClient,
 // though we use it with RoleServer internally.
-func NewConnection(trans Transport, role uint8, tls *TlsConfig, handler ConnectionHandler) *Connection {
+func NewConnection(trans Transport, role Role, tls *TlsConfig, handler ConnectionHandler) *Connection {
 	c := Connection{
 		handler,
 		role,
@@ -212,7 +215,7 @@ func (c *Connection) start() error {
 }
 
 func (c *Connection) label() string {
-	if c.role == RoleClient {
+	if c.Role == RoleClient {
 		return "client"
 	}
 	return "server"
@@ -223,14 +226,27 @@ func (c *Connection) setState(state State) {
 		return
 	}
 
-	c.log(logTypeConnection, "%s: Connection state %s -> %v", c.label(), StateName(c.state), StateName(state))
+	c.log(logTypeConnection, "%s: Connection state %v -> %v", c.label(), c.state, state)
 	if c.handler != nil {
 		c.handler.StateChanged(state)
 	}
 	c.state = state
 }
 
-func StateName(state State) string {
+// String converts a Role into something usable for debugging.
+func (role Role) String() string {
+	switch role {
+	case RoleClient:
+		return "client"
+	case RoleServer:
+		return "server"
+	default:
+		panic("unknown minq.Role")
+	}
+}
+
+// String converts a State into something usable for debugging.
+func (state State) String() string {
 	// TODO(ekr@rtfm.com): is there a way to get the name from the
 	// const value.
 	switch state {
@@ -249,19 +265,19 @@ func StateName(state State) string {
 	case StateError:
 		return "StateError"
 	default:
-		return "Unknown state"
+		panic("unknown minq.State")
 	}
 }
 
 func (c *Connection) myStream(id uint64) bool {
-	return id == 0 || (((id & 1) == 1) == (c.role == RoleServer))
+	return id == 0 || (((id & 1) == 1) == (c.Role == RoleServer))
 }
 
 func (c *Connection) sameTypeStream(id1 uint64, id2 uint64) bool {
 	return (id1 & 0x3) == (id2 & 0x3)
 }
 
-func (c *Connection) streamSuffix(initiator uint8, bidi bool) uint64 {
+func (c *Connection) streamSuffix(initiator Role, bidi bool) uint64 {
 	var suff uint64
 	if bidi {
 		suff |= 2
@@ -400,7 +416,7 @@ func (c *Connection) determineAead(pt uint8) cipher.AEAD {
 		aead = c.writeProtected.aead
 	}
 
-	if c.role == RoleClient {
+	if c.Role == RoleClient {
 		switch {
 		case pt == packetTypeInitial:
 			aead = c.writeClear.aead
@@ -492,7 +508,7 @@ func (c *Connection) sendPacket(pt uint8, tosend []frame, containsOnlyAcks bool)
 	}
 
 	connId := c.serverConnId
-	if c.role == RoleClient {
+	if c.Role == RoleClient {
 		if pt == packetTypeInitial {
 			connId = c.clientConnId
 		}
@@ -521,7 +537,7 @@ func (c *Connection) sendFramesInPacket(pt uint8, tosend []frame) error {
 	connId = c.serverConnId
 
 	longHeader := true
-	if c.role == RoleClient {
+	if c.Role == RoleClient {
 		switch {
 		case pt == packetTypeInitial:
 			aead = c.writeClear.aead
@@ -910,7 +926,7 @@ func (c *Connection) input(p []byte) error {
 	assert(int(hdrlen) <= len(p))
 
 	if isLongHeader(&hdr) && hdr.Version != c.version {
-		if c.role == RoleServer {
+		if c.Role == RoleServer {
 			c.log(logTypeConnection, "%s: Received unsupported version %v, expected %v", c.label(), hdr.Version, c.version)
 			err = c.sendVersionNegotiation(hdr.ConnectionID, hdr.PacketNumber, hdr.Version)
 			if err != nil {
@@ -1167,7 +1183,7 @@ func (c *Connection) processCleartext(hdr *packetHeader, payload []byte, naf *bo
 			}
 
 			// This is fresh data so sanity check.
-			if c.role == RoleClient {
+			if c.Role == RoleClient {
 				if c.state != StateWaitServerFirstFlight {
 					// TODO(ekr@rtfm.com): Not clear what to do here. It's
 					// clearly a protocol error, but also allows on-path
@@ -1217,7 +1233,7 @@ func (c *Connection) processCleartext(hdr *packetHeader, payload []byte, naf *bo
 				if err != nil {
 					return err
 				}
-				if c.role == RoleClient {
+				if c.Role == RoleClient {
 					// We did this on the server already.
 					c.setTransportParameters()
 				}
@@ -1641,7 +1657,7 @@ func (c *Connection) CheckTimer() (int, error) {
 	// Right now just re-send everything we might need to send.
 
 	// Special case the client's first message.
-	if c.role == RoleClient && (c.state == StateInit ||
+	if c.Role == RoleClient && (c.state == StateInit ||
 		c.state == StateWaitServerFirstFlight) {
 		err := c.sendClientInitial()
 		return 1, err
@@ -1666,7 +1682,7 @@ func (c *Connection) setupAeadMasking() (err error) {
 	}
 
 	var sendLabel, recvLabel string
-	if c.role == RoleClient {
+	if c.Role == RoleClient {
 		sendLabel = clientCtSecretLabel
 		recvLabel = serverCtSecretLabel
 	} else {
@@ -1689,7 +1705,7 @@ func (c *Connection) setupAeadMasking() (err error) {
 // Called when the handshake is complete.
 func (c *Connection) handshakeComplete() (err error) {
 	var sendLabel, recvLabel string
-	if c.role == RoleClient {
+	if c.Role == RoleClient {
 		sendLabel = clientPpSecretLabel
 		recvLabel = serverPpSecretLabel
 	} else {
@@ -1719,7 +1735,7 @@ func (c *Connection) packetNonce(pn uint64) []byte {
 func (c *Connection) CreateStream() *Stream {
 	// First see if there is a stream that we haven't
 	// created with this suffix.
-	suff := c.streamSuffix(c.role, false)
+	suff := c.streamSuffix(c.Role, false)
 	var i uint64
 	for i = 0; i <= c.maxStream; i++ {
 		if (i & 0x3) != suff {

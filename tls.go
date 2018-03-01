@@ -5,6 +5,7 @@ import (
 	"crypto/x509"
 	"encoding/hex"
 	"fmt"
+
 	"github.com/bifurcation/mint"
 	"log"
 )
@@ -78,7 +79,7 @@ type tlsConn struct {
 	cs       *mint.CipherSuiteParams
 }
 
-func newTlsConn(conf *TlsConfig, role uint8) *tlsConn {
+func newTlsConn(conf *TlsConfig, role Role) *tlsConn {
 	isClient := true
 	if role == RoleServer {
 		isClient = false
