@@ -34,6 +34,7 @@ const (
 	StateWaitServerFirstFlight  = State(iota)
 	StateWaitClientSecondFlight = State(iota)
 	StateEstablished            = State(iota)
+	StateClosing                = State(iota)
 	StateClosed                 = State(iota)
 	StateError                  = State(iota)
 )
@@ -57,10 +58,6 @@ const (
 
 const (
 	kQuicALPNToken = "hq-08"
-)
-
-const (
-	kDefaultInitialRtt = uint32(100)
 )
 
 // Interface for the handler object which the Connection will call
@@ -127,9 +124,11 @@ type Connection struct {
 	idleTimeout        uint16
 	tpHandler          *transportParametersHandler
 	log                loggingFunction
-	retransmitTime     uint32
+	retransmitTime     time.Duration
 	congestion         CongestionController
 	lastSendQueuedTime time.Time
+	closingEnd         time.Time
+	closePacket        []byte
 }
 
 // Create a new QUIC connection. Should only be used with role=RoleClient,
@@ -164,6 +163,8 @@ func NewConnection(trans Transport, role Role, tls *TlsConfig, handler Connectio
 		kDefaultInitialRtt,
 		nil,
 		time.Now(),
+		time.Time{}, // Zero time
+		nil,
 	}
 
 	c.log = newConnectionLogger(&c)
@@ -260,6 +261,8 @@ func (state State) String() string {
 		return "StateWaitClientSecondFlight"
 	case StateEstablished:
 		return "StateEstablished"
+	case StateClosing:
+		return "StateClosing"
 	case StateClosed:
 		return "StateClosed"
 	case StateError:
@@ -385,7 +388,8 @@ func (c *Connection) sendClientInitial() error {
 
 	c.setState(StateWaitServerFirstFlight)
 
-	return c.sendPacket(packetTypeInitial, queued, false)
+	_, err = c.sendPacket(packetTypeInitial, queued, false)
+	return err
 }
 
 func (c *Connection) sendSpecialClearPacket(pt uint8, connId ConnectionId, pn uint64, version VersionNumber, payload []byte) error {
@@ -434,7 +438,7 @@ func (c *Connection) determineAead(pt uint8) cipher.AEAD {
 	return aead
 }
 
-func (c *Connection) sendPacketRaw(pt uint8, connId ConnectionId, pn uint64, version VersionNumber, payload []byte, containsOnlyAcks bool) error {
+func (c *Connection) sendPacketRaw(pt uint8, connId ConnectionId, pn uint64, version VersionNumber, payload []byte, containsOnlyAcks bool) ([]byte, error) {
 	c.log(logTypeConnection, "Sending packet PT=%v PN=%x: %s", pt, c.nextSendPacket, dumpPacket(payload))
 	left := c.mtu // track how much space is left for payload
 
@@ -461,7 +465,7 @@ func (c *Connection) sendPacketRaw(pt uint8, connId ConnectionId, pn uint64, ver
 	// TODO(ekr@rtfm.com): this is gross.
 	hdr, err := encode(&p.packetHeader)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	left -= len(hdr)
 	assert(left >= len(payload))
@@ -474,16 +478,16 @@ func (c *Connection) sendPacketRaw(pt uint8, connId ConnectionId, pn uint64, ver
 	c.congestion.onPacketSent(pn, containsOnlyAcks, len(packet)) //TODO(piet@devae.re) check isackonly
 	c.transport.Send(packet)
 
-	return nil
+	return packet, nil
 }
 
 // Send a packet with whatever PT seems appropriate now.
-func (c *Connection) sendPacketNow(tosend []frame, containsOnlyAcks bool) error {
+func (c *Connection) sendPacketNow(tosend []frame, containsOnlyAcks bool) ([]byte, error) {
 	return c.sendPacket(packetTypeProtectedShort, tosend, containsOnlyAcks)
 }
 
 // Send a packet with a specific PT.
-func (c *Connection) sendPacket(pt uint8, tosend []frame, containsOnlyAcks bool) error {
+func (c *Connection) sendPacket(pt uint8, tosend []frame, containsOnlyAcks bool) ([]byte, error) {
 	sent := 0
 
 	payload := make([]byte, 0)
@@ -491,7 +495,7 @@ func (c *Connection) sendPacket(pt uint8, tosend []frame, containsOnlyAcks bool)
 	for _, f := range tosend {
 		_, err := f.length()
 		if err != nil {
-			return err
+			return nil, err
 		}
 
 		c.log(logTypeTrace, "Frame=%v", hex.EncodeToString(f.encoded))
@@ -703,7 +707,7 @@ func (c *Connection) sendCombinedPacket(pt uint8, frames []frame, acks ackRanges
 	// Record which packets we sent ACKs in.
 	c.sentAcks[c.nextSendPacket] = acks[0:asent]
 
-	err = c.sendPacket(pt, frames, containsOnlyAcks)
+	_, err = c.sendPacket(pt, frames, containsOnlyAcks)
 	if err != nil {
 		return 0, err
 	}
@@ -753,7 +757,7 @@ func (c *Connection) sendQueuedFrames(pt uint8, protected bool, bareAcks bool) (
 
 	acks := c.recvd.prepareAckRange(protected, false)
 	now := time.Now()
-	txAge := time.Duration(c.retransmitTime) * time.Millisecond
+	txAge := c.retransmitTime * time.Millisecond
 	aeadOverhead := c.determineAead(pt).Overhead()
 	sent := int(0)
 	spaceInCongestionWindow := c.congestion.bytesAllowedToSend()
@@ -911,6 +915,14 @@ func (c *Connection) Input(p []byte) error {
 func (c *Connection) input(p []byte) error {
 	if c.isClosed() {
 		return ErrorConnIsClosed
+	}
+
+	if c.state == StateClosing {
+		c.log(logTypeConnection, "Discarding packet while closing (closePacket=%v)", c.closePacket != nil)
+		if c.closePacket != nil {
+			c.transport.Send(c.closePacket)
+		}
+		return nil
 	}
 
 	c.lastInput = time.Now()
@@ -1124,7 +1136,8 @@ func (c *Connection) processClientInitial(hdr *packetHeader, payload []byte) err
 		if err != nil {
 			return err
 		}
-		return c.sendPacketRaw(packetTypeRetry, hdr.ConnectionID, hdr.PacketNumber, kQuicVersion, sf.encoded, false)
+		_, err = c.sendPacketRaw(packetTypeRetry, hdr.ConnectionID, hdr.PacketNumber, kQuicVersion, sf.encoded, false)
+		return err
 	}
 
 	c.streams[0].recv.setOffset(uint64(len(sf.Data)))
@@ -1255,6 +1268,7 @@ func (c *Connection) processCleartext(hdr *packetHeader, payload []byte, naf *bo
 				return err
 			}
 			nonAck = false
+
 		case *connectionCloseFrame:
 			c.log(logTypeConnection, "Received frame close")
 			c.setState(StateClosed)
@@ -1443,8 +1457,16 @@ func (c *Connection) processUnprotected(hdr *packetHeader, packetNumber uint64, 
 			if notifyCreated && c.handler != nil {
 				c.handler.NewStream(s)
 			}
+
 		case *connectionCloseFrame:
-			c.setState(StateClosed)
+			c.log(logTypeConnection, "Received CONNECTION_CLOSE")
+			// Don't save the packet, we should go straight to draining.
+			// Note that we don't bother with the optional transition from draining to
+			// closing because we don't bother to decrypt packets that are received while
+			// closing.
+			c.close(kQuicErrorNoError, "received CONNECTION_CLOSE", false)
+			// Stop processing any more frames.
+			return nil
 
 		case *maxStreamDataFrame:
 			s, notifyCreated, err := c.ensureStream(inner.StreamId, true)
@@ -1654,6 +1676,12 @@ func (c *Connection) CheckTimer() (int, error) {
 		return 0, ErrorConnectionTimedOut
 	}
 
+	if c.state == StateClosing && time.Now().After(c.closingEnd) {
+		c.log(logTypeConnection, "End of draining period, closing")
+		c.setState(StateClosed)
+		return 0, ErrorConnIsClosed
+	}
+
 	// Right now just re-send everything we might need to send.
 
 	// Special case the client's first message.
@@ -1793,16 +1821,31 @@ func (c *Connection) SetHandler(h ConnectionHandler) {
 	c.handler = h
 }
 
-func (c *Connection) close(code ErrorCode, reason string) {
+func (c *Connection) close(code ErrorCode, reason string, savePacket bool) error {
+	if c.isClosed() {
+		return nil
+	}
+	if c.state == StateClosing {
+		return nil
+	}
+
+	c.closingEnd = time.Now().Add(3 * c.congestion.rto())
+	c.setState(StateClosing)
 	f := newConnectionCloseFrame(code, reason)
-	c.sendPacket(packetTypeProtectedShort, []frame{f}, false)
+	closePacket, err := c.sendPacketNow([]frame{f}, false)
+	if err != nil {
+		return err
+	}
+	if savePacket {
+		c.closePacket = closePacket
+	}
+	return nil
 }
 
 // Close a connection.
 func (c *Connection) Close() error {
 	c.log(logTypeConnection, "%v Close()", c.label())
-	c.close(kQuicErrorNoError, "You don't have to go home but you can't stay here")
-	return nil
+	return c.close(kQuicErrorNoError, "You don't have to go home but you can't stay here", true)
 }
 
 func (c *Connection) isDead() bool {
