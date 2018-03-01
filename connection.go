@@ -1783,9 +1783,10 @@ func (c *Connection) close(code ErrorCode, reason string) {
 }
 
 // Close a connection.
-func (c *Connection) Close() {
+func (c *Connection) Close() error {
 	c.log(logTypeConnection, "%v Close()", c.label())
 	c.close(kQuicErrorNoError, "You don't have to go home but you can't stay here")
+	return nil
 }
 
 func (c *Connection) isDead() bool {
