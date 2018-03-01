@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+
 	"github.com/bifurcation/mint"
 	"github.com/bifurcation/mint/syntax"
 )
@@ -155,12 +156,12 @@ func (t *transportParametersXtnBody) Unmarshal(data []byte) (int, error) {
 
 type transportParametersHandler struct {
 	log        loggingFunction
-	role       uint8
+	role       Role
 	version    VersionNumber
 	peerParams *transportParameters
 }
 
-func newTransportParametersHandler(log loggingFunction, role uint8, version VersionNumber) *transportParametersHandler {
+func newTransportParametersHandler(log loggingFunction, role Role, version VersionNumber) *transportParametersHandler {
 	return &transportParametersHandler{log, role, version, nil}
 }
 
