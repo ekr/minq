@@ -8,7 +8,7 @@ package minq
 import (
 	"crypto/rand"
 	"encoding/hex"
-	"fmt"
+	//"fmt"
 	//	"github.com/bifurcation/mint"
 	//	"github.com/bifurcation/mint/syntax"
 	"time"
@@ -270,7 +270,7 @@ func (c *Connection) ensureStream(id uint64, remote bool) (*Stream, bool, error)
 	if c.tpHandler.peerParams != nil {
 		initialMax = uint64(c.tpHandler.peerParams.maxStreamsData)
 	} else {
-		assert(id == 0)
+		// assert(id == 0). TODO(ekr@rtfm.com): remember params for 0-RTT
 		initialMax = 1280
 	}
 
@@ -371,48 +371,22 @@ func (c *Connection) sendQueued(bareAcks bool) (int, error) {
 		return 0, nil
 	}
 
-	if c.state == StateInit || c.state == StateConnecting {
+	if !c.Writable() {
 		return 0, nil
 	}
 
 	sent := int(0)
 
-	/*
-	 * ENQUEUE STUFF
-	 */
-
-	// FIRST enqueue data for stream 0
-	err := c.queueStreamFrames(false)
+	err := c.queueStreamFrames(true)
 	if err != nil {
 		return sent, err
 	}
 
-	// SECOND enqueue data for protected streams
-	if c.state == StateEstablished {
-		err := c.queueStreamFrames(true)
-		if err != nil {
-			return sent, err
-		}
-
-		/*
-		 * SEND STUFF
-		 */
-
-		// THIRD send enqueued data from protected streams
-		s, err := c.sendQueuedFrames(packetTypeProtectedShort, true, bareAcks)
-		if err != nil {
-			return sent, err
-		}
-		sent += s
-		// We still want to send out data in unprotected mode but we don't need to just ACK stuff.
-		bareAcks = false
-	}
-
-	// FOURTH send enqueued data from stream 0
-	s, err := c.sendQueuedFrames(packetTypeHandshake, false, bareAcks)
+	s, err := c.sendQueuedFrames(packetTypeProtectedShort, true, bareAcks)
 	if err != nil {
 		return sent, err
 	}
+
 	sent += s
 
 	return sent, nil
@@ -635,6 +609,13 @@ func (c *Connection) outstandingQueuedBytes() (n int) {
 	return
 }
 
+func (c *Connection) Start() error {
+	if c.role == RoleServer {
+		return nil
+	}
+	return c.Input([]byte{})
+}
+
 // Provide a packet to the connection.
 //
 // TODO(ekr@rtfm.com): when is error returned?
@@ -694,6 +675,7 @@ func (c *Connection) input(p []byte) error {
 	}
 
 	if output != nil {
+		c.log(logTypeConnection, "Output packet len=%d", len(output))
 		c.log(logTypeTrace, "Sending packet: %x", p)
 		c.transport.Send(output)
 	}
@@ -1096,6 +1078,10 @@ func (c *Connection) GetState() State {
 	return c.state
 }
 
+func (c *Connection) Writable() bool {
+	return c.tls.writable()
+}
+
 // Get the connection ID for a connection. Returns 0 if
 // you are a client and the first server packet hasn't
 // been received.
@@ -1125,7 +1111,7 @@ func (c *Connection) handleError(e error) error {
 }
 
 func (c *Connection) logPacket(dir string, pn uint64, payload []byte) {
-	l := fmt.Sprintf("Packet %s: PN=%x LEN=%d: %s", dir, pn, len(payload), dumpPacket(payload))
-	c.log(logTypePacket, l)
-	c.log(logTypeConnection, l)
+	//l := fmt.Sprintf("Packet %s: PN=%x LEN=%d: %s", dir, pn, len(payload), dumpPacket(payload))
+	//c.log(logTypePacket, l)
+	//c.log(logTypeConnection, l)
 }

@@ -74,6 +74,7 @@ func NewTlsConfig(serverName string) TlsConfig {
 
 type tlsConn struct {
 	config   *TlsConfig
+	role     uint8
 	conn     *connBuffer
 	tls      *mint.Conn
 	finished bool
@@ -90,6 +91,7 @@ func newTlsConn(conf *TlsConfig, role uint8) *tlsConn {
 
 	return &tlsConn{
 		conf,
+		role,
 		c,
 		mint.NewConn(c, conf.toMint(), isClient),
 		false,
@@ -118,17 +120,20 @@ func (c *tlsConn) newBytes(input []byte) (uint64, []byte, []byte, error) {
 	}
 
 	if !c.isConnected() {
-	outer:
+	inner:
 		for {
 			logf(logTypeTls, "Calling Mint handshake")
 			alert := c.tls.Handshake()
-			hst := c.tls.GetHsState()
 			switch alert {
-			case mint.AlertNoAlert, mint.AlertStatelessRetry:
-				if hst == mint.StateServerConnected || hst == mint.StateClientConnected {
-					st := c.tls.ConnectionState()
+			case mint.AlertNoAlert:
+				// There are two cases here:
+				// 1. We are done.
+				// 2. Intermediate point in the state machine.
 
+				hst := c.tls.GetHsState()
+				if hst == mint.StateServerConnected || hst == mint.StateClientConnected {
 					logf(logTypeTls, "TLS handshake complete")
+					st := c.tls.ConnectionState()
 					logf(logTypeTls, "Negotiated ALPN = %v", st.NextProto)
 					// TODO(ekr@rtfm.com): Abort on ALPN mismatch when others do.
 					if st.NextProto != kQuicALPNToken {
@@ -137,36 +142,51 @@ func (c *tlsConn) newBytes(input []byte) (uint64, []byte, []byte, error) {
 					cs := st.CipherSuite
 					c.cs = &cs
 					c.finished = true
-
-					break outer
+					break inner
 				}
-				// Loop
+				continue // Loop
 			case mint.AlertWouldBlock:
-				logf(logTypeTls, "TLS would have blocked")
-				break outer
+				logf(logTypeTls, "TLS handshake would have blocked")
+				break inner
+			case mint.AlertStatelessRetry:
+				logf(logTypeTls, "TLS sent stateless retry")
+				break inner
+
 			default:
-				return 0, nil, nil, fmt.Errorf("TLS sent an alert %v", alert)
+				// This is an error.
+				logf(logTypeTls, "TLS alert %v", alert)
+				return 0, nil, c.conn.getOutput(), fmt.Errorf("TLS sent an alert %v", alert)
 			}
-
 		}
-		logf(logTypeTls, "TLS wrote %d bytes", c.conn.OutputLen())
-		return 0, nil, c.conn.getOutput(), nil
 	}
 
-	// Otherwise, we are complete and try to read the application data.
-	buf := make([]byte, len(input))
-	n, err := c.tls.Read(buf)
-	if err == mint.AlertWouldBlock {
-		return 0, nil, nil, ErrorWouldBlock
-	}
-	if err != nil {
-		return 0, nil, nil, err
-	}
-	buf = buf[:n]
-	logf(logTypeTls, "Read bytes from peer: %x", buf)
+	// At this point, things have gone reasonably smoothly and we've made
+	// as much progress as we can.
 
-	// TODO(ekr@rtfm.com): return output
-	return 0, buf, nil, nil // TODO(ekr@rtfm.com): return packet number
+	// This is whatever Mint wrote.
+	logf(logTypeTls, "Mint wrote %d bytes", c.conn.OutputLen())
+	output := c.conn.getOutput()
+
+	// Try to read application data if either:
+	// 1. We are a connected
+	// 2. We are a server, in which case there might be 0-RTT data.
+	var buf []byte
+	if c.isConnected() || c.role == RoleServer {
+		logf(logTypeTls, "Trying to read from Mint")
+		buf2 := make([]byte, len(input))
+		n, err := c.tls.Read(buf2)
+		if err == nil {
+			if n > 0 {
+				buf = buf2[:n]
+				logf(logTypeTls, "Read %d bytes from peer: %x", n, buf)
+			}
+		} else if err != mint.AlertWouldBlock {
+			// TODO(ekr@rtfm.com): Return output?
+			return 0, nil, nil, err
+		}
+	}
+
+	return 0, buf, output, nil // TODO(ekr@rtfm.com): return packet number
 }
 
 func (c *tlsConn) sendPacket(p []byte) (uint64, []byte, error) {

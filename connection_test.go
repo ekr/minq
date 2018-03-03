@@ -2,7 +2,12 @@ package minq
 
 import (
 	"fmt"
+	"os"
 	"testing"
+)
+
+var (
+	testString = []byte("abcdefghijk")
 )
 
 type testPacket struct {
@@ -144,7 +149,7 @@ func newCsPair(t *testing.T) *csPair {
 }
 
 func (pair *csPair) handshake(t *testing.T) {
-	err := pair.client.Input([]byte{})
+	err := pair.client.Start()
 	assertNotError(t, err, "Couldn't send CH")
 
 	for pair.client.state != StateEstablished || pair.server.state != StateEstablished {
@@ -169,7 +174,6 @@ func TestConnectSendReceive(t *testing.T) {
 	pair := newCsPair(t)
 	pair.handshake(t)
 	var err error
-	testString := []byte("abcdefghijk")
 
 	// Write data C->S
 	cs := pair.client.CreateStream()
@@ -260,6 +264,11 @@ func TestConnect0RTT(t *testing.T) {
 		client,
 		server,
 	}
+
+	// Force sending CH.
+	pair.client.Start()
+	assertX(t, !client.Writable(), "Client was writable") // Not in 0-RTT mode
+
 	pair.handshake(t)
 	assertX(t, !client.tls.tls.ConnectionState().UsingPSK, "Using PSK")
 	inputAll(pair.client) // Read NST.
@@ -268,7 +277,7 @@ func TestConnect0RTT(t *testing.T) {
 	assertEquals(t, cconfig.mintConfig.PSKs.Size(), 1)
 	assertEquals(t, sconfig.mintConfig.PSKs.Size(), 1)
 
-	fmt.Println("Starting second handshake")
+	fmt.Fprintf(os.Stderr, "Starting second handshake\n")
 
 	// Now rehandshake
 	client = NewConnection(cTrans, RoleClient, cconfig, nil)
@@ -281,9 +290,26 @@ func TestConnect0RTT(t *testing.T) {
 		client,
 		server,
 	}
+	// Force sending CH.
+	pair.client.Start()
+	assertX(t, client.Writable(), "Client was not writable") // 0-RTT mode.
+
+	fmt.Fprintf(os.Stderr, "Writing in 0-RTT\n")
+	cs := client.CreateStream()
+	cs.Write(testString)
+
+	inputAll(server)
+
 	pair.handshake(t)
 	assertX(t, client.tls.tls.ConnectionState().UsingPSK, "Not using PSK")
 	assertX(t, client.tls.tls.ConnectionState().UsingEarlyData, "Not using Early data")
+
+	ss := server.GetStream(4)
+	tmp := make([]byte, 100)
+	n, err := ss.Read(tmp)
+	assertNotError(t, err, "Couldn't read")
+	tmp = tmp[:n]
+	assertByteEquals(t, tmp, testString)
 }
 
 /*
