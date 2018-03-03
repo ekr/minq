@@ -12,7 +12,7 @@ type testTransportFactory struct {
 	transports map[string]*testTransport
 }
 
-func (f *testTransportFactory) makeTransport(remote *net.UDPAddr) (Transport, error) {
+func (f *testTransportFactory) MakeTransport(remote *net.UDPAddr) (Transport, error) {
 	return f.transports[remote.String()], nil
 }
 

@@ -8,7 +8,7 @@ import (
 // address.
 type TransportFactory interface {
 	// Make a transport object bound to |remote|.
-	makeTransport(remote *net.UDPAddr) (Transport, error)
+	MakeTransport(remote *net.UDPAddr) (Transport, error)
 }
 
 // Server represents a QUIC server. A server can be fed an arbitrary
@@ -27,6 +27,11 @@ type Server struct {
 type ServerHandler interface {
 	// A new connection has been created and can be found in |c|.
 	NewConnection(c *Connection)
+}
+
+// SetHandler sets a handler function.
+func (s *Server) SetHandler(h ServerHandler) {
+	s.handler = h
 }
 
 // Pass an incoming packet to the Server.
@@ -56,7 +61,7 @@ func (s *Server) Input(addr *net.UDPAddr, data []byte) (*Connection, error) {
 
 	if conn == nil {
 		logf(logTypeServer, "New server connection from addr %v", addr)
-		trans, err := s.transFactory.makeTransport(addr)
+		trans, err := s.transFactory.MakeTransport(addr)
 		if err != nil {
 			return nil, err
 		}
