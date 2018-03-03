@@ -213,3 +213,7 @@ func (c *tlsConn) overhead() int {
 func (c *tlsConn) getHsState() string {
 	return c.tls.GetHsState().String()
 }
+
+func (c *tlsConn) nextRecordNumber() uint64 {
+	return c.tls.NextRecordNumber()
+}

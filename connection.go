@@ -102,7 +102,6 @@ type Connection struct {
 	serverConnId       ConnectionId
 	transport          Transport
 	tls                *tlsConn
-	nextSendPacket     uint64
 	mtu                int
 	streams            []*Stream
 	maxStream          uint64
@@ -132,7 +131,6 @@ func NewConnection(trans Transport, role uint8, tls *TlsConfig, handler Connecti
 		0,
 		trans,
 		newTlsConn(tls, role),
-		uint64(0),
 		kInitialMTU,
 		nil,
 		0,
@@ -321,7 +319,7 @@ func (c *Connection) sendPacket(pt uint8, tosend []frame, containsOnlyAcks bool)
 		{
 			msd, ok := f.f.(*maxStreamDataFrame)
 			if ok {
-				c.log(logTypeFlowControl, "EKR: PT=%x Sending maxStreamDate %v %v", c.nextSendPacket, msd.StreamId, msd.MaximumStreamData)
+				c.log(logTypeFlowControl, "EKR: PN=%x Sending maxStreamDate %v %v", c.tls.nextRecordNumber(), msd.StreamId, msd.MaximumStreamData)
 			}
 		}
 		payload = append(payload, f.encoded...)
@@ -410,7 +408,7 @@ func (c *Connection) sendCombinedPacket(pt uint8, frames []frame, acks ackRanges
 		}
 	}
 	// Record which packets we sent ACKs in.
-	c.sentAcks[c.nextSendPacket] = acks[0:asent]
+	c.sentAcks[c.tls.nextRecordNumber()] = acks[0:asent]
 
 	err = c.sendPacket(pt, frames, containsOnlyAcks)
 	if err != nil {
@@ -534,7 +532,7 @@ func (c *Connection) sendQueuedFrames(pt uint8, protected bool, bareAcks bool) (
 		spaceInPacket -= frameLength
 		spaceInCongestionWindow -= frameLength
 		// Record that we send this chunk in the current packet
-		f.pns = append(f.pns, c.nextSendPacket)
+		f.pns = append(f.pns, c.tls.nextRecordNumber())
 		sf, ok := f.f.(*streamFrame)
 		if ok && sf.hasFin() {
 			c.streams[sf.StreamId].closeSend()
