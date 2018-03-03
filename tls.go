@@ -88,11 +88,10 @@ func newTlsConn(conf *TlsConfig, role uint8) *tlsConn {
 
 	c := newConnBuffer()
 
-	conf2 := *conf
 	return &tlsConn{
-		&conf2,
+		conf,
 		c,
-		mint.NewConn(c, conf2.toMint(), isClient),
+		mint.NewConn(c, conf.toMint(), isClient),
 		false,
 		nil,
 	}
