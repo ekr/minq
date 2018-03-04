@@ -611,7 +611,7 @@ func (c *Connection) Start() error {
 	if c.role == RoleServer {
 		return nil
 	}
-	return c.Input([]byte{})
+	return c.Input(nil)
 }
 
 // Provide a packet to the connection.
@@ -630,55 +630,66 @@ func (c *Connection) input(p []byte) error {
 
 	c.lastInput = time.Now()
 
-	packetNumber, payload, output, err := c.tls.newBytes(p)
-	if err != nil {
-		return err
-	}
-
-	if c.tls.finished {
-		c.setState(StateEstablished)
-	}
-	if !c.recvd.initialized() {
-		c.recvd.init(packetNumber)
-	}
-	c.logPacket("Received", packetNumber, payload)
-
-	naf := true
-	err = c.processUnprotected(packetNumber, payload, &naf)
-
-	c.recvd.packetSetReceived(packetNumber, true, naf)
-	if err != nil {
-		return err
-	}
-
-	lastSendQueuedTime := c.lastSendQueuedTime
-
-	for _, stream := range c.streams {
-		if stream != nil && stream.readable && c.handler != nil {
-			c.handler.StreamReadable(stream)
-			stream.readable = false
-		}
-	}
-
-	// Check if c.SendQueued() has been called while we were handling
-	// the (STREAM) frames. If it has not been called yet, we call it
-	// because we might have to ack the current packet, and might
-	// have data waiting in the tx queues.
-	if lastSendQueuedTime == c.lastSendQueuedTime {
-		// Now flush our output buffers.
-		_, err = c.sendQueued(true)
+	// We must go through at least once
+	for {
+		consumed, packetNumber, payload, output, err := c.tls.newBytes(p)
 		if err != nil {
 			return err
 		}
-	}
+		p = p[consumed:]
 
-	if output != nil {
-		c.log(logTypeConnection, "Output packet len=%d", len(output))
-		c.log(logTypeTrace, "Sending packet: %x", p)
-		c.transport.Send(output)
-	}
+		if c.tls.finished {
+			c.setState(StateEstablished)
+		}
+		if !c.recvd.initialized() {
+			c.recvd.init(packetNumber)
+		}
+		c.logPacket("Received", packetNumber, payload)
 
-	return err
+		if len(payload) > 0 {
+			c.log(logTypeConnection, "Received packet seq=%x", packetNumber)
+		}
+		packetNumber = 0 // TODO(ekr@rtfm.com): Uncomment when ACKs work with DTLS
+
+		naf := true
+		err = c.processUnprotected(packetNumber, payload, &naf)
+
+		c.recvd.packetSetReceived(packetNumber, true, naf)
+		if err != nil {
+			return err
+		}
+
+		lastSendQueuedTime := c.lastSendQueuedTime
+
+		for _, stream := range c.streams {
+			if stream != nil && stream.readable && c.handler != nil {
+				c.handler.StreamReadable(stream)
+				stream.readable = false
+			}
+		}
+
+		// Check if c.SendQueued() has been called while we were handling
+		// the (STREAM) frames. If it has not been called yet, we call it
+		// because we might have to ack the current packet, and might
+		// have data waiting in the tx queues.
+		if lastSendQueuedTime == c.lastSendQueuedTime {
+			// Now flush our output buffers.
+			_, err = c.sendQueued(true)
+			if err != nil {
+				return err
+			}
+		}
+
+		if output != nil {
+			c.log(logTypeConnection, "Output packet len=%d", len(output))
+			c.log(logTypeTrace, "Sending packet: %x", p)
+			c.transport.Send(output)
+		}
+		if len(p) == 0 {
+			break
+		}
+	}
+	return nil
 }
 
 type frameFilterFunc func(*frame) bool

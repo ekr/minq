@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"github.com/bifurcation/mint"
+	"github.com/bifurcation/mint/syntax"
 	"log"
 )
 
@@ -108,14 +109,36 @@ func (c *tlsConn) isConnected() bool {
 	return hst == mint.StateServerConnected || hst == mint.StateClientConnected
 }
 
-func (c *tlsConn) newBytes(input []byte) (uint64, []byte, []byte, error) {
+type dtlsHeader struct {
+	Typ      uint8
+	Version  uint16
+	EpochSeq uint64 // epoch + seq
+	Length   uint16
+}
+
+func (c *tlsConn) newBytes(input []byte) (int, uint64, []byte, []byte, error) {
 	logf(logTypeTls, "TLS input [%v] = %x", len(input), input)
 	logf(logTypeTrace, "TLS input = %v", hex.EncodeToString(input))
+	var hdr dtlsHeader
+	il := len(input)
 
-	if input != nil {
-		err := c.conn.input(input)
+	if len(input) > 0 {
+		n, err := syntax.Unmarshal(input, &hdr)
+		// Ignore malformatted
 		if err != nil {
-			return 0, nil, nil, err
+			logf(logTypeTls, "Malformed DTLS record")
+			return il, 0, nil, nil, nil
+		}
+		if n+int(hdr.Length) > il {
+			logf(logTypeTls, "Malformed datagram hdr=%+v, consumed=%v length = %d", n, hdr, il)
+			return il, 0, nil, nil, nil
+		}
+		input = input[:n+int(hdr.Length)]
+		il = len(input)
+
+		err = c.conn.input(input)
+		if err != nil {
+			return il, 0, nil, nil, err
 		}
 	}
 
@@ -155,7 +178,7 @@ func (c *tlsConn) newBytes(input []byte) (uint64, []byte, []byte, error) {
 			default:
 				// This is an error.
 				logf(logTypeTls, "TLS alert %v", alert)
-				return 0, nil, c.conn.getOutput(), fmt.Errorf("TLS sent an alert %v", alert)
+				return il, 0, nil, c.conn.getOutput(), fmt.Errorf("TLS sent an alert %v", alert)
 			}
 		}
 	}
@@ -171,22 +194,25 @@ func (c *tlsConn) newBytes(input []byte) (uint64, []byte, []byte, error) {
 	// 1. We are a connected
 	// 2. We are a server, in which case there might be 0-RTT data.
 	var buf []byte
+	var seq uint64
 	if c.isConnected() || c.role == RoleServer {
 		logf(logTypeTls, "Trying to read from Mint")
 		buf2 := make([]byte, len(input))
 		n, err := c.tls.Read(buf2)
 		if err == nil {
 			if n > 0 {
+				assert(il > 0)
 				buf = buf2[:n]
+				seq = hdr.EpochSeq
 				logf(logTypeTls, "Read %d bytes from peer: %x", n, buf)
 			}
 		} else if err != mint.AlertWouldBlock {
 			// TODO(ekr@rtfm.com): Return output?
-			return 0, nil, nil, err
+			return il, 0, nil, nil, err
 		}
 	}
 
-	return 0, buf, output, nil // TODO(ekr@rtfm.com): return packet number
+	return il, seq, buf, output, nil // TODO(ekr@rtfm.com): return packet number
 }
 
 func (c *tlsConn) sendPacket(p []byte) (uint64, []byte, error) {
