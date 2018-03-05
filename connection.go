@@ -1664,9 +1664,11 @@ func (c *Connection) CheckTimer() (int, error) {
 		return 0, ErrorConnectionTimedOut
 	}
 
-	if c.state == StateClosing && time.Now().After(c.closingEnd) {
-		c.log(logTypeConnection, "End of draining period, closing")
-		c.setState(StateClosed)
+	if c.state == StateClosing {
+		if time.Now().After(c.closingEnd) {
+			c.log(logTypeConnection, "End of draining period, closing")
+			c.setState(StateClosed)
+		}
 		return 0, ErrorConnIsClosed
 	}
 
