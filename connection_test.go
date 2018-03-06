@@ -180,6 +180,10 @@ func TestConnectSendReceive(t *testing.T) {
 	assertNotNil(t, cs, "Failed to create a stream")
 	cs.Write(testString)
 
+	// The client should have outstanding bytes.
+	n := pair.client.outstandingQueuedBytes()
+	assertX(t, n > 0, "Client doesn't have outstanding bytes")
+
 	// Read data C->S
 	err = inputAll(pair.server)
 	assertNotError(t, err, "Couldn't read input packets")
@@ -201,6 +205,20 @@ func TestConnectSendReceive(t *testing.T) {
 	assertNotNil(t, b2, "Read data from client")
 	fmt.Printf("Data read %x\n", b2)
 	assertByteEquals(t, b, b2)
+
+	// The client should not have any outstanding bytes.
+	n = pair.client.outstandingQueuedBytes()
+	assertEquals(t, 0, n)
+
+	// The server should have outstanding bytes.
+	n = pair.server.outstandingQueuedBytes()
+	assertX(t, n > 0, "Server doesn't have outstanding bytes")
+
+	err = inputAll(pair.server)
+
+	// The server should not have any outstanding bytes.
+	n = pair.server.outstandingQueuedBytes()
+	assertEquals(t, 0, n)
 
 	// Check that we only create streams in one direction
 	cs = pair.client.CreateStream()

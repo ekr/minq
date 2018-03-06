@@ -8,8 +8,7 @@ package minq
 import (
 	"crypto/rand"
 	"encoding/hex"
-	//"fmt"
-	//	"github.com/bifurcation/mint"
+	"github.com/bifurcation/mint"
 	//	"github.com/bifurcation/mint/syntax"
 	"time"
 )
@@ -587,7 +586,9 @@ func (c *Connection) handleLostPacket(lostPn uint64) {
 
 func (c *Connection) outstandingQueuedBytes() (n int) {
 	for _, s := range c.streams {
-		n += s.outstandingQueuedBytes()
+		if s != nil {
+			n += s.outstandingQueuedBytes()
+		}
 	}
 
 	cd := func(frames []frame) int {
@@ -641,22 +642,26 @@ func (c *Connection) input(p []byte) error {
 		if c.tls.finished {
 			c.setState(StateEstablished)
 		}
-		if !c.recvd.initialized() {
-			c.recvd.init(packetNumber)
-		}
 		c.logPacket("Received", packetNumber, payload)
 
 		if len(payload) > 0 {
 			c.log(logTypeConnection, "Received packet seq=%x", packetNumber)
 		}
-		packetNumber = 0 // TODO(ekr@rtfm.com): Uncomment when ACKs work with DTLS
 
 		naf := true
 		err = c.processUnprotected(packetNumber, payload, &naf)
 
-		c.recvd.packetSetReceived(packetNumber, true, naf)
-		if err != nil {
-			return err
+		epoch := mint.Epoch(packetNumber >> 48)
+		if epoch == mint.EpochApplicationData {
+			// TODO(ekr@rtfm.com): Do ACKs for 0-RTT
+			if !c.recvd.initialized() {
+				c.recvd.init(packetNumber)
+			}
+
+			c.recvd.packetSetReceived(packetNumber, true, naf)
+			if err != nil {
+				return err
+			}
 		}
 
 		lastSendQueuedTime := c.lastSendQueuedTime
