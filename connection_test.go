@@ -2,6 +2,7 @@ package minq
 
 import (
 	"fmt"
+	"io/ioutil"
 	"testing"
 	"time"
 )
@@ -279,35 +280,37 @@ func TestSendReceiveData(t *testing.T) {
 	err := inputAll(pair.client)
 
 	// Write data C->S
-	cs := pair.client.CreateStream()
+	cs := pair.client.CreateBidirectionalStream()
 	assertNotNil(t, cs, "Failed to create a stream")
 	cs.Write(testString)
 
 	// Read data C->S
 	err = inputAll(pair.server)
 	assertNotError(t, err, "Couldn't read input packets")
-	ss := pair.server.GetStream(4)
-	b := ss.readAll()
+	ss := pair.server.GetBidirectionalStream(4)
+	b, err := ioutil.ReadAll(ss)
+	assertEquals(t, ErrorWouldBlock, err)
 	assertNotNil(t, b, "Read data from server")
 	assertByteEquals(t, []byte(testString), b)
 
 	// Write data S->C
-	for i, _ := range b {
+	for i := range b {
 		b[i] ^= 0xff
 	}
 	ss.Write(b)
 
 	// Read data C->S
 	err = inputAll(pair.client)
-	b2 := cs.readAll()
+	b2, err := ioutil.ReadAll(cs)
+	assertEquals(t, ErrorWouldBlock, err)
 	assertNotNil(t, b2, "Read data from client")
 	assertByteEquals(t, b, b2)
 
 	// Check that we only create streams in one direction
-	cs = pair.client.CreateStream()
+	cs = pair.client.CreateBidirectionalStream()
 	assertEquals(t, uint64(8), cs.Id())
-	assertNotNil(t, pair.client.GetStream(1), "Stream 8 should exist")
-	assertX(t, pair.client.GetStream(2) == nil, "Stream 2 should not exist")
+	assertNotNil(t, pair.client.GetBidirectionalStream(8), "Stream 8 should exist")
+	assertX(t, pair.client.GetBidirectionalStream(2) == nil, "Stream 2 should not exist")
 
 	// Close the client.
 	pair.client.Close()
@@ -328,6 +331,8 @@ type testReceiveHandler struct {
 	done bool
 }
 
+var _ ConnectionHandler = &testReceiveHandler{}
+
 func newTestReceiveHandler(t *testing.T) *testReceiveHandler {
 	return &testReceiveHandler{t: t}
 }
@@ -335,10 +340,13 @@ func newTestReceiveHandler(t *testing.T) *testReceiveHandler {
 func (h *testReceiveHandler) StateChanged(s State) {
 }
 
-func (h *testReceiveHandler) NewStream(s *Stream) {
+func (h *testReceiveHandler) NewBidirectionalStream(s Stream) {
 }
 
-func (h *testReceiveHandler) StreamReadable(s *Stream) {
+func (h *testReceiveHandler) NewUnidirectionalStream(s RecvStream) {
+}
+
+func (h *testReceiveHandler) StreamReadable(s RecvStream) {
 	for {
 		b := make([]byte, 1024)
 
@@ -373,7 +381,7 @@ func TestSendReceiveBigData(t *testing.T) {
 	pair.server.SetHandler(handler)
 
 	// Write data C->S
-	cs := pair.client.CreateStream()
+	cs := pair.client.CreateBidirectionalStream()
 	cs.Write(buf)
 	cs.Close()
 
@@ -398,7 +406,7 @@ func TestSendReceiveRetransmit(t *testing.T) {
 	err := inputAll(pair.client)
 
 	// Write data C->S
-	cs := pair.client.CreateStream()
+	cs := pair.client.CreateBidirectionalStream()
 	assertNotNil(t, cs, "Failed to create a stream")
 	cs.Write(testString)
 
@@ -409,7 +417,7 @@ func TestSendReceiveRetransmit(t *testing.T) {
 	// Read data C->S
 	err = inputAll(pair.server)
 	assertNotError(t, err, "Couldn't read input packets")
-	ss := pair.server.GetStream(4)
+	ss := pair.server.GetBidirectionalStream(4)
 	b := make([]byte, 1024)
 	n, err := ss.Read(b)
 	assertNotError(t, err, "Error reading")
@@ -447,7 +455,7 @@ func TestSendReceiveStreamFin(t *testing.T) {
 	err := inputAll(pair.client)
 
 	// Write data C->S
-	cs := pair.client.CreateStream()
+	cs := pair.client.CreateBidirectionalStream()
 	assertNotNil(t, cs, "Failed to create a stream")
 	cs.Write(testString)
 
@@ -462,7 +470,7 @@ func TestSendReceiveStreamFin(t *testing.T) {
 	// Read data C->S
 	err = inputAll(pair.server)
 	assertNotError(t, err, "Couldn't read input packets")
-	ss := pair.server.GetStream(4)
+	ss := pair.server.GetBidirectionalStream(4)
 	b := make([]byte, 1024)
 	n, err = ss.Read(b)
 	assertNotError(t, err, "Couldn't read from client")
@@ -486,7 +494,7 @@ func TestSendReceiveStreamRst(t *testing.T) {
 	err := inputAll(pair.client)
 
 	// Write data C->S
-	cs := pair.client.CreateStream()
+	cs := pair.client.CreateBidirectionalStream()
 	assertNotNil(t, cs, "Failed to create a stream")
 	cs.Write(testString)
 
@@ -501,7 +509,7 @@ func TestSendReceiveStreamRst(t *testing.T) {
 	// Read data C->S. Should result in no data.
 	err = inputAll(pair.server)
 	assertNotError(t, err, "Couldn't read input packets")
-	ss := pair.server.GetStream(4)
+	ss := pair.server.GetBidirectionalStream(4)
 	b := make([]byte, 1024)
 	n, err = ss.Read(b)
 	assertEquals(t, err, ErrorStreamIsClosed)
@@ -538,11 +546,14 @@ func TestVersionNegotiationPacket(t *testing.T) {
 	assertEquals(t, hdr.ConnectionID, client.clientConnId)
 }
 
-func TestCantMakeRemoteStream(t *testing.T) {
+func TestCantMakeRemoteStreams(t *testing.T) {
 	cTrans, _ := newTestTransportPair(true)
 	client := NewConnection(cTrans, RoleClient, testTlsConfig(), nil)
 
-	_, _, err := client.ensureStream(4, true)
+	_, err := client.ensureRecvStream(2) // 2 is a SendStream for the client
+	assertEquals(t, ErrorProtocolViolation, err)
+
+	_, err = client.ensureSendStream(3) // 3 is a RecvStream for the client
 	assertEquals(t, ErrorProtocolViolation, err)
 }
 

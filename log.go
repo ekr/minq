@@ -79,3 +79,10 @@ func newConnectionLogger(c *Connection) loggingFunction {
 		}
 	}
 }
+
+func newStreamLogger(id uint64, dir string, f loggingFunction) loggingFunction {
+	extra := fmt.Sprintf("%s stream %d: ", dir, id)
+	return func(tag string, format string, args ...interface{}) {
+		f(tag, extra+format, args...)
+	}
+}

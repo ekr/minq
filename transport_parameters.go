@@ -34,23 +34,25 @@ type tpDef struct {
 	size      uintptr
 }
 
-// TODO(ekr@rtfm.com): Hack until we generate MAX_STREAM_DATA
-var kInitialMaxStreamData = uint32(8192)
 var (
+	kInitialMaxStreamData       = uint64(8192)
+	kConcurrentStreamsBidi      = 16
+	kConcurrentStreamsUni       = 16
 	kTransportParameterDefaults = []tpDef{
-		{kTpIdInitialMaxStreamsData, kInitialMaxStreamData, 4},
+		{kTpIdInitialMaxStreamsData, uint32(kInitialMaxStreamData), 4},
 		{kTpIdInitialMaxData, 8192, 4},
-		//		{kTpIdInitialMaxStreamIdBidi, 16, 4},
+		{kTpIdInitialMaxStreamIdBidi, uint32(kConcurrentStreamsBidi) << 2, 4},
 		{kTpIdIdleTimeout, 10, 2},
-		//		{kTpIdInitialMaxStreamIdUni, 16, 4},
+		{kTpIdInitialMaxStreamIdUni, uint32(kConcurrentStreamsUni) << 2, 4},
 	}
 )
 
 type transportParameters struct {
-	maxStreamsData uint32
-	maxData        uint32
-	maxStreamId    uint32
-	idleTimeout    uint16
+	maxStreamsData  uint32
+	maxData         uint32
+	maxStreamIdBidi uint32
+	maxStreamIdUni  uint32
+	idleTimeout     uint16
 }
 
 type TransportParameterList []transportParameter
@@ -125,9 +127,15 @@ func (tp *TransportParameterList) addOpaqueParameter(id TransportParameterId, b 
 	return nil
 }
 
-func (tp *TransportParameterList) createCommonTransportParameters() error {
+func (tp *TransportParameterList) createCommonTransportParameters(streamAdd uint32) error {
 	for _, p := range kTransportParameterDefaults {
-		err := tp.addUintParameter(p.parameter, p.val, p.size)
+		v := p.val
+		// Stream IDs are annoying.
+		switch p.parameter {
+		case kTpIdInitialMaxStreamIdBidi, kTpIdInitialMaxStreamIdUni:
+			v += streamAdd
+		}
+		err := tp.addUintParameter(p.parameter, v, p.size)
 		if err != nil {
 			return err
 		}
@@ -280,6 +288,14 @@ func (h *transportParametersHandler) Receive(hs mint.HandshakeType, el *mint.Ext
 	if err != nil {
 		return err
 	}
+	tp.maxStreamIdBidi, err = params.getUintParameter(kTpIdInitialMaxStreamIdBidi, 4)
+	if err != nil {
+		return err
+	}
+	tp.maxStreamIdUni, err = params.getUintParameter(kTpIdInitialMaxStreamIdUni, 4)
+	if err != nil {
+		return err
+	}
 	var tmp uint32
 	tmp, err = params.getUintParameter(kTpIdIdleTimeout, 2)
 	if err != nil {
@@ -298,7 +314,7 @@ func (h *transportParametersHandler) createClientHelloTransportParameters() ([]b
 		nil,
 	}
 
-	err := chtp.Parameters.createCommonTransportParameters()
+	err := chtp.Parameters.createCommonTransportParameters(0)
 	if err != nil {
 		return nil, err
 	}
@@ -319,7 +335,7 @@ func (h *transportParametersHandler) createEncryptedExtensionsTransportParameter
 		nil,
 	}
 
-	err := eetp.Parameters.createCommonTransportParameters()
+	err := eetp.Parameters.createCommonTransportParameters(1)
 	if err != nil {
 		return nil, err
 	}

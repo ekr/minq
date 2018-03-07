@@ -2,8 +2,9 @@ package minq
 
 import (
 	"fmt"
-	"github.com/bifurcation/mint/syntax"
 	"time"
+
+	"github.com/bifurcation/mint/syntax"
 )
 
 type frameType uint8
@@ -249,7 +250,15 @@ func (f maxStreamDataFrame) getType() frameType {
 // MAX_STREAM_ID
 type maxStreamIdFrame struct {
 	Type            frameType
-	MaximumStreamId uint32 `tls:"varint"`
+	MaximumStreamId uint64 `tls:"varint"`
+}
+
+func newMaxStreamId(id uint64) frame {
+	return newFrame(0,
+		&maxStreamIdFrame{
+			kFrameTypeMaxStreamId,
+			id,
+		})
 }
 
 func (f maxStreamIdFrame) String() string {
