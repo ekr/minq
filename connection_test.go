@@ -551,10 +551,10 @@ func TestCantMakeRemoteStreams(t *testing.T) {
 	cTrans, _ := newTestTransportPair(true)
 	client := NewConnection(cTrans, RoleClient, testTlsConfig(), nil)
 
-	_, err := client.ensureRecvStream(2) // 2 is a SendStream for the client
+	_, err := client.ensureRecvStream(2, false) // 2 is a SendStream for the client
 	assertEquals(t, ErrorProtocolViolation, err)
 
-	_, err = client.ensureSendStream(3) // 3 is a RecvStream for the client
+	_, err = client.ensureSendStream(3, false) // 3 is a RecvStream for the client
 	assertEquals(t, ErrorProtocolViolation, err)
 }
 
@@ -764,4 +764,53 @@ func TestUnidirectionalStreamRstImmediate(t *testing.T) {
 	assertEquals(t, err, io.EOF)
 	assertEquals(t, n, 0)
 	assertEquals(t, cstream.RecvState(), RecvStreamStateResetRecvd)
+}
+
+func TestUnidirectionalStopSending(t *testing.T) {
+	cTrans, sTrans := newTestTransportPair(true)
+
+	cconf := testTlsConfig()
+	client := NewConnection(cTrans, RoleClient, cconf, nil)
+	assertNotNil(t, client, "Couldn't make client")
+
+	var catcher streamCatcher
+	sconf := testTlsConfig()
+	server := NewConnection(sTrans, RoleServer, sconf, &catcher)
+	assertNotNil(t, server, "Couldn't make server")
+
+	pair := csPair{client, server}
+	pair.handshake(t)
+
+	testString := []byte("abcdef")
+	cstream := client.CreateSendStream()
+	n, err := cstream.Write(testString)
+	assertNotError(t, err, "write should work")
+	assertEquals(t, n, len(testString))
+
+	err = inputAll(server)
+	assertNotError(t, err, "packets should be OK")
+
+	sstream := catcher.lastRecv
+	assertEquals(t, sstream, server.GetRemoteUnidirectionalStream(2))
+
+	d, err := ioutil.ReadAll(sstream)
+	assertEquals(t, ErrorWouldBlock, err)
+	assertNotNil(t, d, "Read data from client")
+	assertByteEquals(t, d, testString)
+
+	err = sstream.StopSending(kQuicErrorNoError)
+	assertNotError(t, err, "stop sending just works")
+
+	err = inputAll(client)
+	assertNotError(t, err, "packets should be OK")
+
+	assertEquals(t, cstream.SendState(), SendStreamStateResetSent)
+
+	err = inputAll(server)
+	assertNotError(t, err, "packets should be OK")
+
+	n, err = sstream.Read(d)
+	assertEquals(t, err, io.EOF)
+	assertEquals(t, n, 0)
+	assertEquals(t, sstream.RecvState(), RecvStreamStateResetRecvd)
 }

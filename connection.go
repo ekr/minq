@@ -317,7 +317,7 @@ func (t streamType) suffix(role Role) uint64 {
 }
 
 // This makes a bidirectional local stream.
-func (c *Connection) ensureLocalBidiStream(id uint64) (streamPrivate, error) {
+func (c *Connection) ensureLocalBidiStream(id uint64, create bool) (streamPrivate, error) {
 	c.log(logTypeStream, "Ensuring local bidirectional stream %d exists", id)
 
 	assert(c.tpHandler.peerParams != nil)
@@ -332,6 +332,9 @@ func (c *Connection) ensureLocalBidiStream(id uint64) (streamPrivate, error) {
 		c.localBidiStreams = append(c.localBidiStreams, make([]streamPrivate, needed)...)
 	}
 	if c.localBidiStreams[index] == nil {
+		if !create {
+			return nil, ErrorProtocolViolation
+		}
 		msd := uint64(c.tpHandler.peerParams.maxStreamsData)
 		c.localBidiStreams[index] = newStream(c, id, msd)
 	}
@@ -339,7 +342,7 @@ func (c *Connection) ensureLocalBidiStream(id uint64) (streamPrivate, error) {
 	return c.localBidiStreams[index], nil
 }
 
-func (c *Connection) ensureLocalUniStream(id uint64) (sendStreamPrivate, error) {
+func (c *Connection) ensureLocalUniStream(id uint64, create bool) (sendStreamPrivate, error) {
 	c.log(logTypeStream, "Ensuring local unidirectional stream %d exists", id)
 
 	assert(c.tpHandler.peerParams != nil)
@@ -352,6 +355,9 @@ func (c *Connection) ensureLocalUniStream(id uint64) (sendStreamPrivate, error) 
 		c.localUniStreams = append(c.localUniStreams, make([]sendStreamPrivate, needed)...)
 	}
 	if c.localUniStreams[index] == nil {
+		if !create {
+			return nil, ErrorProtocolViolation
+		}
 		// TODO: separate initial MAX_STREAM_DATA by stream type
 		msd := uint64(c.tpHandler.peerParams.maxStreamsData)
 		c.localUniStreams[index] = newSendStream(c, id, msd)
@@ -408,14 +414,14 @@ func (c *Connection) ensureRemoteUniStream(id uint64) (recvStreamPrivate, error)
 
 // This manages the creation of local and remote bidirectional streams as well
 // as remote unidirectional streams.
-func (c *Connection) ensureSendStream(id uint64) (sendStreamPrivate, error) {
+func (c *Connection) ensureSendStream(id uint64, createLocal bool) (sendStreamPrivate, error) {
 	switch streamTypeFromId(id, c.role) {
 	case streamTypeBidirectionalLocal:
-		return c.ensureLocalBidiStream(id)
+		return c.ensureLocalBidiStream(id, createLocal)
 	case streamTypeBidirectionalRemote:
 		return c.ensureRemoteBidiStream(id)
 	case streamTypeUnidirectionalLocal:
-		return c.ensureLocalUniStream(id)
+		return c.ensureLocalUniStream(id, createLocal)
 	default:
 		// Local unidirectional streams can't receive.
 		return nil, ErrorProtocolViolation
@@ -424,10 +430,10 @@ func (c *Connection) ensureSendStream(id uint64) (sendStreamPrivate, error) {
 
 // This manages the creation of local and remote bidirectional streams as well
 // as remote unidirectional streams.
-func (c *Connection) ensureRecvStream(id uint64) (recvStreamPrivate, error) {
+func (c *Connection) ensureRecvStream(id uint64, createLocal bool) (recvStreamPrivate, error) {
 	switch streamTypeFromId(id, c.role) {
 	case streamTypeBidirectionalLocal:
-		return c.ensureLocalBidiStream(id)
+		return c.ensureLocalBidiStream(id, createLocal)
 	case streamTypeBidirectionalRemote:
 		return c.ensureRemoteBidiStream(id)
 	case streamTypeUnidirectionalRemote:
@@ -1581,12 +1587,24 @@ func (c *Connection) processUnprotected(hdr *packetHeader, packetNumber uint64, 
 			// TODO(ekr@rtfm.com): Don't let the other side initiate
 			// streams that are the wrong parity.
 			c.log(logTypeStream, "Received RST_STREAM on stream %v", inner.StreamId)
-			s, err := c.ensureRecvStream(inner.StreamId)
+			s, err := c.ensureRecvStream(inner.StreamId, false)
 			if err != nil {
 				return err
 			}
 
 			err = s.handleReset(inner.FinalOffset)
+			if err != nil {
+				return err
+			}
+
+		case *stopSendingFrame:
+			c.log(logTypeStream, "Received STOP_SENDING on stream %v", inner.StreamId)
+			s, err := c.ensureSendStream(inner.StreamId, false)
+			if err != nil {
+				return err
+			}
+
+			err = s.Reset(kQuicErrorNoError)
 			if err != nil {
 				return err
 			}
@@ -1602,7 +1620,7 @@ func (c *Connection) processUnprotected(hdr *packetHeader, packetNumber uint64, 
 			return nil
 
 		case *maxStreamDataFrame:
-			s, err := c.ensureSendStream(inner.StreamId)
+			s, err := c.ensureSendStream(inner.StreamId, false)
 			if err != nil {
 				return err
 			}
@@ -1630,7 +1648,7 @@ func (c *Connection) processUnprotected(hdr *packetHeader, packetNumber uint64, 
 			nonAck = false
 
 		case *streamBlockedFrame:
-			s, err := c.ensureRecvStream(inner.StreamId)
+			s, err := c.ensureRecvStream(inner.StreamId, false)
 			if err != nil {
 				return err
 			}
@@ -1638,7 +1656,7 @@ func (c *Connection) processUnprotected(hdr *packetHeader, packetNumber uint64, 
 
 		case *streamFrame:
 			c.log(logTypeTrace, "Received on stream %v %x", inner.StreamId, inner.Data)
-			s, err := c.ensureRecvStream(inner.StreamId)
+			s, err := c.ensureRecvStream(inner.StreamId, false)
 			if err != nil {
 				return err
 			}
@@ -1909,7 +1927,7 @@ func (c *Connection) CreateStream() Stream {
 
 	id := (uint64(len(c.localBidiStreams)) << 2) | streamTypeBidirectionalLocal.suffix(c.role)
 	c.log(logTypeStream, "Creating stream %v", id)
-	s, _ := c.ensureLocalBidiStream(id)
+	s, _ := c.ensureLocalBidiStream(id, true)
 	return s
 }
 
@@ -1922,7 +1940,7 @@ func (c *Connection) CreateSendStream() SendStream {
 
 	id := (uint64(len(c.localUniStreams)) << 2) | streamTypeUnidirectionalLocal.suffix(c.role)
 	c.log(logTypeStream, "Creating stream %v", id)
-	s, _ := c.ensureLocalUniStream(id)
+	s, _ := c.ensureLocalUniStream(id, true)
 	return s
 }
 

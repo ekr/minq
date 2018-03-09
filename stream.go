@@ -544,17 +544,17 @@ func (s *recvStream) Read(b []byte) (int, error) {
 	return readFromStream(&s.recvStreamBase, s.c, b)
 }
 
-func stopSending(s *recvStreamBase, id uint64, err ErrorCode, c *Connection) error {
-	// TODO implement STOP_SENDING
-	return nil
+func stopSending(id uint64, code ErrorCode, c *Connection) error {
+	f := newStopSendingFrame(id, code)
+	return c.sendFrame(f)
 }
 
 // StopSending requests a reset.
 func (s *recvStream) StopSending(err ErrorCode) error {
-	return stopSending(&s.recvStreamBase, s.id, err, s.c)
+	return stopSending(s.id, err, s.c)
 }
 
-// Stream is a bidirectional stream.
+// stream is a bidirectional stream.
 type stream struct {
 	streamWithIdentity
 	sendStreamBase
@@ -608,5 +608,5 @@ func (s *stream) Reset(code ErrorCode) error {
 
 // StopSending requests abandoning writing on the stream.
 func (s *stream) StopSending(code ErrorCode) error {
-	return stopSending(&s.recvStreamBase, s.id, code, s.c)
+	return stopSending(s.id, code, s.c)
 }

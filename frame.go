@@ -25,6 +25,7 @@ const (
 	kFrameTypeStreamBlocked   = frameType(0x9)
 	kFrameTypeStreamIdNeeded  = frameType(0xa)
 	kFrameTypeNewConnectionId = frameType(0xb)
+	kFrameTypeStopSending     = frameType(0xc)
 	kFrameTypeAck             = frameType(0xe)
 	kFrameTypeStream          = frameType(0x10)
 	kFrameTypeStreamMax       = frameType(0x17)
@@ -117,6 +118,8 @@ func decodeFrame(data []byte) (uintptr, *frame, error) {
 		inner = &streamIdNeededFrame{}
 	case t == uint8(kFrameTypeNewConnectionId):
 		inner = &newConnectionIdFrame{}
+	case t == uint8(kFrameTypeStopSending):
+		inner = &stopSendingFrame{}
 	case t == uint8(kFrameTypeAck):
 		inner = &ackFrame{}
 	case t >= uint8(kFrameTypeStream) && t <= uint8(kFrameTypeStreamMax):
@@ -181,7 +184,28 @@ func newRstStreamFrame(streamId uint64, errorCode ErrorCode, finalOffset uint64)
 		uint64(streamId),
 		uint16(errorCode),
 		finalOffset})
+}
 
+// STOP_SENDING
+type stopSendingFrame struct {
+	Type      frameType
+	StreamId  uint64 `tls:"varint"`
+	ErrorCode uint16
+}
+
+func (f stopSendingFrame) String() string {
+	return fmt.Sprintf("STOP_SENDING stream=%x errorCode=%d", f.StreamId, f.ErrorCode)
+}
+
+func (f stopSendingFrame) getType() frameType {
+	return kFrameTypeStopSending
+}
+
+func newStopSendingFrame(streamId uint64, errorCode ErrorCode) frame {
+	return newFrame(streamId, &stopSendingFrame{
+		kFrameTypeStopSending,
+		uint64(streamId),
+		uint16(errorCode)})
 }
 
 // CONNECTION_CLOSE
