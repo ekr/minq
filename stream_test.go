@@ -2,6 +2,7 @@ package minq
 
 import (
 	"fmt"
+	"io"
 	"runtime"
 	"testing"
 )
@@ -123,7 +124,7 @@ func TestStreamInputChunk1FinChunk2(t *testing.T) {
 	err = f.r.newFrameData(uint64(len(kTestString1)), false, kTestString2)
 	assertEquals(t, err, ErrorProtocolViolation)
 	assertX(t, !f.r.readable, "Stream not be readable")
-	f.readExpectError(ErrorStreamIsClosed)
+	f.readExpectError(io.EOF)
 }
 
 func TestStreamInputShortFinChunkAfterFin(t *testing.T) {

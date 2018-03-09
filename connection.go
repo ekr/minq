@@ -207,6 +207,7 @@ func NewConnection(trans Transport, role Role, tls *TlsConfig, handler Connectio
 	// Mint.
 	c.tpHandler = newTransportParametersHandler(c.log, role, kQuicVersion)
 	c.tls.setTransportParametersHandler(c.tpHandler)
+	c.log(logTypeHandshake, "%p TransportParametersHandler", c.tpHandler)
 
 	c.recvd = newRecvdPackets(c.log)
 	tmp, err := generateRand64()
@@ -234,6 +235,10 @@ func NewConnection(trans Transport, role Role, tls *TlsConfig, handler Connectio
 	return &c
 }
 
+func (c *Connection) String() string {
+	return fmt.Sprintf("Conn: %.16x:%.16x: %s", c.clientConnId, c.serverConnId, c.role)
+}
+
 func (c *Connection) zeroRttAllowed() bool {
 	// Placeholder
 	return false
@@ -243,12 +248,19 @@ func (c *Connection) start() error {
 	return nil
 }
 
-func (c *Connection) label() string {
-	return string(c.role)
-}
-
 func (c *Connection) Role() Role {
 	return c.role
+}
+
+func (r Role) String() string {
+	switch r {
+	case RoleClient:
+		return "client"
+	case RoleServer:
+		return "server"
+	default:
+		panic("invalid role")
+	}
 }
 
 func (c *Connection) setState(state State) {
@@ -256,14 +268,14 @@ func (c *Connection) setState(state State) {
 		return
 	}
 
-	c.log(logTypeConnection, "%s: Connection state %s -> %v", c.label(), StateName(c.state), StateName(state))
+	c.log(logTypeConnection, "Connection state %v -> %v", c.state, state)
 	if c.handler != nil {
 		c.handler.StateChanged(state)
 	}
 	c.state = state
 }
 
-func StateName(state State) string {
+func (state State) String() string {
 	// TODO(ekr@rtfm.com): is there a way to get the name from the
 	// const value.
 	switch state {
@@ -608,7 +620,7 @@ func (c *Connection) sendPacket(pt uint8, tosend []frame, containsOnlyAcks bool)
 }
 
 func (c *Connection) sendFramesInPacket(pt uint8, tosend []frame) error {
-	c.log(logTypeConnection, "%s: Sending packet of type %v. %v frames", c.label(), pt, len(tosend))
+	c.log(logTypeConnection, "%s: Sending packet of type %v. %v frames", c.role, pt, len(tosend))
 	c.log(logTypeTrace, "Sending packet of type %v. %v frames", pt, len(tosend))
 	left := c.mtu
 
@@ -693,7 +705,7 @@ func (c *Connection) sendFramesInPacket(pt uint8, tosend []frame) error {
 }
 
 func (c *Connection) sendOnStream0(data []byte) error {
-	c.log(logTypeConnection, "%v: sending %v bytes on stream 0", c.label(), len(data))
+	c.log(logTypeConnection, "sending %v bytes on stream 0", len(data))
 	_, err := c.localBidiStreams[0].Write(data)
 	return err
 }
@@ -807,7 +819,7 @@ func (c *Connection) enqueueStreamFrames(s sendStreamPrivate, q *[]frame) {
 // Send all the queued data on a set of streams with packet type |pt|
 func (c *Connection) queueStreamFrames(protected bool) error {
 	c.log(logTypeConnection, "%v: queueStreamFrames, protected=%v",
-		c.label(), protected)
+		c.role, protected)
 
 	if !protected {
 		s0 := c.localBidiStreams[0]
@@ -841,8 +853,7 @@ func (c *Connection) sendFrame(f frame) error {
 * the congestion controller. We're going to need to be more sophisticated
 * when we actually do connection level flow control. */
 func (c *Connection) sendQueuedFrames(pt uint8, protected bool, bareAcks bool) (int, error) {
-	c.log(logTypeConnection, "%v: sendQueuedFrames, pt=%v, protected=%v",
-		c.label(), pt, protected)
+	c.log(logTypeConnection, "sendQueuedFrames, pt=%v, protected=%v", pt, protected)
 
 	acks := c.recvd.prepareAckRange(protected, false)
 	now := time.Now()
@@ -923,8 +934,8 @@ func (c *Connection) sendQueuedFrames(pt uint8, protected bool, bareAcks bool) (
 
 	// Send the remainder, plus any ACKs that are left.
 	// TODO(piet@devae.re) This might push the outstanding data over the congestion window
-	c.log(logTypeConnection, "%s: Remainder to send? sent=%v frames=%v acks=%v bareAcks=%v",
-		c.label(), sent, len(frames), len(acks), bareAcks)
+	c.log(logTypeConnection, "Remainder to send? sent=%v frames=%v acks=%v bareAcks=%v",
+		sent, len(frames), len(acks), bareAcks)
 	if len(frames) > 0 || (len(acks) > 0 && bareAcks) {
 		// TODO(ekr@rtfm.com): this may skip acks if there isn't
 		// room, but hopefully we eventually catch up.
@@ -1034,7 +1045,7 @@ func (c *Connection) input(p []byte) error {
 		if c.closePacket != nil {
 			c.transport.Send(c.closePacket)
 		}
-		return nil
+		return ErrorConnIsClosing
 	}
 
 	c.lastInput = time.Now()
@@ -1051,7 +1062,7 @@ func (c *Connection) input(p []byte) error {
 
 	if isLongHeader(&hdr) && hdr.Version != c.version {
 		if c.role == RoleServer {
-			c.log(logTypeConnection, "%s: Received unsupported version %v, expected %v", c.label(), hdr.Version, c.version)
+			c.log(logTypeConnection, "Received unsupported version %v, expected %v", hdr.Version, c.version)
 			err = c.sendVersionNegotiation(hdr.ConnectionID, hdr.PacketNumber, hdr.Version)
 			if err != nil {
 				return err
@@ -1103,8 +1114,8 @@ func (c *Connection) input(p []byte) error {
 	// TODO(ekr@rtfm.com): this dup detection doesn't work right if you
 	// get a cleartext packet that has the same PN as a ciphertext or vice versa.
 	// Need to fix.
-	c.log(logTypeConnection, "%s: Received (unverified) packet with PN=%x PT=%v",
-		c.label(), hdr.PacketNumber, hdr.getHeaderType())
+	c.log(logTypeConnection, "Received (unverified) packet with PN=%x PT=%v",
+		hdr.PacketNumber, hdr.getHeaderType())
 
 	packetNumber := hdr.PacketNumber
 	if c.recvd.initialized() {
@@ -1272,7 +1283,7 @@ func (c *Connection) processCleartext(hdr *packetHeader, payload []byte, naf *bo
 
 	stream0 := c.localBidiStreams[0].(*stream)
 	for len(payload) > 0 {
-		c.log(logTypeConnection, "%s: payload bytes left %d", c.label(), len(payload))
+		c.log(logTypeConnection, "payload bytes left %d", len(payload))
 		n, f, err := decodeFrame(payload)
 		if err != nil {
 			c.log(logTypeConnection, "Couldn't decode frame %v", err)
@@ -1412,9 +1423,9 @@ func (c *Connection) sendVersionNegotiation(connId ConnectionId, pn uint64, vers
 }
 
 func (c *Connection) processVersionNegotiation(hdr *packetHeader, payload []byte) error {
-	c.log(logTypeConnection, "%s: Processing version negotiation packet", c.label())
+	c.log(logTypeConnection, "Processing version negotiation packet")
 	if c.recvd.initialized() {
-		c.log(logTypeConnection, "%s: Ignoring version negotiation after received another packet", c.label())
+		c.log(logTypeConnection, "Ignoring version negotiation after received another packet")
 	}
 
 	// TODO(ekr@rtfm.com): Check the version negotiation fields.
@@ -1439,9 +1450,9 @@ func (c *Connection) processVersionNegotiation(hdr *packetHeader, payload []byte
 // I assume here that Stateless Retry contains just a single stream frame,
 // contra the spec but per https://github.com/quicwg/base-drafts/pull/817
 func (c *Connection) processStatelessRetry(hdr *packetHeader, payload []byte) error {
-	c.log(logTypeConnection, "%s: Processing stateless retry packet %s", c.label(), dumpPacket(payload))
+	c.log(logTypeConnection, "Processing stateless retry packet %s", dumpPacket(payload))
 	if c.recvd.initialized() {
-		c.log(logTypeConnection, "%s: Ignoring stateless retry after received another packet", c.label())
+		c.log(logTypeConnection, "Ignoring stateless retry after received another packet")
 	}
 
 	// Directly parse the Stateless Retry rather than inserting it into
@@ -1553,7 +1564,7 @@ func (c *Connection) processUnprotected(hdr *packetHeader, packetNumber uint64, 
 	c.log(logTypeConnection, "Received Packet=%v", dumpPacket(payload))
 	*naf = false
 	for len(payload) > 0 {
-		c.log(logTypeConnection, "%s: payload bytes left %d", c.label(), len(payload))
+		c.log(logTypeConnection, "payload bytes left %d", len(payload))
 		n, f, err := decodeFrame(payload)
 		if err != nil {
 			c.log(logTypeConnection, "Couldn't decode frame %v", err)
@@ -1707,7 +1718,7 @@ func (c *Connection) processAckRange(start uint64, end uint64, protected bool) {
 	for {
 		// TODO(ekr@rtfm.com): properly filter for ACKed packets which are in the
 		// wrong key phase.
-		c.log(logTypeConnection, "%s: processing ACK for PN=%x", c.label(), pn)
+		c.log(logTypeConnection, "processing ACK for PN=%x", pn)
 
 		// 1. Go through the outgoing queues and remove all the acked chunks.
 		c.removeAckedFrames(pn, &c.outputClearQ)
@@ -1740,7 +1751,7 @@ func (c *Connection) processAckRange(start uint64, end uint64, protected bool) {
 
 func (c *Connection) processAckFrame(f *ackFrame, protected bool) error {
 	var receivedAcks ackRanges
-	c.log(logTypeAck, "%s: processing ACK last=%x first ack block=%d", c.label(), f.LargestAcknowledged, f.FirstAckBlock)
+	c.log(logTypeAck, "processing ACK last=%x first ack block=%d", f.LargestAcknowledged, f.FirstAckBlock)
 	end := f.LargestAcknowledged
 
 	start := (end - f.FirstAckBlock)
@@ -1750,7 +1761,7 @@ func (c *Connection) processAckFrame(f *ackFrame, protected bool) error {
 	ackDelay := time.Duration(ackDelayMicros * 1e3)
 
 	// Process the First ACK Block
-	c.log(logTypeAck, "%s: processing ACK range %x-%x", c.label(), start, end)
+	c.log(logTypeAck, "processing ACK range %x-%x", start, end)
 	c.processAckRange(start, end, protected)
 	receivedAcks = append(receivedAcks, ackRange{end, end - start})
 
@@ -1766,12 +1777,12 @@ func (c *Connection) processAckFrame(f *ackFrame, protected bool) error {
 		// Not clear why the peer did this, but ignore.
 		if block.Length == 0 {
 			last -= uint64(block.Gap)
-			c.log(logTypeAck, "%s: encountered empty ACK block", c.label())
+			c.log(logTypeAck, "encountered empty ACK block")
 			continue
 		}
 
 		last = start
-		c.log(logTypeAck, "%s: processing ACK range %x-%x", c.label(), start, end)
+		c.log(logTypeAck, "processing ACK range %x-%x", start, end)
 		c.processAckRange(start, end, protected)
 		receivedAcks = append(receivedAcks, ackRange{end, end - start})
 	}
@@ -1799,8 +1810,9 @@ func (c *Connection) CheckTimer() (int, error) {
 		if time.Now().After(c.closingEnd) {
 			c.log(logTypeConnection, "End of draining period, closing")
 			c.setState(StateClosed)
+			return 0, ErrorConnIsClosed
 		}
-		return 0, ErrorConnIsClosed
+		return 0, ErrorConnIsClosing
 	}
 
 	// Right now just re-send everything we might need to send.
@@ -1888,8 +1900,8 @@ func (c *Connection) packetNonce(pn uint64) []byte {
 	return encodeArgs(pn)
 }
 
-// CreateBidirectionalStream creates a stream that can send and receive.
-func (c *Connection) CreateBidirectionalStream() Stream {
+// CreateStream creates a stream that can send and receive.
+func (c *Connection) CreateStream() Stream {
 	// First check to see if we might exceed maxStreamId
 	if len(c.localBidiStreams) >= c.maxLocalBidi {
 		return nil
@@ -1901,8 +1913,8 @@ func (c *Connection) CreateBidirectionalStream() Stream {
 	return s
 }
 
-// CreateUnidirectionalStream creates a stream that can send only.
-func (c *Connection) CreateUnidirectionalStream() SendStream {
+// CreateSendStream creates a stream that can send only.
+func (c *Connection) CreateSendStream() SendStream {
 	// First check to see if we might exceed maxStreamId
 	if len(c.localUniStreams) >= c.maxLocalUni {
 		return nil
@@ -2005,7 +2017,7 @@ func (c *Connection) close(code ErrorCode, reason string, savePacket bool) error
 
 // Close a connection.
 func (c *Connection) Close() error {
-	c.log(logTypeConnection, "%v Close()", c.label())
+	c.log(logTypeConnection, "Close()")
 	return c.close(kQuicErrorNoError, "You don't have to go home but you can't stay here", true)
 }
 
@@ -2044,7 +2056,7 @@ func (c *Connection) handleError(e error) error {
 	}
 
 	// Connection has failed.
-	logf(logTypeConnection, "%v: failed with Error=%v", c.label(), e.Error())
+	logf(logTypeConnection, "failed with Error=%v", e.Error())
 	c.setState(StateError)
 
 	return e

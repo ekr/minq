@@ -206,7 +206,7 @@ func (h *transportParametersHandler) Send(hs mint.HandshakeType, el *mint.Extens
 }
 
 func (h *transportParametersHandler) Receive(hs mint.HandshakeType, el *mint.ExtensionList) error {
-	h.log(logTypeHandshake, "TransportParametersHandler message=%d", hs)
+	h.log(logTypeHandshake, "%p TransportParametersHandler message=%d", h, hs)
 	// First see if the other side sent the extension.
 	var body transportParametersXtnBody
 	found, err := el.Find(&body)

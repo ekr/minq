@@ -385,6 +385,9 @@ func (s *recvStreamBase) read(b []byte) (int, error) {
 		case RecvStreamStateRecv, RecvStreamStateSizeKnown:
 			return 0, ErrorWouldBlock
 		default:
+			if s.chunks == nil {
+				return 0, io.EOF
+			}
 			return 0, ErrorStreamIsClosed
 		}
 	}
@@ -526,7 +529,7 @@ func newRecvStream(c *Connection, id uint64) recvStreamPrivate {
 
 func readFromStream(s *recvStreamBase, c *Connection, b []byte) (int, error) {
 	if c.isClosed() {
-		return 0, ErrorConnIsClosed
+		return 0, io.EOF
 	}
 
 	n, err := s.read(b)
