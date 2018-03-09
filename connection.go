@@ -78,13 +78,13 @@ type ConnectionHandler interface {
 	// The connection has changed state to state |s|
 	StateChanged(s State)
 
-	// NewUnidirectionalStream indicates that a new unidirectional stream has been
+	// NewRecvStream indicates that a new unidirectional stream has been
 	// created by the remote peer. |s| contains the stream.
-	NewUnidirectionalStream(s RecvStream)
+	NewRecvStream(s RecvStream)
 
-	// NewBidirectionalStream indicates that a new bidirectional stream has been
+	// NewStream indicates that a new bidirectional stream has been
 	// created by the remote peer. |s| contains the stream.
-	NewBidirectionalStream(s Stream)
+	NewStream(s Stream)
 
 	// StreamReadable indicates that |s| is now readable.
 	StreamReadable(s RecvStream)
@@ -130,14 +130,14 @@ type Connection struct {
 	nextSendPacket uint64
 	mtu            int
 	// Locally created streams.
-	localBidiStreams []Stream
+	localBidiStreams []streamPrivate
 	// The number of local bidirectional streams we are permitted to create (not the max stream ID).
 	maxLocalBidi       int
-	remoteBidiStreams  []Stream
+	remoteBidiStreams  []streamPrivate
 	maxRemoteBidi      int
-	localUniStreams    []SendStream
+	localUniStreams    []sendStreamPrivate
 	maxLocalUni        int
-	remoteUniStreams   []RecvStream
+	remoteUniStreams   []recvStreamPrivate
 	maxRemoteUni       int
 	outputClearQ       []frame // For stream 0
 	outputProtectedQ   []frame // For stream >= 0
@@ -173,13 +173,13 @@ func NewConnection(trans Transport, role Role, tls *TlsConfig, handler Connectio
 		readProtected:      nil,
 		nextSendPacket:     uint64(0),
 		mtu:                kInitialMTU,
-		localBidiStreams:   make([]Stream, 1),
+		localBidiStreams:   make([]streamPrivate, 1),
 		maxLocalBidi:       1,
-		remoteBidiStreams:  make([]Stream, 0, kConcurrentStreamsBidi),
+		remoteBidiStreams:  make([]streamPrivate, 0, kConcurrentStreamsBidi),
 		maxRemoteBidi:      kConcurrentStreamsBidi,
-		localUniStreams:    make([]SendStream, 0),
+		localUniStreams:    make([]sendStreamPrivate, 0),
 		maxLocalUni:        0,
-		remoteUniStreams:   make([]RecvStream, 0, kConcurrentStreamsUni),
+		remoteUniStreams:   make([]recvStreamPrivate, 0, kConcurrentStreamsUni),
 		maxRemoteUni:       kConcurrentStreamsUni,
 		outputClearQ:       nil,
 		outputProtectedQ:   nil,
@@ -305,7 +305,7 @@ func (t streamType) suffix(role Role) uint64 {
 }
 
 // This makes a bidirectional local stream.
-func (c *Connection) ensureLocalBidiStream(id uint64) (Stream, error) {
+func (c *Connection) ensureLocalBidiStream(id uint64) (streamPrivate, error) {
 	c.log(logTypeStream, "Ensuring local bidirectional stream %d exists", id)
 
 	assert(c.tpHandler.peerParams != nil)
@@ -317,7 +317,7 @@ func (c *Connection) ensureLocalBidiStream(id uint64) (Stream, error) {
 		// TODO(ekr@rtfm.com): this is not really done, because we never clean up
 		// Resize to fit.
 		needed := index - len(c.localBidiStreams) + 1
-		c.localBidiStreams = append(c.localBidiStreams, make([]Stream, needed)...)
+		c.localBidiStreams = append(c.localBidiStreams, make([]streamPrivate, needed)...)
 	}
 	if c.localBidiStreams[index] == nil {
 		msd := uint64(c.tpHandler.peerParams.maxStreamsData)
@@ -327,7 +327,7 @@ func (c *Connection) ensureLocalBidiStream(id uint64) (Stream, error) {
 	return c.localBidiStreams[index], nil
 }
 
-func (c *Connection) ensureLocalUniStream(id uint64) (SendStream, error) {
+func (c *Connection) ensureLocalUniStream(id uint64) (sendStreamPrivate, error) {
 	c.log(logTypeStream, "Ensuring local unidirectional stream %d exists", id)
 
 	assert(c.tpHandler.peerParams != nil)
@@ -337,7 +337,7 @@ func (c *Connection) ensureLocalUniStream(id uint64) (SendStream, error) {
 	assert(index < c.maxLocalUni)
 	if len(c.localUniStreams) <= index {
 		needed := index - len(c.localUniStreams) + 1
-		c.localUniStreams = append(c.localUniStreams, make([]SendStream, needed)...)
+		c.localUniStreams = append(c.localUniStreams, make([]sendStreamPrivate, needed)...)
 	}
 	if c.localUniStreams[index] == nil {
 		// TODO: separate initial MAX_STREAM_DATA by stream type
@@ -347,7 +347,7 @@ func (c *Connection) ensureLocalUniStream(id uint64) (SendStream, error) {
 	return c.localUniStreams[index], nil
 }
 
-func (c *Connection) ensureRemoteBidiStream(id uint64) (Stream, error) {
+func (c *Connection) ensureRemoteBidiStream(id uint64) (streamPrivate, error) {
 	c.log(logTypeStream, "Ensuring remote bidirectional stream %d exists", id)
 
 	assert(c.tpHandler.peerParams != nil)
@@ -359,19 +359,19 @@ func (c *Connection) ensureRemoteBidiStream(id uint64) (Stream, error) {
 	}
 	if len(c.remoteBidiStreams) <= index {
 		needed := index - len(c.remoteBidiStreams) + 1
-		c.remoteBidiStreams = append(c.remoteBidiStreams, make([]Stream, needed)...)
+		c.remoteBidiStreams = append(c.remoteBidiStreams, make([]streamPrivate, needed)...)
 	}
 	if c.remoteBidiStreams[index] == nil {
 		msd := uint64(c.tpHandler.peerParams.maxStreamsData)
 		c.remoteBidiStreams[index] = newStream(c, id, msd)
 		if c.handler != nil {
-			c.handler.NewBidirectionalStream(c.remoteBidiStreams[index])
+			c.handler.NewStream(c.remoteBidiStreams[index])
 		}
 	}
 	return c.remoteBidiStreams[index], nil
 }
 
-func (c *Connection) ensureRemoteUniStream(id uint64) (RecvStream, error) {
+func (c *Connection) ensureRemoteUniStream(id uint64) (recvStreamPrivate, error) {
 	c.log(logTypeStream, "Ensuring remote unidirectional stream %d exists", id)
 
 	assert(c.tpHandler.peerParams != nil)
@@ -383,12 +383,12 @@ func (c *Connection) ensureRemoteUniStream(id uint64) (RecvStream, error) {
 	}
 	if len(c.remoteUniStreams) <= index {
 		needed := index - len(c.remoteUniStreams) + 1
-		c.remoteUniStreams = append(c.remoteUniStreams, make([]RecvStream, needed)...)
+		c.remoteUniStreams = append(c.remoteUniStreams, make([]recvStreamPrivate, needed)...)
 	}
 	if c.remoteUniStreams[index] == nil {
 		c.remoteUniStreams[index] = newRecvStream(c, id)
 		if c.handler != nil {
-			c.handler.NewUnidirectionalStream(c.remoteUniStreams[index])
+			c.handler.NewRecvStream(c.remoteUniStreams[index])
 		}
 	}
 	return c.remoteUniStreams[index], nil
@@ -396,7 +396,7 @@ func (c *Connection) ensureRemoteUniStream(id uint64) (RecvStream, error) {
 
 // This manages the creation of local and remote bidirectional streams as well
 // as remote unidirectional streams.
-func (c *Connection) ensureSendStream(id uint64) (SendStream, error) {
+func (c *Connection) ensureSendStream(id uint64) (sendStreamPrivate, error) {
 	switch streamTypeFromId(id, c.role) {
 	case streamTypeBidirectionalLocal:
 		return c.ensureLocalBidiStream(id)
@@ -412,7 +412,7 @@ func (c *Connection) ensureSendStream(id uint64) (SendStream, error) {
 
 // This manages the creation of local and remote bidirectional streams as well
 // as remote unidirectional streams.
-func (c *Connection) ensureRecvStream(id uint64) (RecvStream, error) {
+func (c *Connection) ensureRecvStream(id uint64) (recvStreamPrivate, error) {
 	switch streamTypeFromId(id, c.role) {
 	case streamTypeBidirectionalLocal:
 		return c.ensureLocalBidiStream(id)
@@ -793,7 +793,7 @@ func (c *Connection) queueFrame(q *[]frame, f frame) {
 	*q = append(*q, f)
 }
 
-func (c *Connection) enqueueStreamFrames(s SendStream, q *[]frame) {
+func (c *Connection) enqueueStreamFrames(s sendStreamPrivate, q *[]frame) {
 	if s == nil {
 		return
 	}
@@ -1007,7 +1007,7 @@ func (c *Connection) fireReadable() {
 		return
 	}
 
-	fire := func(s RecvStream) {
+	fire := func(s recvStreamPrivate) {
 		if s != nil && s.clearReadable() {
 			c.handler.StreamReadable(s)
 		}
@@ -1660,7 +1660,7 @@ func (c *Connection) processUnprotected(hdr *packetHeader, packetNumber uint64, 
 	return nil
 }
 
-func (c *Connection) newFrameData(s RecvStream, inner *streamFrame) error {
+func (c *Connection) newFrameData(s recvStreamPrivate, inner *streamFrame) error {
 	err := s.newFrameData(inner.Offset, inner.hasFin(), inner.Data)
 	if err != nil {
 		return err
@@ -1888,8 +1888,7 @@ func (c *Connection) packetNonce(pn uint64) []byte {
 	return encodeArgs(pn)
 }
 
-// Create a stream on a given connection. Returns the created
-// stream.
+// CreateBidirectionalStream creates a stream that can send and receive.
 func (c *Connection) CreateBidirectionalStream() Stream {
 	// First check to see if we might exceed maxStreamId
 	if len(c.localBidiStreams) >= c.maxLocalBidi {
@@ -1902,9 +1901,8 @@ func (c *Connection) CreateBidirectionalStream() Stream {
 	return s
 }
 
-// Create a stream on a given connection. Returns the created
-// stream.
-func (c *Connection) CreateUnirectionalStream() SendStream {
+// CreateUnidirectionalStream creates a stream that can send only.
+func (c *Connection) CreateUnidirectionalStream() SendStream {
 	// First check to see if we might exceed maxStreamId
 	if len(c.localUniStreams) >= c.maxLocalUni {
 		return nil
@@ -1920,7 +1918,7 @@ func (c *Connection) CreateUnirectionalStream() SendStream {
 // no such stream exists.
 func (c *Connection) GetBidirectionalStream(id uint64) Stream {
 
-	var streams []Stream
+	var streams []streamPrivate
 	switch streamTypeFromId(id, c.role) {
 	case streamTypeBidirectionalLocal:
 		streams = c.localBidiStreams

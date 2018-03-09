@@ -175,7 +175,7 @@ func newTransportParametersHandler(log loggingFunction, role Role, version Versi
 
 func (h *transportParametersHandler) Send(hs mint.HandshakeType, el *mint.ExtensionList) error {
 	if h.role == RoleClient {
-		logf(logTypeHandshake, "Sending transport parameters")
+		h.log(logTypeHandshake, "Sending transport parameters")
 		if hs != mint.HandshakeTypeClientHello {
 			return nil
 		}
@@ -196,7 +196,7 @@ func (h *transportParametersHandler) Send(hs mint.HandshakeType, el *mint.Extens
 		return nil
 	}
 
-	logf(logTypeHandshake, "Sending transport parameters message")
+	h.log(logTypeHandshake, "Sending transport parameters message")
 	b, err := h.createEncryptedExtensionsTransportParameters()
 	if err != nil {
 		return err
@@ -206,7 +206,7 @@ func (h *transportParametersHandler) Send(hs mint.HandshakeType, el *mint.Extens
 }
 
 func (h *transportParametersHandler) Receive(hs mint.HandshakeType, el *mint.ExtensionList) error {
-	logf(logTypeHandshake, "TransportParametersHandler message=%d", hs)
+	h.log(logTypeHandshake, "TransportParametersHandler message=%d", hs)
 	// First see if the other side sent the extension.
 	var body transportParametersXtnBody
 	found, err := el.Find(&body)

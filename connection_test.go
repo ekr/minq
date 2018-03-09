@@ -340,10 +340,10 @@ func newTestReceiveHandler(t *testing.T) *testReceiveHandler {
 func (h *testReceiveHandler) StateChanged(s State) {
 }
 
-func (h *testReceiveHandler) NewBidirectionalStream(s Stream) {
+func (h *testReceiveHandler) NewStream(s Stream) {
 }
 
-func (h *testReceiveHandler) NewUnidirectionalStream(s RecvStream) {
+func (h *testReceiveHandler) NewRecvStream(s RecvStream) {
 }
 
 func (h *testReceiveHandler) StreamReadable(s RecvStream) {

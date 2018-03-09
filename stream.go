@@ -60,7 +60,9 @@ type sendStreamMethods interface {
 	io.WriteCloser
 	Reset(ErrorCode) error
 	SendState() SendStreamState
+}
 
+type sendStreamPrivateMethods interface {
 	setSendState(SendStreamState)
 	outstandingQueuedBytes() int
 	processMaxStreamData(uint64)
@@ -71,7 +73,9 @@ type recvStreamMethods interface {
 	io.Reader
 	StopSending(ErrorCode) error
 	RecvState() RecvStreamState
+}
 
+type recvStreamPrivateMethods interface {
 	setRecvState(RecvStreamState)
 	handleReset(offset uint64) error
 	clearReadable() bool
@@ -85,10 +89,20 @@ type SendStream interface {
 	sendStreamMethods
 }
 
+type sendStreamPrivate interface {
+	SendStream
+	sendStreamPrivateMethods
+}
+
 // RecvStream can receive.
 type RecvStream interface {
 	hasIdentity
 	recvStreamMethods
+}
+
+type recvStreamPrivate interface {
+	RecvStream
+	recvStreamPrivateMethods
 }
 
 // Stream is both a send and receive stream.
@@ -96,6 +110,12 @@ type Stream interface {
 	hasIdentity
 	sendStreamMethods
 	recvStreamMethods
+}
+
+type streamPrivate interface {
+	Stream
+	sendStreamPrivateMethods
+	recvStreamPrivateMethods
 }
 
 type streamChunk struct {
@@ -426,7 +446,7 @@ type sendStream struct {
 // Compile-time interface check.
 var _ SendStream = &sendStream{}
 
-func newSendStream(c *Connection, id uint64, initialMax uint64) SendStream {
+func newSendStream(c *Connection, id uint64, initialMax uint64) sendStreamPrivate {
 	return &sendStream{
 		streamWithIdentity: streamWithIdentity{c, id},
 		sendStreamBase: sendStreamBase{
@@ -490,7 +510,7 @@ type recvStream struct {
 // Compile-time interface check.
 var _ RecvStream = &recvStream{}
 
-func newRecvStream(c *Connection, id uint64) RecvStream {
+func newRecvStream(c *Connection, id uint64) recvStreamPrivate {
 	return &recvStream{
 		streamWithIdentity: streamWithIdentity{c, id},
 		recvStreamBase: recvStreamBase{
@@ -541,7 +561,7 @@ type stream struct {
 // Compile-time interface check.
 var _ Stream = &stream{}
 
-func newStream(c *Connection, id uint64, initialMax uint64) Stream {
+func newStream(c *Connection, id uint64, initialMax uint64) streamPrivate {
 	return &stream{
 		streamWithIdentity: streamWithIdentity{c, id},
 		sendStreamBase: sendStreamBase{
