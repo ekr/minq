@@ -1944,9 +1944,9 @@ func (c *Connection) CreateSendStream() SendStream {
 	return s
 }
 
-// GetBidirectionalStream retrieves a stream with the given id. Returns nil if
+// GetStream retrieves a stream with the given id. Returns nil if
 // no such stream exists.
-func (c *Connection) GetBidirectionalStream(id uint64) Stream {
+func (c *Connection) GetStream(id uint64) Stream {
 
 	var streams []streamPrivate
 	switch streamTypeFromId(id, c.role) {
@@ -1964,9 +1964,9 @@ func (c *Connection) GetBidirectionalStream(id uint64) Stream {
 	return streams[index]
 }
 
-// GetLocalUnidirectionalStream retrieves a stream with the given id. Returns
+// GetSendStream retrieves a stream with the given id. Returns
 // nil if no such stream exists.
-func (c *Connection) GetLocalUnidirectionalStream(id uint64) SendStream {
+func (c *Connection) GetSendStream(id uint64) SendStream {
 	if streamTypeFromId(id, c.role) != streamTypeUnidirectionalLocal {
 		return nil
 	}
@@ -1977,9 +1977,9 @@ func (c *Connection) GetLocalUnidirectionalStream(id uint64) SendStream {
 	return c.localUniStreams[index]
 }
 
-// GetRemoteUnidirectionalStream retrieves a stream with the given id. Returns
+// GetRecvStream retrieves a stream with the given id. Returns
 // nil if no such stream exists.
-func (c *Connection) GetRemoteUnidirectionalStream(id uint64) RecvStream {
+func (c *Connection) GetRecvStream(id uint64) RecvStream {
 	if streamTypeFromId(id, c.role) != streamTypeUnidirectionalRemote {
 		return nil
 	}

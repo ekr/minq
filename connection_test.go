@@ -288,7 +288,7 @@ func TestSendReceiveData(t *testing.T) {
 	// Read data C->S
 	err = inputAll(pair.server)
 	assertNotError(t, err, "Couldn't read input packets")
-	ss := pair.server.GetBidirectionalStream(4)
+	ss := pair.server.GetStream(4)
 	b, err := ioutil.ReadAll(ss)
 	assertEquals(t, ErrorWouldBlock, err)
 	assertNotNil(t, b, "Read data from server")
@@ -310,8 +310,8 @@ func TestSendReceiveData(t *testing.T) {
 	// Check that we only create streams in one direction
 	cs = pair.client.CreateStream()
 	assertEquals(t, uint64(8), cs.Id())
-	assertNotNil(t, pair.client.GetBidirectionalStream(8), "Stream 8 should exist")
-	assertX(t, pair.client.GetBidirectionalStream(2) == nil, "Stream 2 should not exist")
+	assertNotNil(t, pair.client.GetStream(8), "Stream 8 should exist")
+	assertX(t, pair.client.GetStream(2) == nil, "Stream 2 should not exist")
 
 	// Close the client.
 	pair.client.Close()
@@ -418,7 +418,7 @@ func TestSendReceiveRetransmit(t *testing.T) {
 	// Read data C->S
 	err = inputAll(pair.server)
 	assertNotError(t, err, "Couldn't read input packets")
-	ss := pair.server.GetBidirectionalStream(4)
+	ss := pair.server.GetStream(4)
 	b := make([]byte, 1024)
 	n, err := ss.Read(b)
 	assertNotError(t, err, "Error reading")
@@ -471,7 +471,7 @@ func TestSendReceiveStreamFin(t *testing.T) {
 	// Read data C->S
 	err = inputAll(pair.server)
 	assertNotError(t, err, "Couldn't read input packets")
-	ss := pair.server.GetBidirectionalStream(4)
+	ss := pair.server.GetStream(4)
 	b := make([]byte, 1024)
 	n, err = ss.Read(b)
 	assertNotError(t, err, "Couldn't read from client")
@@ -510,7 +510,7 @@ func TestSendReceiveStreamRst(t *testing.T) {
 	// Read data C->S. Should result in no data.
 	err = inputAll(pair.server)
 	assertNotError(t, err, "Couldn't read input packets")
-	ss := pair.server.GetBidirectionalStream(4)
+	ss := pair.server.GetStream(4)
 	b := make([]byte, 1024)
 	n, err = ss.Read(b)
 	assertEquals(t, err, io.EOF)
@@ -661,6 +661,7 @@ func TestUnidirectionalStream(t *testing.T) {
 
 	testString := []byte("abcdef")
 	cstream := client.CreateSendStream()
+	assertEquals(t, cstream, client.GetSendStream(2))
 	n, err := cstream.Write(testString)
 	assertNotError(t, err, "write should work")
 	assertEquals(t, n, len(testString))
@@ -669,7 +670,7 @@ func TestUnidirectionalStream(t *testing.T) {
 	assertNotError(t, err, "packets should be OK")
 
 	sstream := catcher.lastRecv
-	assertEquals(t, sstream, server.GetRemoteUnidirectionalStream(2))
+	assertEquals(t, sstream, server.GetRecvStream(cstream.Id()))
 
 	d, err := ioutil.ReadAll(sstream)
 	assertEquals(t, ErrorWouldBlock, err)
@@ -707,6 +708,7 @@ func TestUnidirectionalStreamRst(t *testing.T) {
 
 	testString := []byte("abcdef")
 	sstream := server.CreateSendStream()
+	assertEquals(t, sstream, server.GetSendStream(3))
 	n, err := sstream.Write(testString)
 	assertNotError(t, err, "write should work")
 	assertEquals(t, n, len(testString))
@@ -715,7 +717,7 @@ func TestUnidirectionalStreamRst(t *testing.T) {
 	assertNotError(t, err, "packets should be OK")
 
 	cstream := catcher.lastRecv
-	assertEquals(t, cstream, client.GetRemoteUnidirectionalStream(3))
+	assertEquals(t, cstream, client.GetRecvStream(sstream.Id()))
 
 	d, err := ioutil.ReadAll(cstream)
 	assertEquals(t, ErrorWouldBlock, err)
@@ -735,30 +737,17 @@ func TestUnidirectionalStreamRst(t *testing.T) {
 }
 
 func TestUnidirectionalStreamRstImmediate(t *testing.T) {
-	cTrans, sTrans := newTestTransportPair(true)
-
-	var catcher streamCatcher
-	cconf := testTlsConfig()
-	client := NewConnection(cTrans, RoleClient, cconf, &catcher)
-	assertNotNil(t, client, "Couldn't make client")
-
-	sconf := testTlsConfig()
-	server := NewConnection(sTrans, RoleServer, sconf, nil)
-	assertNotNil(t, server, "Couldn't make server")
-
-	pair := csPair{client, server}
+	pair := newCsPair(t)
 	pair.handshake(t)
 
-	sstream := server.CreateSendStream()
+	sstream := pair.server.CreateSendStream()
 	err := sstream.Reset(kQuicErrorNoError)
 	assertNotError(t, err, "reset works")
 
-	err = inputAll(client)
+	err = inputAll(pair.client)
 	assertNotError(t, err, "packets should be OK")
 
-	cstream := catcher.lastRecv
-	assertEquals(t, cstream, client.GetRemoteUnidirectionalStream(3))
-
+	cstream := pair.client.GetRecvStream(sstream.Id())
 	var d [3]byte
 	n, err := cstream.Read(d[:])
 	assertEquals(t, err, io.EOF)
@@ -767,31 +756,19 @@ func TestUnidirectionalStreamRstImmediate(t *testing.T) {
 }
 
 func TestUnidirectionalStopSending(t *testing.T) {
-	cTrans, sTrans := newTestTransportPair(true)
-
-	cconf := testTlsConfig()
-	client := NewConnection(cTrans, RoleClient, cconf, nil)
-	assertNotNil(t, client, "Couldn't make client")
-
-	var catcher streamCatcher
-	sconf := testTlsConfig()
-	server := NewConnection(sTrans, RoleServer, sconf, &catcher)
-	assertNotNil(t, server, "Couldn't make server")
-
-	pair := csPair{client, server}
+	pair := newCsPair(t)
 	pair.handshake(t)
 
 	testString := []byte("abcdef")
-	cstream := client.CreateSendStream()
+	cstream := pair.client.CreateSendStream()
 	n, err := cstream.Write(testString)
 	assertNotError(t, err, "write should work")
 	assertEquals(t, n, len(testString))
 
-	err = inputAll(server)
+	err = inputAll(pair.server)
 	assertNotError(t, err, "packets should be OK")
 
-	sstream := catcher.lastRecv
-	assertEquals(t, sstream, server.GetRemoteUnidirectionalStream(2))
+	sstream := pair.server.GetRecvStream(cstream.Id())
 
 	d, err := ioutil.ReadAll(sstream)
 	assertEquals(t, ErrorWouldBlock, err)
@@ -801,12 +778,49 @@ func TestUnidirectionalStopSending(t *testing.T) {
 	err = sstream.StopSending(kQuicErrorNoError)
 	assertNotError(t, err, "stop sending just works")
 
-	err = inputAll(client)
+	err = inputAll(pair.client)
 	assertNotError(t, err, "packets should be OK")
 
 	assertEquals(t, cstream.SendState(), SendStreamStateResetSent)
 
-	err = inputAll(server)
+	err = inputAll(pair.server)
+	assertNotError(t, err, "packets should be OK")
+
+	n, err = sstream.Read(d)
+	assertEquals(t, err, io.EOF)
+	assertEquals(t, n, 0)
+	assertEquals(t, sstream.RecvState(), RecvStreamStateResetRecvd)
+}
+
+func TestBidirectionalStopSending(t *testing.T) {
+	pair := newCsPair(t)
+	pair.handshake(t)
+
+	testString := []byte("abcdef")
+	cstream := pair.client.CreateStream()
+	n, err := cstream.Write(testString)
+	assertNotError(t, err, "write should work")
+	assertEquals(t, n, len(testString))
+
+	err = inputAll(pair.server)
+	assertNotError(t, err, "packets should be OK")
+
+	sstream := pair.server.GetStream(cstream.Id())
+
+	d, err := ioutil.ReadAll(sstream)
+	assertEquals(t, ErrorWouldBlock, err)
+	assertNotNil(t, d, "Read data from client")
+	assertByteEquals(t, d, testString)
+
+	err = sstream.StopSending(kQuicErrorNoError)
+	assertNotError(t, err, "stop sending just works")
+
+	err = inputAll(pair.client)
+	assertNotError(t, err, "packets should be OK")
+
+	assertEquals(t, cstream.SendState(), SendStreamStateResetSent)
+
+	err = inputAll(pair.server)
 	assertNotError(t, err, "packets should be OK")
 
 	n, err = sstream.Read(d)
