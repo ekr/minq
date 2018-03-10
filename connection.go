@@ -145,7 +145,7 @@ type Connection struct {
 	recvd              *recvdPackets
 	sentAcks           map[uint64]ackRanges
 	lastInput          time.Time
-	idleTimeout        uint16
+	idleTimeout        time.Duration
 	tpHandler          *transportParametersHandler
 	log                loggingFunction
 	retransmitTime     time.Duration
@@ -187,7 +187,7 @@ func NewConnection(trans Transport, role Role, tls *TlsConfig, handler Connectio
 		recvd:              nil,
 		sentAcks:           make(map[uint64]ackRanges, 0),
 		lastInput:          time.Now(),
-		idleTimeout:        10, // Very short idle timeout.
+		idleTimeout:        time.Second * 5, // a pretty short time
 		tpHandler:          nil,
 		log:                nil,
 		retransmitTime:     kDefaultInitialRtt,
@@ -477,7 +477,7 @@ func (c *Connection) sendClientInitial() error {
 	queued = append(queued, f)
 
 	stream0 := c.localBidiStreams[0].(*stream)
-	stream0.sendStreamBase.offset = uint64(len(c.clientInitial))
+	stream0.sendStreamPrivate.(*sendStream).offset = uint64(len(c.clientInitial))
 
 	for i := 0; i < topad; i++ {
 		queued = append(queued, newPaddingFrame(0))
@@ -1262,7 +1262,7 @@ func (c *Connection) processClientInitial(hdr *packetHeader, payload []byte) err
 	}
 
 	stream0 := c.localBidiStreams[0].(*stream)
-	stream0.recvStreamBase.offset = uint64(len(sf.Data))
+	stream0.recvStreamPrivate.(*recvStream).offset = uint64(len(sf.Data))
 	c.setTransportParameters()
 
 	err = c.sendOnStream0(sflt)
@@ -1311,7 +1311,7 @@ func (c *Connection) processCleartext(hdr *packetHeader, payload []byte, naf *bo
 
 		case *streamFrame:
 			// If this is duplicate data and if so early abort.
-			if inner.Offset+uint64(len(inner.Data)) <= stream0.recvStreamBase.offset {
+			if inner.Offset+uint64(len(inner.Data)) <= stream0.recvStreamPrivate.(*recvStream).offset {
 				continue
 			}
 
@@ -1331,7 +1331,7 @@ func (c *Connection) processCleartext(hdr *packetHeader, payload []byte, naf *bo
 				// 2. Set the outgoing stream offset accordingly
 				// 3. Remember the connection ID
 				if len(c.clientInitial) > 0 {
-					stream0.sendStreamBase.offset = uint64(len(c.clientInitial))
+					stream0.sendStreamPrivate.(*sendStream).offset = uint64(len(c.clientInitial))
 					c.clientInitial = nil
 					c.serverConnId = hdr.ConnectionID
 				}
@@ -1819,17 +1819,19 @@ func (c *Connection) CheckTimer() (int, error) {
 
 	c.log(logTypeConnection, "Checking timer")
 
-	if time.Now().After(c.lastInput.Add(time.Second * time.Duration(c.idleTimeout))) {
-		c.log(logTypeConnection, "Connection is idle for more than %v", c.idleTimeout)
-		return 0, ErrorConnectionTimedOut
-	}
-
 	if c.state == StateClosing {
 		if time.Now().After(c.closingEnd) {
 			c.log(logTypeConnection, "End of draining period, closing")
 			c.setState(StateClosed)
 			return 0, ErrorConnIsClosed
 		}
+		return 0, ErrorConnIsClosing
+	}
+
+	if time.Now().After(c.lastInput.Add(c.idleTimeout)) {
+		c.log(logTypeConnection, "Connection is idle for more than %v", c.idleTimeout)
+		c.setState(StateClosing)
+		c.closingEnd = time.Now()
 		return 0, ErrorConnIsClosing
 	}
 
@@ -1851,7 +1853,7 @@ func (c *Connection) setTransportParameters() {
 
 	// Cut stream 0 flow control down to something reasonable.
 	stream0 := c.localBidiStreams[0].(*stream)
-	stream0.sendStreamBase.maxStreamData = uint64(c.tpHandler.peerParams.maxStreamsData)
+	stream0.sendStreamPrivate.(*sendStream).maxStreamData = uint64(c.tpHandler.peerParams.maxStreamsData)
 
 	c.maxLocalBidi = int(c.tpHandler.peerParams.maxStreamIdBidi >> 2)
 	c.maxLocalUni = int(c.tpHandler.peerParams.maxStreamIdUni >> 2)
@@ -1947,7 +1949,6 @@ func (c *Connection) CreateSendStream() SendStream {
 // GetStream retrieves a stream with the given id. Returns nil if
 // no such stream exists.
 func (c *Connection) GetStream(id uint64) Stream {
-
 	var streams []streamPrivate
 	switch streamTypeFromId(id, c.role) {
 	case streamTypeBidirectionalLocal:

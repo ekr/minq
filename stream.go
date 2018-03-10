@@ -430,19 +430,10 @@ func (s *recvStreamBase) creditMaxStreamData() (uint64, bool) {
 	return s.maxStreamData, credit
 }
 
-type streamWithIdentity struct {
-	c  *Connection
-	id uint64
-}
-
-// Id returns the identifier of the stream.
-func (s *streamWithIdentity) Id() uint64 {
-	return s.id
-}
-
 // SendStream is a unidirectional stream for sending.
 type sendStream struct {
-	streamWithIdentity
+	c  *Connection
+	id uint64
 	sendStreamBase
 }
 
@@ -451,7 +442,7 @@ var _ SendStream = &sendStream{}
 
 func newSendStream(c *Connection, id uint64, initialMax uint64) sendStreamPrivate {
 	return &sendStream{
-		streamWithIdentity: streamWithIdentity{c, id},
+		c: c, id: id,
 		sendStreamBase: sendStreamBase{
 			streamCommon: streamCommon{
 				log:           newStreamLogger(id, "send", c.log),
@@ -463,8 +454,14 @@ func newSendStream(c *Connection, id uint64, initialMax uint64) sendStreamPrivat
 	}
 }
 
-func writeOnStream(s *sendStreamBase, c *Connection, data []byte) (int, error) {
-	if c.isClosed() {
+// Id returns the id.
+func (s *sendStream) Id() uint64 {
+	return s.id
+}
+
+// Write writes data.
+func (s *sendStream) Write(data []byte) (int, error) {
+	if s.c.isClosed() {
 		return 0, ErrorConnIsClosed
 	}
 
@@ -473,40 +470,28 @@ func writeOnStream(s *sendStreamBase, c *Connection, data []byte) (int, error) {
 		return 0, err
 	}
 
-	c.sendQueued(false)
+	s.c.sendQueued(false)
 	return len(data), nil
-}
-
-// Write writes data.
-func (s *sendStream) Write(data []byte) (int, error) {
-	return writeOnStream(&s.sendStreamBase, s.c, data)
-}
-
-func closeStream(s *sendStreamBase, c *Connection) error {
-	s.close()
-	c.sendQueued(false)
-	return nil
 }
 
 // Close make the stream end cleanly.
 func (s *sendStream) Close() error {
-	return closeStream(&s.sendStreamBase, s.c)
-}
-
-func resetStream(s *sendStreamBase, id uint64, code ErrorCode, c *Connection) error {
-	s.setSendState(SendStreamStateResetSent)
-	f := newRstStreamFrame(id, code, s.offset)
-	return c.sendFrame(f)
+	s.close()
+	s.c.sendQueued(false)
+	return nil
 }
 
 // Reset abandons writing on the stream.
 func (s *sendStream) Reset(code ErrorCode) error {
-	return resetStream(&s.sendStreamBase, s.id, code, s.c)
+	s.setSendState(SendStreamStateResetSent)
+	f := newRstStreamFrame(s.id, code, s.offset)
+	return s.c.sendFrame(f)
 }
 
 // RecvStream is a unidirectional stream for receiving.
 type recvStream struct {
-	streamWithIdentity
+	c  *Connection
+	id uint64
 	recvStreamBase
 }
 
@@ -515,7 +500,7 @@ var _ RecvStream = &recvStream{}
 
 func newRecvStream(c *Connection, id uint64) recvStreamPrivate {
 	return &recvStream{
-		streamWithIdentity: streamWithIdentity{c, id},
+		c: c, id: id,
 		recvStreamBase: recvStreamBase{
 			streamCommon: streamCommon{
 				log:           newStreamLogger(id, "recv", c.log),
@@ -527,8 +512,14 @@ func newRecvStream(c *Connection, id uint64) recvStreamPrivate {
 	}
 }
 
-func readFromStream(s *recvStreamBase, c *Connection, b []byte) (int, error) {
-	if c.isClosed() {
+// Id returns the id.
+func (s *recvStream) Id() uint64 {
+	return s.id
+}
+
+// Read implements io.Reader.
+func (s *recvStream) Read(b []byte) (int, error) {
+	if s.c.isClosed() {
 		return 0, io.EOF
 	}
 
@@ -539,26 +530,19 @@ func readFromStream(s *recvStreamBase, c *Connection, b []byte) (int, error) {
 	return n, nil
 }
 
-// Read implements io.Reader.
-func (s *recvStream) Read(b []byte) (int, error) {
-	return readFromStream(&s.recvStreamBase, s.c, b)
-}
-
-func stopSending(id uint64, code ErrorCode, c *Connection) error {
-	f := newStopSendingFrame(id, code)
-	return c.sendFrame(f)
-}
-
 // StopSending requests a reset.
-func (s *recvStream) StopSending(err ErrorCode) error {
-	return stopSending(s.id, err, s.c)
+func (s *recvStream) StopSending(code ErrorCode) error {
+	f := newStopSendingFrame(s.id, code)
+	return s.c.sendFrame(f)
 }
 
 // stream is a bidirectional stream.
 type stream struct {
-	streamWithIdentity
-	sendStreamBase
-	recvStreamBase
+	c  *Connection
+	id uint64
+
+	sendStreamPrivate
+	recvStreamPrivate
 }
 
 // Compile-time interface check.
@@ -566,47 +550,12 @@ var _ Stream = &stream{}
 
 func newStream(c *Connection, id uint64, initialMax uint64) streamPrivate {
 	return &stream{
-		streamWithIdentity: streamWithIdentity{c, id},
-		sendStreamBase: sendStreamBase{
-			streamCommon: streamCommon{
-				log:           newStreamLogger(id, "send", c.log),
-				maxStreamData: initialMax,
-			},
-			state:   SendStreamStateOpen,
-			blocked: false,
-		},
-		recvStreamBase: recvStreamBase{
-			streamCommon: streamCommon{
-				log:           newStreamLogger(id, "recv", c.log),
-				maxStreamData: kInitialMaxStreamData,
-			},
-			state:    RecvStreamStateRecv,
-			readable: false,
-		},
+		sendStreamPrivate: newSendStream(c, id, initialMax),
+		recvStreamPrivate: newRecvStream(c, id),
 	}
 }
 
-// Write writes data.
-func (s *stream) Write(data []byte) (int, error) {
-	return writeOnStream(&s.sendStreamBase, s.c, data)
-}
-
-// Read implements io.Reader.
-func (s *stream) Read(b []byte) (int, error) {
-	return readFromStream(&s.recvStreamBase, s.c, b)
-}
-
-// Close make the stream end cleanly.
-func (s *stream) Close() error {
-	return closeStream(&s.sendStreamBase, s.c)
-}
-
-// Reset abandons writing on the stream.
-func (s *stream) Reset(code ErrorCode) error {
-	return resetStream(&s.sendStreamBase, s.id, code, s.c)
-}
-
-// StopSending requests abandoning writing on the stream.
-func (s *stream) StopSending(code ErrorCode) error {
-	return stopSending(s.id, code, s.c)
+// Id needs to be overwritten so that the ambiguity between send and receive can be resolved.
+func (s *stream) Id() uint64 {
+	return s.sendStreamPrivate.Id()
 }

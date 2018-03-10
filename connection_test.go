@@ -796,35 +796,61 @@ func TestBidirectionalStopSending(t *testing.T) {
 	pair := newCsPair(t)
 	pair.handshake(t)
 
+	// Open a stream at the client and start using it (until it is used, it can't
+	// exist at the server).
 	testString := []byte("abcdef")
 	cstream := pair.client.CreateStream()
 	n, err := cstream.Write(testString)
 	assertNotError(t, err, "write should work")
 	assertEquals(t, n, len(testString))
 
+	// Feed packets to the server.
 	err = inputAll(pair.server)
 	assertNotError(t, err, "packets should be OK")
 
+	// The server then reads from the stream.
 	sstream := pair.server.GetStream(cstream.Id())
-
 	d, err := ioutil.ReadAll(sstream)
-	assertEquals(t, ErrorWouldBlock, err)
+	assertEquals(t, err, ErrorWouldBlock)
 	assertNotNil(t, d, "Read data from client")
 	assertByteEquals(t, d, testString)
 
+	// Now to test.  The server sends STOP_SENDING.
+	testString2 := []byte("zyxwvut")
 	err = sstream.StopSending(kQuicErrorNoError)
 	assertNotError(t, err, "stop sending just works")
+	assertEquals(t, sstream.RecvState(), RecvStreamStateRecv) // no change
+
+	// But it also continues to write to the stream.
+	n, err = sstream.Write(testString2)
+	assertNotError(t, err, "write should work")
+	assertEquals(t, n, len(testString2))
+	assertEquals(t, sstream.SendState(), SendStreamStateSend) // no change
+
+	// After reading, the client should have responded to STOP_SENDING with RST_STREAM.
+	err = inputAll(pair.client)
+	assertNotError(t, err, "packets should be OK")
+	assertEquals(t, cstream.SendState(), SendStreamStateResetSent)
+	assertEquals(t, cstream.RecvState(), RecvStreamStateRecv)
+
+	// Writing at the client now fails.
+	n, err = cstream.Write(testString)
+	assertEquals(t, err, ErrorStreamIsClosed)
+	assertEquals(t, n, 0)
+
+	// Reading can continue.
+	d, err = ioutil.ReadAll(cstream)
+	assertEquals(t, err, ErrorWouldBlock)
+	assertByteEquals(t, d, testString2)
+	assertEquals(t, sstream.RecvState(), RecvStreamStateRecv)
+
+	sstream.Close()
 
 	err = inputAll(pair.client)
 	assertNotError(t, err, "packets should be OK")
 
-	assertEquals(t, cstream.SendState(), SendStreamStateResetSent)
-
-	err = inputAll(pair.server)
-	assertNotError(t, err, "packets should be OK")
-
-	n, err = sstream.Read(d)
+	n, err = cstream.Read(d)
 	assertEquals(t, err, io.EOF)
 	assertEquals(t, n, 0)
-	assertEquals(t, sstream.RecvState(), RecvStreamStateResetRecvd)
+	assertEquals(t, cstream.RecvState(), RecvStreamStateDataRead)
 }
