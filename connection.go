@@ -12,27 +12,31 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"time"
+
 	"github.com/bifurcation/mint"
 	"github.com/bifurcation/mint/syntax"
-	"time"
 )
 
+type Role uint8
+
 const (
-	RoleClient = 1
-	RoleServer = 2
+	RoleClient = Role(iota)
+	RoleServer = Role(iota)
 )
 
 // The state of a QUIC connection.
 type State uint8
 
 const (
-	StateInit                   = State(1)
-	StateWaitClientInitial      = State(2)
-	StateWaitServerFirstFlight  = State(3)
-	StateWaitClientSecondFlight = State(4)
-	StateEstablished            = State(5)
-	StateClosed                 = State(6)
-	StateError                  = State(7)
+	StateInit                   = State(iota)
+	StateWaitClientInitial      = State(iota)
+	StateWaitServerFirstFlight  = State(iota)
+	StateWaitClientSecondFlight = State(iota)
+	StateEstablished            = State(iota)
+	StateClosing                = State(iota)
+	StateClosed                 = State(iota)
+	StateError                  = State(iota)
 )
 
 const (
@@ -54,10 +58,6 @@ const (
 
 const (
 	kQuicALPNToken = "hq-08"
-)
-
-const (
-	kDefaultInitialRtt = uint32(100)
 )
 
 // Interface for the handler object which the Connection will call
@@ -100,7 +100,7 @@ calls to notify it of various events.
 */
 type Connection struct {
 	handler            ConnectionHandler
-	role               uint8
+	Role               Role
 	state              State
 	version            VersionNumber
 	clientConnId       ConnectionId
@@ -124,14 +124,16 @@ type Connection struct {
 	idleTimeout        uint16
 	tpHandler          *transportParametersHandler
 	log                loggingFunction
-	retransmitTime     uint32
+	retransmitTime     time.Duration
 	congestion         CongestionController
 	lastSendQueuedTime time.Time
+	closingEnd         time.Time
+	closePacket        []byte
 }
 
 // Create a new QUIC connection. Should only be used with role=RoleClient,
 // though we use it with RoleServer internally.
-func NewConnection(trans Transport, role uint8, tls *TlsConfig, handler ConnectionHandler) *Connection {
+func NewConnection(trans Transport, role Role, tls *TlsConfig, handler ConnectionHandler) *Connection {
 	c := Connection{
 		handler,
 		role,
@@ -161,6 +163,8 @@ func NewConnection(trans Transport, role uint8, tls *TlsConfig, handler Connecti
 		kDefaultInitialRtt,
 		nil,
 		time.Now(),
+		time.Time{}, // Zero time
+		nil,
 	}
 
 	c.log = newConnectionLogger(&c)
@@ -212,7 +216,7 @@ func (c *Connection) start() error {
 }
 
 func (c *Connection) label() string {
-	if c.role == RoleClient {
+	if c.Role == RoleClient {
 		return "client"
 	}
 	return "server"
@@ -223,14 +227,27 @@ func (c *Connection) setState(state State) {
 		return
 	}
 
-	c.log(logTypeConnection, "%s: Connection state %s -> %v", c.label(), StateName(c.state), StateName(state))
+	c.log(logTypeConnection, "%s: Connection state %v -> %v", c.label(), c.state, state)
 	if c.handler != nil {
 		c.handler.StateChanged(state)
 	}
 	c.state = state
 }
 
-func StateName(state State) string {
+// String converts a Role into something usable for debugging.
+func (role Role) String() string {
+	switch role {
+	case RoleClient:
+		return "client"
+	case RoleServer:
+		return "server"
+	default:
+		panic("unknown minq.Role")
+	}
+}
+
+// String converts a State into something usable for debugging.
+func (state State) String() string {
 	// TODO(ekr@rtfm.com): is there a way to get the name from the
 	// const value.
 	switch state {
@@ -244,24 +261,26 @@ func StateName(state State) string {
 		return "StateWaitClientSecondFlight"
 	case StateEstablished:
 		return "StateEstablished"
+	case StateClosing:
+		return "StateClosing"
 	case StateClosed:
 		return "StateClosed"
 	case StateError:
 		return "StateError"
 	default:
-		return "Unknown state"
+		panic("unknown minq.State")
 	}
 }
 
 func (c *Connection) myStream(id uint64) bool {
-	return id == 0 || (((id & 1) == 1) == (c.role == RoleServer))
+	return id == 0 || (((id & 1) == 1) == (c.Role == RoleServer))
 }
 
 func (c *Connection) sameTypeStream(id1 uint64, id2 uint64) bool {
 	return (id1 & 0x3) == (id2 & 0x3)
 }
 
-func (c *Connection) streamSuffix(initiator uint8, bidi bool) uint64 {
+func (c *Connection) streamSuffix(initiator Role, bidi bool) uint64 {
 	var suff uint64
 	if bidi {
 		suff |= 2
@@ -369,7 +388,8 @@ func (c *Connection) sendClientInitial() error {
 
 	c.setState(StateWaitServerFirstFlight)
 
-	return c.sendPacket(packetTypeInitial, queued, false)
+	_, err = c.sendPacket(packetTypeInitial, queued, false)
+	return err
 }
 
 func (c *Connection) sendSpecialClearPacket(pt uint8, connId ConnectionId, pn uint64, version VersionNumber, payload []byte) error {
@@ -400,7 +420,7 @@ func (c *Connection) determineAead(pt uint8) cipher.AEAD {
 		aead = c.writeProtected.aead
 	}
 
-	if c.role == RoleClient {
+	if c.Role == RoleClient {
 		switch {
 		case pt == packetTypeInitial:
 			aead = c.writeClear.aead
@@ -418,7 +438,7 @@ func (c *Connection) determineAead(pt uint8) cipher.AEAD {
 	return aead
 }
 
-func (c *Connection) sendPacketRaw(pt uint8, connId ConnectionId, pn uint64, version VersionNumber, payload []byte, containsOnlyAcks bool) error {
+func (c *Connection) sendPacketRaw(pt uint8, connId ConnectionId, pn uint64, version VersionNumber, payload []byte, containsOnlyAcks bool) ([]byte, error) {
 	c.log(logTypeConnection, "Sending packet PT=%v PN=%x: %s", pt, c.nextSendPacket, dumpPacket(payload))
 	left := c.mtu // track how much space is left for payload
 
@@ -445,7 +465,7 @@ func (c *Connection) sendPacketRaw(pt uint8, connId ConnectionId, pn uint64, ver
 	// TODO(ekr@rtfm.com): this is gross.
 	hdr, err := encode(&p.packetHeader)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	left -= len(hdr)
 	assert(left >= len(payload))
@@ -458,16 +478,16 @@ func (c *Connection) sendPacketRaw(pt uint8, connId ConnectionId, pn uint64, ver
 	c.congestion.onPacketSent(pn, containsOnlyAcks, len(packet)) //TODO(piet@devae.re) check isackonly
 	c.transport.Send(packet)
 
-	return nil
+	return packet, nil
 }
 
 // Send a packet with whatever PT seems appropriate now.
-func (c *Connection) sendPacketNow(tosend []frame, containsOnlyAcks bool) error {
+func (c *Connection) sendPacketNow(tosend []frame, containsOnlyAcks bool) ([]byte, error) {
 	return c.sendPacket(packetTypeProtectedShort, tosend, containsOnlyAcks)
 }
 
 // Send a packet with a specific PT.
-func (c *Connection) sendPacket(pt uint8, tosend []frame, containsOnlyAcks bool) error {
+func (c *Connection) sendPacket(pt uint8, tosend []frame, containsOnlyAcks bool) ([]byte, error) {
 	sent := 0
 
 	payload := make([]byte, 0)
@@ -475,7 +495,7 @@ func (c *Connection) sendPacket(pt uint8, tosend []frame, containsOnlyAcks bool)
 	for _, f := range tosend {
 		_, err := f.length()
 		if err != nil {
-			return err
+			return nil, err
 		}
 
 		c.log(logTypeTrace, "Frame=%v", hex.EncodeToString(f.encoded))
@@ -492,7 +512,7 @@ func (c *Connection) sendPacket(pt uint8, tosend []frame, containsOnlyAcks bool)
 	}
 
 	connId := c.serverConnId
-	if c.role == RoleClient {
+	if c.Role == RoleClient {
 		if pt == packetTypeInitial {
 			connId = c.clientConnId
 		}
@@ -521,7 +541,7 @@ func (c *Connection) sendFramesInPacket(pt uint8, tosend []frame) error {
 	connId = c.serverConnId
 
 	longHeader := true
-	if c.role == RoleClient {
+	if c.Role == RoleClient {
 		switch {
 		case pt == packetTypeInitial:
 			aead = c.writeClear.aead
@@ -687,7 +707,7 @@ func (c *Connection) sendCombinedPacket(pt uint8, frames []frame, acks ackRanges
 	// Record which packets we sent ACKs in.
 	c.sentAcks[c.nextSendPacket] = acks[0:asent]
 
-	err = c.sendPacket(pt, frames, containsOnlyAcks)
+	_, err = c.sendPacket(pt, frames, containsOnlyAcks)
 	if err != nil {
 		return 0, err
 	}
@@ -737,7 +757,7 @@ func (c *Connection) sendQueuedFrames(pt uint8, protected bool, bareAcks bool) (
 
 	acks := c.recvd.prepareAckRange(protected, false)
 	now := time.Now()
-	txAge := time.Duration(c.retransmitTime) * time.Millisecond
+	txAge := c.retransmitTime * time.Millisecond
 	aeadOverhead := c.determineAead(pt).Overhead()
 	sent := int(0)
 	spaceInCongestionWindow := c.congestion.bytesAllowedToSend()
@@ -897,6 +917,14 @@ func (c *Connection) input(p []byte) error {
 		return ErrorConnIsClosed
 	}
 
+	if c.state == StateClosing {
+		c.log(logTypeConnection, "Discarding packet while closing (closePacket=%v)", c.closePacket != nil)
+		if c.closePacket != nil {
+			c.transport.Send(c.closePacket)
+		}
+		return nil
+	}
+
 	c.lastInput = time.Now()
 
 	var hdr packetHeader
@@ -910,7 +938,7 @@ func (c *Connection) input(p []byte) error {
 	assert(int(hdrlen) <= len(p))
 
 	if isLongHeader(&hdr) && hdr.Version != c.version {
-		if c.role == RoleServer {
+		if c.Role == RoleServer {
 			c.log(logTypeConnection, "%s: Received unsupported version %v, expected %v", c.label(), hdr.Version, c.version)
 			err = c.sendVersionNegotiation(hdr.ConnectionID, hdr.PacketNumber, hdr.Version)
 			if err != nil {
@@ -1108,7 +1136,8 @@ func (c *Connection) processClientInitial(hdr *packetHeader, payload []byte) err
 		if err != nil {
 			return err
 		}
-		return c.sendPacketRaw(packetTypeRetry, hdr.ConnectionID, hdr.PacketNumber, kQuicVersion, sf.encoded, false)
+		_, err = c.sendPacketRaw(packetTypeRetry, hdr.ConnectionID, hdr.PacketNumber, kQuicVersion, sf.encoded, false)
+		return err
 	}
 
 	c.streams[0].recv.setOffset(uint64(len(sf.Data)))
@@ -1167,7 +1196,7 @@ func (c *Connection) processCleartext(hdr *packetHeader, payload []byte, naf *bo
 			}
 
 			// This is fresh data so sanity check.
-			if c.role == RoleClient {
+			if c.Role == RoleClient {
 				if c.state != StateWaitServerFirstFlight {
 					// TODO(ekr@rtfm.com): Not clear what to do here. It's
 					// clearly a protocol error, but also allows on-path
@@ -1217,7 +1246,7 @@ func (c *Connection) processCleartext(hdr *packetHeader, payload []byte, naf *bo
 				if err != nil {
 					return err
 				}
-				if c.role == RoleClient {
+				if c.Role == RoleClient {
 					// We did this on the server already.
 					c.setTransportParameters()
 				}
@@ -1239,6 +1268,7 @@ func (c *Connection) processCleartext(hdr *packetHeader, payload []byte, naf *bo
 				return err
 			}
 			nonAck = false
+
 		case *connectionCloseFrame:
 			c.log(logTypeConnection, "Received frame close")
 			c.setState(StateClosed)
@@ -1427,8 +1457,16 @@ func (c *Connection) processUnprotected(hdr *packetHeader, packetNumber uint64, 
 			if notifyCreated && c.handler != nil {
 				c.handler.NewStream(s)
 			}
+
 		case *connectionCloseFrame:
-			c.setState(StateClosed)
+			c.log(logTypeConnection, "Received CONNECTION_CLOSE")
+			// Don't save the packet, we should go straight to draining.
+			// Note that we don't bother with the optional transition from draining to
+			// closing because we don't bother to decrypt packets that are received while
+			// closing.
+			c.close(kQuicErrorNoError, "received CONNECTION_CLOSE", false)
+			// Stop processing any more frames.
+			return nil
 
 		case *maxStreamDataFrame:
 			s, notifyCreated, err := c.ensureStream(inner.StreamId, true)
@@ -1638,10 +1676,16 @@ func (c *Connection) CheckTimer() (int, error) {
 		return 0, ErrorConnectionTimedOut
 	}
 
+	if c.state == StateClosing && time.Now().After(c.closingEnd) {
+		c.log(logTypeConnection, "End of draining period, closing")
+		c.setState(StateClosed)
+		return 0, ErrorConnIsClosed
+	}
+
 	// Right now just re-send everything we might need to send.
 
 	// Special case the client's first message.
-	if c.role == RoleClient && (c.state == StateInit ||
+	if c.Role == RoleClient && (c.state == StateInit ||
 		c.state == StateWaitServerFirstFlight) {
 		err := c.sendClientInitial()
 		return 1, err
@@ -1666,7 +1710,7 @@ func (c *Connection) setupAeadMasking() (err error) {
 	}
 
 	var sendLabel, recvLabel string
-	if c.role == RoleClient {
+	if c.Role == RoleClient {
 		sendLabel = clientCtSecretLabel
 		recvLabel = serverCtSecretLabel
 	} else {
@@ -1689,7 +1733,7 @@ func (c *Connection) setupAeadMasking() (err error) {
 // Called when the handshake is complete.
 func (c *Connection) handshakeComplete() (err error) {
 	var sendLabel, recvLabel string
-	if c.role == RoleClient {
+	if c.Role == RoleClient {
 		sendLabel = clientPpSecretLabel
 		recvLabel = serverPpSecretLabel
 	} else {
@@ -1719,7 +1763,7 @@ func (c *Connection) packetNonce(pn uint64) []byte {
 func (c *Connection) CreateStream() *Stream {
 	// First see if there is a stream that we haven't
 	// created with this suffix.
-	suff := c.streamSuffix(c.role, false)
+	suff := c.streamSuffix(c.Role, false)
 	var i uint64
 	for i = 0; i <= c.maxStream; i++ {
 		if (i & 0x3) != suff {
@@ -1777,15 +1821,31 @@ func (c *Connection) SetHandler(h ConnectionHandler) {
 	c.handler = h
 }
 
-func (c *Connection) close(code ErrorCode, reason string) {
+func (c *Connection) close(code ErrorCode, reason string, savePacket bool) error {
+	if c.isClosed() {
+		return nil
+	}
+	if c.state == StateClosing {
+		return nil
+	}
+
+	c.closingEnd = time.Now().Add(3 * c.congestion.rto())
+	c.setState(StateClosing)
 	f := newConnectionCloseFrame(code, reason)
-	c.sendPacket(packetTypeProtectedShort, []frame{f}, false)
+	closePacket, err := c.sendPacketNow([]frame{f}, false)
+	if err != nil {
+		return err
+	}
+	if savePacket {
+		c.closePacket = closePacket
+	}
+	return nil
 }
 
 // Close a connection.
-func (c *Connection) Close() {
+func (c *Connection) Close() error {
 	c.log(logTypeConnection, "%v Close()", c.label())
-	c.close(kQuicErrorNoError, "You don't have to go home but you can't stay here")
+	return c.close(kQuicErrorNoError, "You don't have to go home but you can't stay here", true)
 }
 
 func (c *Connection) isDead() bool {

@@ -25,10 +25,10 @@ const (
 	kMaxTLPs                = 2
 	kReorderingThreshold    = 3
 	kTimeReorderingFraction = 0.125
-	kMinTLPTimeout          = 10  // ms
-	kMinRTOTimeout          = 200 // ms
-	kDelayedAckTimeout      = 25  // ms
-//	kDefaultInitialRtt       = 100  // ms // already in connection.go
+	kMinTLPTimeout          = 10 * time.Millisecond
+	kMinRTOTimeout          = 200 * time.Millisecond
+	kDelayedAckTimeout      = 25 * time.Millisecond
+	kDefaultInitialRtt      = 100 * time.Millisecond
 )
 
 type CongestionController interface {
@@ -36,6 +36,7 @@ type CongestionController interface {
 	onAckReceived(acks ackRanges, delay time.Duration)
 	bytesAllowedToSend() int
 	setLostPacketHandler(handler func(pn uint64))
+	rto() time.Duration
 }
 
 /*
@@ -59,6 +60,10 @@ func (cc *CongestionControllerDummy) bytesAllowedToSend() int {
 func (cc *CongestionControllerDummy) setLostPacketHandler(handler func(pn uint64)) {
 }
 
+func (cc *CongestionControllerDummy) rto() time.Duration {
+	return kMinRTOTimeout
+}
+
 /*
  * draft-ietf-quic-recovery congestion controller
  */
@@ -79,6 +84,8 @@ type CongestionControllerIetf struct {
 	timeOfLastSentPacket time.Time
 	largestSendPacket    uint64
 	largestAckedPacket   uint64
+	maxAckDelay          time.Duration
+	minRtt               time.Duration
 	//	largestRtt             time.Duration
 	smoothedRtt            time.Duration
 	rttVar                 time.Duration
@@ -95,15 +102,16 @@ type CongestionControllerIetf struct {
 }
 
 type packetEntry struct {
-	pn     uint64
-	txTime time.Time
-	bytes  int
+	pn      uint64
+	txTime  time.Time
+	bytes   int
+	ackOnly bool
 }
 
 func (cc *CongestionControllerIetf) onPacketSent(pn uint64, isAckOnly bool, sentBytes int) {
 	cc.timeOfLastSentPacket = time.Now()
 	cc.largestSendPacket = pn
-	packetData := packetEntry{pn, time.Now(), 0}
+	packetData := packetEntry{pn, time.Now(), 0, isAckOnly}
 	cc.conn.log(logTypeCongestion, "Packet send pn: %d len:%d ackonly: %v\n", pn, sentBytes, isAckOnly)
 	if !isAckOnly {
 		cc.onPacketSentCC(sentBytes)
@@ -122,15 +130,26 @@ func (cc *CongestionControllerIetf) onAckReceived(acks ackRanges, ackDelay time.
 	}
 
 	// If the largest acked is newly acked update rtt
-	_, present := cc.sentPackets[acks[0].lastPacket]
+	lastPacket, present := cc.sentPackets[acks[0].lastPacket]
 	if present {
 		latestRtt := time.Since(cc.sentPackets[acks[0].lastPacket].txTime)
 		cc.conn.log(logTypeCongestion, "latestRtt: %v, ackDelay: %v", latestRtt, ackDelay)
 		cc.updateRttTcp(latestRtt)
 
-		if latestRtt > ackDelay {
-			latestRtt -= ackDelay
+		// Update the minRtt, but ignore ackDelay.
+		if latestRtt < cc.minRtt {
+			cc.minRtt = latestRtt
 		}
+
+		// Now reduce by ackDelay if it doesn't reduce the RTT below the minimum.
+		if latestRtt-cc.minRtt > ackDelay {
+			latestRtt -= ackDelay
+			// And update the maximum observed ACK delay.
+			if !lastPacket.ackOnly && ackDelay > cc.maxAckDelay {
+				cc.maxAckDelay = ackDelay
+			}
+		}
+
 		cc.updateRtt(latestRtt)
 	}
 
@@ -182,6 +201,15 @@ func (cc *CongestionControllerIetf) updateRttTcp(latestRtt time.Duration) {
 		cc.smoothedRttTcp = time.Duration(int64(cc.smoothedRttTcp)*7/8 + int64(latestRtt)*1/8)
 	}
 	cc.conn.log(logTypeCongestion, "New RTT(TCP) estimate: %v, variance: %v", cc.smoothedRttTcp, cc.rttVarTcp)
+}
+
+func (cc *CongestionControllerIetf) rto() time.Duration {
+	// max(SRTT + 4*RTTVAR + MaxAckDelay, minRTO)
+	rto := cc.smoothedRtt + 4*cc.rttVar + cc.maxAckDelay
+	if rto < kMinRTOTimeout {
+		return kMinRTOTimeout
+	}
+	return rto
 }
 
 func (cc *CongestionControllerIetf) onPacketAcked(pn uint64) {
@@ -294,6 +322,8 @@ func newCongestionControllerIetf(conn *Connection) *CongestionControllerIetf {
 		time.Unix(0, 0),              // timeOfLastSentPacket
 		0,                            // largestSendPacket
 		0,                            // largestAckedPacket
+		0,                            // maxAckDelay
+		100 * time.Second,            // minRtt
 		0,                            // smoothedRtt
 		0,                            // rttVar
 		0,                            // smoothedRttTcp
