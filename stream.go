@@ -498,13 +498,13 @@ type recvStream struct {
 // Compile-time interface check.
 var _ RecvStream = &recvStream{}
 
-func newRecvStream(c *Connection, id uint64) recvStreamPrivate {
+func newRecvStream(c *Connection, id uint64, maxStreamData uint64) recvStreamPrivate {
 	return &recvStream{
 		c: c, id: id,
 		recvStreamBase: recvStreamBase{
 			streamCommon: streamCommon{
 				log:           newStreamLogger(id, "recv", c.log),
-				maxStreamData: kInitialMaxStreamData,
+				maxStreamData: maxStreamData,
 			},
 			state:    RecvStreamStateRecv,
 			readable: false,
@@ -548,14 +548,190 @@ type stream struct {
 // Compile-time interface check.
 var _ Stream = &stream{}
 
-func newStream(c *Connection, id uint64, initialMax uint64) streamPrivate {
+func newStream(c *Connection, id uint64, sendMax uint64, recvMax uint64) streamPrivate {
 	return &stream{
-		sendStreamPrivate: newSendStream(c, id, initialMax),
-		recvStreamPrivate: newRecvStream(c, id),
+		sendStreamPrivate: newSendStream(c, id, sendMax),
+		recvStreamPrivate: newRecvStream(c, id, recvMax),
 	}
 }
 
 // Id needs to be overwritten so that the ambiguity between send and receive can be resolved.
 func (s *stream) Id() uint64 {
 	return s.sendStreamPrivate.Id()
+}
+
+type streamType uint8
+
+// These values match the low bits of the stream ID for a client, but the low
+// bit is flipped for a server.
+const (
+	streamTypeBidirectionalLocal   = streamType(0)
+	streamTypeBidirectionalRemote  = streamType(1)
+	streamTypeUnidirectionalLocal  = streamType(2)
+	streamTypeUnidirectionalRemote = streamType(3)
+)
+
+func streamTypeFromId(id uint64, role Role) streamType {
+	t := id & 3
+	if role == RoleServer {
+		t ^= 1
+	}
+	return streamType(t)
+}
+
+func (t streamType) suffix(role Role) uint64 {
+	suff := uint64(t)
+	if role == RoleServer {
+		suff ^= 1
+	}
+	return suff
+}
+
+type streamSetBase struct {
+	// suffix is the expected suffix for stream IDs
+	suffix uint8
+	// max is the maximum number of streams (as opposed to the maximum ID)
+	max int
+}
+
+func (ss *streamSetBase) check(id uint64) {
+	assert((id >> 2) < uint64(^uint(0)>>1)) // safeguard against overflow
+	assert(byte(id&3) == ss.suffix)
+}
+
+func (ss *streamSetBase) index(id uint64) int {
+	ss.check(id)
+	return int(id >> 2)
+}
+
+func (ss *streamSetBase) id(index int) uint64 {
+	assert(index >= 0)
+	return uint64(index<<2) | uint64(ss.suffix)
+}
+
+func (ss *streamSetBase) updateMax(id uint64) {
+	ss.max = ss.index(id)
+	if ss.suffix != 0 {
+		ss.max--
+	}
+}
+
+func (ss *streamSetBase) credit(n int) uint64 {
+	ss.max += n
+	return ss.id(ss.max - 1)
+}
+
+type streamSet struct {
+	streamSetBase
+	streams []streamPrivate
+}
+
+func (ss *streamSet) get(id uint64) streamPrivate {
+	i := ss.index(id)
+	if i >= len(ss.streams) {
+		return nil
+	}
+	return ss.streams[i]
+}
+
+func (ss *streamSet) create(c *Connection, id uint64, sendMax uint64, recvMax uint64) streamPrivate {
+	i := ss.index(id)
+	if len(ss.streams) <= i {
+		needed := i - len(ss.streams) + 1
+		ss.streams = append(ss.streams, make([]streamPrivate, needed)...)
+	}
+	assert(ss.streams[i] == nil)
+	ss.streams[i] = newStream(c, id, sendMax, recvMax)
+	return ss.streams[i]
+}
+
+func (ss *streamSet) createNext(c *Connection, sendMax uint64, recvMax uint64) streamPrivate {
+	i := len(ss.streams)
+	if i > ss.max {
+		return nil
+	}
+	return ss.create(c, ss.id(i), sendMax, recvMax)
+}
+
+func newStreamSet(t streamType, role Role, nstreams int) *streamSet {
+	ss := &streamSet{
+		streamSetBase{byte(t.suffix(role)), nstreams},
+		nil,
+	}
+	ss.streams = make([]streamPrivate, 0, nstreams)
+	return ss
+}
+
+type sendStreamSet struct {
+	streamSetBase
+	streams []sendStreamPrivate
+}
+
+func (ss *sendStreamSet) get(id uint64) sendStreamPrivate {
+	i := ss.index(id)
+	if i >= len(ss.streams) {
+		return nil
+	}
+	return ss.streams[ss.index(id)]
+}
+
+func (ss *sendStreamSet) create(c *Connection, id uint64, maxStreamData uint64) sendStreamPrivate {
+	i := ss.index(id)
+	if len(ss.streams) <= i {
+		needed := i - len(ss.streams) + 1
+		ss.streams = append(ss.streams, make([]sendStreamPrivate, needed)...)
+	}
+	assert(ss.streams[i] == nil)
+	ss.streams[i] = newSendStream(c, id, maxStreamData)
+	return ss.streams[i]
+}
+
+func (ss *sendStreamSet) createNext(c *Connection, maxStreamData uint64) sendStreamPrivate {
+	i := len(ss.streams)
+	if i > ss.max {
+		return nil
+	}
+	return ss.create(c, ss.id(i), maxStreamData)
+}
+
+func newSendStreamSet(role Role, nstreams int) *sendStreamSet {
+	ss := &sendStreamSet{
+		streamSetBase{byte(streamTypeUnidirectionalLocal.suffix(role)), nstreams},
+		nil,
+	}
+	ss.streams = make([]sendStreamPrivate, 0, nstreams)
+	return ss
+}
+
+type recvStreamSet struct {
+	streamSetBase
+	streams []recvStreamPrivate
+}
+
+func (ss *recvStreamSet) get(id uint64) recvStreamPrivate {
+	i := ss.index(id)
+	if i >= len(ss.streams) {
+		return nil
+	}
+	return ss.streams[i]
+}
+
+func (ss *recvStreamSet) create(c *Connection, id uint64, maxStreamData uint64) recvStreamPrivate {
+	i := ss.index(id)
+	if len(ss.streams) <= i {
+		needed := i - len(ss.streams) + 1
+		ss.streams = append(ss.streams, make([]recvStreamPrivate, needed)...)
+	}
+	assert(ss.streams[i] == nil)
+	ss.streams[i] = newRecvStream(c, id, maxStreamData)
+	return ss.streams[i]
+}
+
+func newRecvStreamSet(role Role, nstreams int) *recvStreamSet {
+	ss := &recvStreamSet{
+		streamSetBase{byte(streamTypeUnidirectionalRemote.suffix(role)), nstreams},
+		nil,
+	}
+	ss.streams = make([]recvStreamPrivate, 0, nstreams)
+	return ss
 }
