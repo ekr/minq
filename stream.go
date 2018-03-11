@@ -488,7 +488,7 @@ func (s *sendStream) Reset(code ErrorCode) error {
 	return s.c.sendFrame(f)
 }
 
-// RecvStream is a unidirectional stream for receiving.
+// recvStream is the implementation of a unidirectional stream for receiving.
 type recvStream struct {
 	c  *Connection
 	id uint64
