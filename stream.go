@@ -527,6 +527,9 @@ func (s *recvStream) Read(b []byte) (int, error) {
 	if err != nil {
 		return 0, err
 	}
+	if s.state == RecvStreamStateDataRead {
+		s.c.issueStreamIdCredit(streamTypeFromId(s.id, s.c.role))
+	}
 	return n, nil
 }
 

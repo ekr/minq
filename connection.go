@@ -1456,10 +1456,10 @@ func filterFrames(in []frame, f frameFilterFunc) []frame {
 	return out
 }
 
-func (c *Connection) issueStreamCredit(s RecvStream, max uint64) error {
+func (c *Connection) issueStreamCredit(s RecvStream, max uint64) {
 	// Don't issue credit for stream 0 during the handshake.
 	if s.Id() == 0 && c.state != StateEstablished {
-		return nil
+		return
 	}
 
 	// Remove other MAX_STREAM_DATA frames so we don't retransmit them. This violates
@@ -1473,16 +1473,11 @@ func (c *Connection) issueStreamCredit(s RecvStream, max uint64) error {
 		return !(inner.StreamId == s.Id())
 	})
 
-	c.queueFrame(&c.outputProtectedQ, newMaxStreamData(s.Id(), max))
+	_ = c.sendFrame(newMaxStreamData(s.Id(), max))
 	c.log(logTypeFlowControl, "Issuing more stream credit for stream %d new offset=%d", s.Id(), max)
-
-	// TODO(ekr@rtfm.com): We do need to do something to send this
-	// immediately, because we don't always.
-	return nil
 }
 
-func (c *Connection) issueStreamIdCredit(t streamType) error {
-
+func (c *Connection) issueStreamIdCredit(t streamType) {
 	// TODO work out how to issue in more reasonable increments.
 	var max uint64
 	switch t {
@@ -1491,18 +1486,13 @@ func (c *Connection) issueStreamIdCredit(t streamType) error {
 	case streamTypeUnidirectionalRemote:
 		max = c.remoteUniStreams.credit(1)
 	}
-	max |= t.suffix(c.role)
 	c.outputProtectedQ = filterFrames(c.outputProtectedQ, func(f *frame) bool {
 		_, ok := f.f.(*maxStreamIdFrame)
 		return !ok
 	})
 
-	c.queueFrame(&c.outputProtectedQ, newMaxStreamId(max))
+	_ = c.sendFrame(newMaxStreamId(max))
 	c.log(logTypeFlowControl, "Issuing more %v stream ID credit: %d", t, max)
-
-	// TODO(ekr@rtfm.com): We do need to do something to send this
-	// immediately, because we don't always.
-	return nil
 }
 
 func (c *Connection) processUnprotected(hdr *packetHeader, packetNumber uint64, payload []byte, naf *bool) error {
@@ -1536,6 +1526,7 @@ func (c *Connection) processUnprotected(hdr *packetHeader, packetNumber uint64, 
 			if err != nil {
 				return err
 			}
+			c.issueStreamIdCredit(streamTypeFromId(inner.StreamId, c.role))
 
 		case *stopSendingFrame:
 			c.log(logTypeStream, "Received STOP_SENDING on stream %v", inner.StreamId)
