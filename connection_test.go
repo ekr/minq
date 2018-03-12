@@ -551,11 +551,11 @@ func TestCantMakeRemoteStreams(t *testing.T) {
 	cTrans, _ := newTestTransportPair(true)
 	client := NewConnection(cTrans, RoleClient, testTlsConfig(), nil)
 
-	_, err := client.ensureRecvStream(2, false) // 2 is a SendStream for the client
-	assertEquals(t, ErrorProtocolViolation, err)
+	send := client.ensureSendStream(3) // 3 is a RecvStream for the client
+	assertEquals(t, nil, send)
 
-	_, err = client.ensureSendStream(3, false) // 3 is a RecvStream for the client
-	assertEquals(t, ErrorProtocolViolation, err)
+	recv := client.ensureRecvStream(2) // 2 is a SendStream for the client
+	assertEquals(t, nil, recv)
 }
 
 func TestStatelessRetry(t *testing.T) {

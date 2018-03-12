@@ -590,46 +590,64 @@ func (t streamType) suffix(role Role) uint64 {
 	return suff
 }
 
-type streamSetBase struct {
-	// suffix is the expected suffix for stream IDs
-	suffix uint8
+func (t streamType) String() string {
+	switch t {
+	case streamTypeBidirectionalLocal:
+		return "bidirectional local"
+	case streamTypeBidirectionalRemote:
+		return "bidirectional remote"
+	case streamTypeUnidirectionalLocal:
+		return "unidirectional local"
+	case streamTypeUnidirectionalRemote:
+		return "unidirectional remote"
+	default:
+		panic("unknown stream type")
+	}
+}
+
+type streamSet struct {
+	// t is the type of stream relative to the endpoints role
+	t streamType
+	// role is the endpoint's role
+	role Role
 	// max is the maximum number of streams (as opposed to the maximum ID)
-	max int
+	nstreams int
+	// typeless array of streams because go doesn't have generics
+	streams []hasIdentity
 }
 
-func (ss *streamSetBase) check(id uint64) {
+func newStreamSet(t streamType, role Role, nstreams int) *streamSet {
+	return &streamSet{t, role, nstreams, make([]hasIdentity, 0, nstreams)}
+}
+
+func (ss *streamSet) check(id uint64) {
 	assert((id >> 2) < uint64(^uint(0)>>1)) // safeguard against overflow
-	assert(byte(id&3) == ss.suffix)
+	assert((id & 3) == ss.t.suffix(ss.role))
 }
 
-func (ss *streamSetBase) index(id uint64) int {
+func (ss *streamSet) index(id uint64) int {
 	ss.check(id)
 	return int(id >> 2)
 }
 
-func (ss *streamSetBase) id(index int) uint64 {
+func (ss *streamSet) id(index int) uint64 {
 	assert(index >= 0)
-	return uint64(index<<2) | uint64(ss.suffix)
+	return uint64(index<<2) | uint64(ss.t.suffix(ss.role))
 }
 
-func (ss *streamSetBase) updateMax(id uint64) {
-	ss.max = ss.index(id)
-	if ss.suffix != 0 {
-		ss.max--
+func (ss *streamSet) updateMax(id uint64) {
+	ss.nstreams = ss.index(id)
+	if ss.t.suffix(ss.role) != 0 {
+		ss.nstreams--
 	}
 }
 
-func (ss *streamSetBase) credit(n int) uint64 {
-	ss.max += n
-	return ss.id(ss.max - 1)
+func (ss *streamSet) credit(n int) uint64 {
+	ss.nstreams += n
+	return ss.id(ss.nstreams - 1)
 }
 
-type streamSet struct {
-	streamSetBase
-	streams []streamPrivate
-}
-
-func (ss *streamSet) get(id uint64) streamPrivate {
+func (ss *streamSet) get(id uint64) hasIdentity {
 	i := ss.index(id)
 	if i >= len(ss.streams) {
 		return nil
@@ -637,104 +655,39 @@ func (ss *streamSet) get(id uint64) streamPrivate {
 	return ss.streams[i]
 }
 
-func (ss *streamSet) create(c *Connection, id uint64, sendMax uint64, recvMax uint64) streamPrivate {
-	i := ss.index(id)
-	if len(ss.streams) <= i {
-		needed := i - len(ss.streams) + 1
-		ss.streams = append(ss.streams, make([]streamPrivate, needed)...)
-	}
-	assert(ss.streams[i] == nil)
-	ss.streams[i] = newStream(c, id, sendMax, recvMax)
-	return ss.streams[i]
-}
+type streamSetCtor func(id uint64) hasIdentity
 
-func (ss *streamSet) createNext(c *Connection, sendMax uint64, recvMax uint64) streamPrivate {
+func (ss *streamSet) create(ctor streamSetCtor) hasIdentity {
 	i := len(ss.streams)
-	if i > ss.max {
+	if i >= ss.nstreams {
 		return nil
 	}
-	return ss.create(c, ss.id(i), sendMax, recvMax)
+	ss.streams = append(ss.streams, ctor(ss.id(i)))
+	return ss.streams[i]
 }
 
-func newStreamSet(t streamType, role Role, nstreams int) *streamSet {
-	ss := &streamSet{
-		streamSetBase{byte(t.suffix(role)), nstreams},
-		nil,
-	}
-	ss.streams = make([]streamPrivate, 0, nstreams)
-	return ss
-}
-
-type sendStreamSet struct {
-	streamSetBase
-	streams []sendStreamPrivate
-}
-
-func (ss *sendStreamSet) get(id uint64) sendStreamPrivate {
+func (ss *streamSet) ensure(id uint64, ctor streamSetCtor,
+	notify func(s hasIdentity)) hasIdentity {
 	i := ss.index(id)
+	if i >= ss.nstreams {
+		return nil
+	}
 	if i >= len(ss.streams) {
-		return nil
-	}
-	return ss.streams[ss.index(id)]
-}
-
-func (ss *sendStreamSet) create(c *Connection, id uint64, maxStreamData uint64) sendStreamPrivate {
-	i := ss.index(id)
-	if len(ss.streams) <= i {
 		needed := i - len(ss.streams) + 1
-		ss.streams = append(ss.streams, make([]sendStreamPrivate, needed)...)
-	}
-	assert(ss.streams[i] == nil)
-	ss.streams[i] = newSendStream(c, id, maxStreamData)
-	return ss.streams[i]
-}
-
-func (ss *sendStreamSet) createNext(c *Connection, maxStreamData uint64) sendStreamPrivate {
-	i := len(ss.streams)
-	if i > ss.max {
-		return nil
-	}
-	return ss.create(c, ss.id(i), maxStreamData)
-}
-
-func newSendStreamSet(role Role, nstreams int) *sendStreamSet {
-	ss := &sendStreamSet{
-		streamSetBase{byte(streamTypeUnidirectionalLocal.suffix(role)), nstreams},
-		nil,
-	}
-	ss.streams = make([]sendStreamPrivate, 0, nstreams)
-	return ss
-}
-
-type recvStreamSet struct {
-	streamSetBase
-	streams []recvStreamPrivate
-}
-
-func (ss *recvStreamSet) get(id uint64) recvStreamPrivate {
-	i := ss.index(id)
-	if i >= len(ss.streams) {
-		return nil
+		start := len(ss.streams)
+		ss.streams = append(ss.streams, make([]hasIdentity, needed)...)
+		for j := start; j < len(ss.streams); j++ {
+			s := ctor(ss.id(j))
+			ss.check(s.Id())
+			ss.streams[j] = s
+			notify(ss.streams[j])
+		}
 	}
 	return ss.streams[i]
 }
 
-func (ss *recvStreamSet) create(c *Connection, id uint64, maxStreamData uint64) recvStreamPrivate {
-	i := ss.index(id)
-	if len(ss.streams) <= i {
-		needed := i - len(ss.streams) + 1
-		ss.streams = append(ss.streams, make([]recvStreamPrivate, needed)...)
+func (ss *streamSet) forEach(f func(hasIdentity)) {
+	for _, s := range ss.streams {
+		f(s)
 	}
-	assert(ss.streams[i] == nil)
-	ss.streams[i] = newRecvStream(c, id, maxStreamData)
-	return ss.streams[i]
-}
-
-func newRecvStreamSet(role Role, nstreams int) *recvStreamSet {
-	ss := &recvStreamSet{
-		streamSetBase{byte(streamTypeUnidirectionalRemote.suffix(role)), nstreams},
-		nil,
-	}
-	ss.streams = make([]recvStreamPrivate, 0, nstreams)
-	return ss
 }
