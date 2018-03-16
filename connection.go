@@ -760,21 +760,11 @@ func (c *Connection) queueStreamFrames(protected bool) error {
 	}
 
 	// Output all the stream frames that are now permitted by stream flow control
-	for _, s := range c.localBidiStreams.streams {
-		if s.Id() == 0 {
-			continue
+	c.forEachSend(func(s sendStreamPrivate) {
+		if s.Id() != 0 {
+			c.enqueueStreamFrames(s, &c.outputProtectedQ)
 		}
-		c.enqueueStreamFrames(s.(streamPrivate), &c.outputProtectedQ)
-	}
-	for _, s := range c.remoteBidiStreams.streams {
-		if s.Id() == 0 {
-			continue
-		}
-		c.enqueueStreamFrames(s.(streamPrivate), &c.outputProtectedQ)
-	}
-	for _, s := range c.localUniStreams.streams {
-		c.enqueueStreamFrames(s.(sendStreamPrivate), &c.outputProtectedQ)
-	}
+	})
 	return nil
 }
 
