@@ -191,7 +191,6 @@ func NewConnection(trans Transport, role Role, tls *TlsConfig, handler Connectio
 	// Mint.
 	c.tpHandler = newTransportParametersHandler(c.log, role, kQuicVersion)
 	c.tls.setTransportParametersHandler(c.tpHandler)
-	c.log(logTypeHandshake, "%p TransportParametersHandler", c.tpHandler)
 
 	c.recvd = newRecvdPackets(c.log)
 	tmp, err := generateRand64()

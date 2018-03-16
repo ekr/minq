@@ -305,7 +305,6 @@ func (s *recvStreamBase) newFrameData(offset uint64, last bool, payload []byte) 
 		if end < s.lastReceived {
 			return ErrorProtocolViolation
 		}
-		s.lastReceived = end
 		if s.state == RecvStreamStateRecv {
 			s.setRecvState(RecvStreamStateSizeKnown)
 		}
@@ -314,8 +313,8 @@ func (s *recvStreamBase) newFrameData(offset uint64, last bool, payload []byte) 
 			// We shouldn't be increasing lastReceived in any other state.
 			return ErrorProtocolViolation
 		}
-		s.lastReceived = end
 	}
+	s.lastReceived = end
 	if s.state != RecvStreamStateRecv && s.state != RecvStreamStateSizeKnown {
 		// We shouldn't be increasing lastReceived in RecvStreamStateSizeKnown.
 		return nil
@@ -474,7 +473,7 @@ func (s *sendStream) Write(data []byte) (int, error) {
 	return len(data), nil
 }
 
-// Close make the stream end cleanly.
+// Close makes the stream end cleanly.
 func (s *sendStream) Close() error {
 	s.close()
 	s.c.sendQueued(false)
@@ -639,6 +638,7 @@ func (ss *streamSet) id(index int) uint64 {
 
 func (ss *streamSet) updateMax(id uint64) {
 	ss.nstreams = ss.index(id)
+	// Stream 0 is a nightmare.
 	if ss.t.suffix(ss.role) != 0 {
 		ss.nstreams--
 	}
