@@ -13,7 +13,7 @@ type SendStreamState uint8
 const (
 	SendStreamStateOpen        = SendStreamState(0)
 	SendStreamStateSend        = SendStreamState(1)
-	SendStreamStateCloseQueued = SendStreamState(2) // Not in the spec``
+	SendStreamStateCloseQueued = SendStreamState(2) // Not in the spec
 	SendStreamStateDataSent    = SendStreamState(3)
 	SendStreamStateResetSent   = SendStreamState(4)
 	SendStreamStateDataRecvd   = SendStreamState(5) // Not tracked
