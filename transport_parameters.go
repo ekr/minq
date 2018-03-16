@@ -34,23 +34,25 @@ type tpDef struct {
 	size      uintptr
 }
 
-// TODO(ekr@rtfm.com): Hack until we generate MAX_STREAM_DATA
-var kInitialMaxStreamData = uint32(8192)
 var (
+	kInitialMaxStreamData       = uint64(8192)
+	kConcurrentStreamsBidi      = 16
+	kConcurrentStreamsUni       = 16
 	kTransportParameterDefaults = []tpDef{
-		{kTpIdInitialMaxStreamsData, kInitialMaxStreamData, 4},
+		{kTpIdInitialMaxStreamsData, uint32(kInitialMaxStreamData), 4},
 		{kTpIdInitialMaxData, 8192, 4},
-		//		{kTpIdInitialMaxStreamIdBidi, 16, 4},
-		{kTpIdIdleTimeout, 10, 2},
-		//		{kTpIdInitialMaxStreamIdUni, 16, 4},
+		{kTpIdInitialMaxStreamIdBidi, 0, 4},
+		{kTpIdIdleTimeout, 5, 2},
+		{kTpIdInitialMaxStreamIdUni, 0, 4},
 	}
 )
 
 type transportParameters struct {
-	maxStreamsData uint32
-	maxData        uint32
-	maxStreamId    uint32
-	idleTimeout    uint16
+	maxStreamsData  uint32
+	maxData         uint32
+	maxStreamIdBidi uint32
+	maxStreamIdUni  uint32
+	idleTimeout     uint16
 }
 
 type TransportParameterList []transportParameter
@@ -125,9 +127,17 @@ func (tp *TransportParameterList) addOpaqueParameter(id TransportParameterId, b 
 	return nil
 }
 
-func (tp *TransportParameterList) createCommonTransportParameters() error {
+func (tp *TransportParameterList) createCommonTransportParameters(streamAdd uint32) error {
 	for _, p := range kTransportParameterDefaults {
-		err := tp.addUintParameter(p.parameter, p.val, p.size)
+		v := p.val
+		// Stream IDs are annoying.
+		switch p.parameter {
+		case kTpIdInitialMaxStreamIdBidi:
+			v = uint32(kConcurrentStreamsBidi-1)*4 + streamAdd
+		case kTpIdInitialMaxStreamIdUni:
+			v = uint32(kConcurrentStreamsUni-1)*4 + 2 + streamAdd
+		}
+		err := tp.addUintParameter(p.parameter, v, p.size)
 		if err != nil {
 			return err
 		}
@@ -167,7 +177,7 @@ func newTransportParametersHandler(log loggingFunction, role Role, version Versi
 
 func (h *transportParametersHandler) Send(hs mint.HandshakeType, el *mint.ExtensionList) error {
 	if h.role == RoleClient {
-		logf(logTypeHandshake, "Sending transport parameters")
+		h.log(logTypeHandshake, "Sending transport parameters")
 		if hs != mint.HandshakeTypeClientHello {
 			return nil
 		}
@@ -188,7 +198,7 @@ func (h *transportParametersHandler) Send(hs mint.HandshakeType, el *mint.Extens
 		return nil
 	}
 
-	logf(logTypeHandshake, "Sending transport parameters message")
+	h.log(logTypeHandshake, "Sending transport parameters message")
 	b, err := h.createEncryptedExtensionsTransportParameters()
 	if err != nil {
 		return err
@@ -198,7 +208,7 @@ func (h *transportParametersHandler) Send(hs mint.HandshakeType, el *mint.Extens
 }
 
 func (h *transportParametersHandler) Receive(hs mint.HandshakeType, el *mint.ExtensionList) error {
-	logf(logTypeHandshake, "TransportParametersHandler message=%d", hs)
+	h.log(logTypeHandshake, "%p TransportParametersHandler message=%d", h, hs)
 	// First see if the other side sent the extension.
 	var body transportParametersXtnBody
 	found, err := el.Find(&body)
@@ -280,6 +290,14 @@ func (h *transportParametersHandler) Receive(hs mint.HandshakeType, el *mint.Ext
 	if err != nil {
 		return err
 	}
+	tp.maxStreamIdBidi, err = params.getUintParameter(kTpIdInitialMaxStreamIdBidi, 4)
+	if err != nil {
+		return err
+	}
+	tp.maxStreamIdUni, err = params.getUintParameter(kTpIdInitialMaxStreamIdUni, 4)
+	if err != nil {
+		return err
+	}
 	var tmp uint32
 	tmp, err = params.getUintParameter(kTpIdIdleTimeout, 2)
 	if err != nil {
@@ -298,7 +316,7 @@ func (h *transportParametersHandler) createClientHelloTransportParameters() ([]b
 		nil,
 	}
 
-	err := chtp.Parameters.createCommonTransportParameters()
+	err := chtp.Parameters.createCommonTransportParameters(1)
 	if err != nil {
 		return nil, err
 	}
@@ -319,7 +337,7 @@ func (h *transportParametersHandler) createEncryptedExtensionsTransportParameter
 		nil,
 	}
 
-	err := eetp.Parameters.createCommonTransportParameters()
+	err := eetp.Parameters.createCommonTransportParameters(4)
 	if err != nil {
 		return nil, err
 	}

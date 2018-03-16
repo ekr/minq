@@ -3,6 +3,7 @@ package minq
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"reflect"
 	"runtime"
 	"strconv"
@@ -163,25 +164,21 @@ func encode(i interface{}) (ret []byte, err error) {
 	return ret, nil
 }
 
-func uintDecodeInt(buf *bytes.Reader, size uintptr) (uint64, error) {
+func uintDecodeInt(r io.Reader, size uintptr) (uint64, error) {
 	val := make([]byte, size)
-	rv, err := buf.Read(val)
+	_, err := io.ReadFull(r, val)
 	if err != nil {
 		return 0, err
 	}
-	if rv != int(size) {
-		logf(logTypeCodec, "Short read at:\n"+backtrace())
-		return 0, fmt.Errorf("Not enough bytes in buffer")
-	}
 
 	tmp := uint64(0)
-	for b := uintptr(0); b < size; b += 1 {
+	for b := uintptr(0); b < size; b++ {
 		tmp = (tmp << 8) + uint64(val[b])
 	}
 	return tmp, nil
 }
 
-func uintDecode(buf *bytes.Reader, v reflect.Value, encodingSize uintptr) (uintptr, error) {
+func uintDecode(r io.Reader, v reflect.Value, encodingSize uintptr) (uintptr, error) {
 	size := v.Type().Size()
 	if encodingSize != codecDefaultSize {
 		if encodingSize > size {
@@ -190,7 +187,7 @@ func uintDecode(buf *bytes.Reader, v reflect.Value, encodingSize uintptr) (uintp
 		size = encodingSize
 	}
 
-	tmp, err := uintDecodeInt(buf, size)
+	tmp, err := uintDecodeInt(r, size)
 	if err != nil {
 		return 0, err
 	}
@@ -222,11 +219,8 @@ func encodeArgs(args ...interface{}) []byte {
 	return buf.Bytes()
 }
 
-func arrayDecode(buf *bytes.Reader, v reflect.Value, encodingSize uintptr) (uintptr, error) {
+func arrayDecode(r io.Reader, v reflect.Value, encodingSize uintptr) (uintptr, error) {
 	logf(logTypeCodec, "encodingSize = %v", encodingSize)
-	if encodingSize == codecDefaultSize {
-		encodingSize = uintptr(buf.Len())
-	}
 
 	val := make([]byte, encodingSize)
 
@@ -236,12 +230,9 @@ func arrayDecode(buf *bytes.Reader, v reflect.Value, encodingSize uintptr) (uint
 	if encodingSize == 0 {
 		return 0, nil
 	}
-	rv, err := buf.Read(val)
+	_, err := io.ReadFull(r, val)
 	if err != nil {
 		return 0, err
-	}
-	if rv != int(encodingSize) {
-		return 0, fmt.Errorf("Not enough bytes in buffer")
 	}
 
 	v.SetBytes(val)
@@ -257,7 +248,7 @@ func decode(i interface{}, data []byte) (uintptr, error) {
 	fields := reflected.NumField()
 	bytesread := uintptr(0)
 
-	for j := 0; j < fields; j += 1 {
+	for j := 0; j < fields; j++ {
 		br := uintptr(0)
 		field := reflected.Field(j)
 		tipe := reflected.Type().Field(j)
@@ -280,6 +271,9 @@ func decode(i interface{}, data []byte) (uintptr, error) {
 		case reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
 			br, res = uintDecode(buf, field, encodingSize)
 		case reflect.Array, reflect.Slice:
+			if encodingSize == codecDefaultSize {
+				encodingSize = uintptr(buf.Len())
+			}
 			br, res = arrayDecode(buf, field, encodingSize)
 		default:
 			return 0, fmt.Errorf("Unknown type")

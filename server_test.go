@@ -115,10 +115,14 @@ func TestServerIdleTimeout(t *testing.T) {
 
 	assertEquals(t, 1, server.ConnectionCount())
 
-	// Now wait 15 seconds to make sure that the connection
+	// Now wait 6 seconds to make sure that the connection
 	// gets garbage collected.
 
-	time.Sleep(time.Second * 15)
+	time.Sleep(time.Second * 6)
 	server.CheckTimer()
+	// A second nap to allow for draining period.
+	time.Sleep(time.Second)
+	server.CheckTimer()
+
 	assertEquals(t, 0, server.ConnectionCount())
 }

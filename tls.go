@@ -5,9 +5,9 @@ import (
 	"crypto/x509"
 	"encoding/hex"
 	"fmt"
+	"log"
 
 	"github.com/bifurcation/mint"
-	"log"
 )
 
 type TlsConfig struct {

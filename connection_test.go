@@ -2,6 +2,8 @@ package minq
 
 import (
 	"fmt"
+	"io"
+	"io/ioutil"
 	"testing"
 	"time"
 )
@@ -287,26 +289,28 @@ func TestSendReceiveData(t *testing.T) {
 	err = inputAll(pair.server)
 	assertNotError(t, err, "Couldn't read input packets")
 	ss := pair.server.GetStream(4)
-	b := ss.readAll()
+	b, err := ioutil.ReadAll(ss)
+	assertEquals(t, ErrorWouldBlock, err)
 	assertNotNil(t, b, "Read data from server")
 	assertByteEquals(t, []byte(testString), b)
 
 	// Write data S->C
-	for i, _ := range b {
+	for i := range b {
 		b[i] ^= 0xff
 	}
 	ss.Write(b)
 
 	// Read data C->S
 	err = inputAll(pair.client)
-	b2 := cs.readAll()
+	b2, err := ioutil.ReadAll(cs)
+	assertEquals(t, ErrorWouldBlock, err)
 	assertNotNil(t, b2, "Read data from client")
 	assertByteEquals(t, b, b2)
 
 	// Check that we only create streams in one direction
 	cs = pair.client.CreateStream()
 	assertEquals(t, uint64(8), cs.Id())
-	assertNotNil(t, pair.client.GetStream(1), "Stream 8 should exist")
+	assertNotNil(t, pair.client.GetStream(8), "Stream 8 should exist")
 	assertX(t, pair.client.GetStream(2) == nil, "Stream 2 should not exist")
 
 	// Close the client.
@@ -328,6 +332,8 @@ type testReceiveHandler struct {
 	done bool
 }
 
+var _ ConnectionHandler = &testReceiveHandler{}
+
 func newTestReceiveHandler(t *testing.T) *testReceiveHandler {
 	return &testReceiveHandler{t: t}
 }
@@ -335,10 +341,13 @@ func newTestReceiveHandler(t *testing.T) *testReceiveHandler {
 func (h *testReceiveHandler) StateChanged(s State) {
 }
 
-func (h *testReceiveHandler) NewStream(s *Stream) {
+func (h *testReceiveHandler) NewStream(s Stream) {
 }
 
-func (h *testReceiveHandler) StreamReadable(s *Stream) {
+func (h *testReceiveHandler) NewRecvStream(s RecvStream) {
+}
+
+func (h *testReceiveHandler) StreamReadable(s RecvStream) {
 	for {
 		b := make([]byte, 1024)
 
@@ -348,7 +357,7 @@ func (h *testReceiveHandler) StreamReadable(s *Stream) {
 			break
 		case ErrorWouldBlock:
 			return
-		case ErrorStreamIsClosed, ErrorConnIsClosed:
+		case ErrorStreamIsClosed, ErrorConnIsClosed, io.EOF:
 			h.done = true
 			return
 		default:
@@ -471,7 +480,7 @@ func TestSendReceiveStreamFin(t *testing.T) {
 
 	b = make([]byte, 1024)
 	n, err = ss.Read(b)
-	assertEquals(t, err, ErrorStreamIsClosed)
+	assertEquals(t, err, io.EOF)
 	assertEquals(t, 0, n)
 }
 
@@ -504,7 +513,7 @@ func TestSendReceiveStreamRst(t *testing.T) {
 	ss := pair.server.GetStream(4)
 	b := make([]byte, 1024)
 	n, err = ss.Read(b)
-	assertEquals(t, err, ErrorStreamIsClosed)
+	assertEquals(t, err, io.EOF)
 	assertEquals(t, 0, n)
 }
 
@@ -538,12 +547,15 @@ func TestVersionNegotiationPacket(t *testing.T) {
 	assertEquals(t, hdr.ConnectionID, client.clientConnId)
 }
 
-func TestCantMakeRemoteStream(t *testing.T) {
+func TestCantMakeRemoteStreams(t *testing.T) {
 	cTrans, _ := newTestTransportPair(true)
 	client := NewConnection(cTrans, RoleClient, testTlsConfig(), nil)
 
-	_, _, err := client.ensureStream(4, true)
-	assertEquals(t, ErrorProtocolViolation, err)
+	send := client.ensureSendStream(3) // 3 is a RecvStream for the client
+	assertEquals(t, nil, send)
+
+	recv := client.ensureRecvStream(2) // 2 is a SendStream for the client
+	assertEquals(t, nil, recv)
 }
 
 func TestStatelessRetry(t *testing.T) {
@@ -612,4 +624,233 @@ func TestSessionResumption(t *testing.T) {
 		pair = csPair{client, server}
 		pair.handshake(t)
 	*/
+}
+
+type streamCatcher struct {
+	lastStream Stream
+	lastRecv   RecvStream
+}
+
+var _ ConnectionHandler = &streamCatcher{}
+
+func (sc *streamCatcher) StateChanged(s State)        {}
+func (sc *streamCatcher) StreamReadable(s RecvStream) {}
+
+func (sc *streamCatcher) NewStream(s Stream) {
+	sc.lastStream = s
+}
+
+func (sc *streamCatcher) NewRecvStream(s RecvStream) {
+	sc.lastRecv = s
+}
+
+func TestUnidirectionalStream(t *testing.T) {
+	cTrans, sTrans := newTestTransportPair(true)
+
+	cconf := testTlsConfig()
+	client := NewConnection(cTrans, RoleClient, cconf, nil)
+	assertNotNil(t, client, "Couldn't make client")
+
+	var catcher streamCatcher
+	sconf := testTlsConfig()
+	server := NewConnection(sTrans, RoleServer, sconf, &catcher)
+	assertNotNil(t, server, "Couldn't make server")
+
+	pair := csPair{client, server}
+	pair.handshake(t)
+
+	testString := []byte("abcdef")
+	cstream := client.CreateSendStream()
+	assertEquals(t, cstream, client.GetSendStream(2))
+	n, err := cstream.Write(testString)
+	assertNotError(t, err, "write should work")
+	assertEquals(t, n, len(testString))
+
+	err = inputAll(server)
+	assertNotError(t, err, "packets should be OK")
+
+	sstream := catcher.lastRecv
+	assertEquals(t, sstream, server.GetRecvStream(cstream.Id()))
+
+	d, err := ioutil.ReadAll(sstream)
+	assertEquals(t, ErrorWouldBlock, err)
+	assertNotNil(t, d, "Read data from client")
+	assertByteEquals(t, d, testString)
+
+	err = cstream.Close()
+	assertNotError(t, err, "close just works")
+	err = cstream.Close()
+	assertNotError(t, err, "close is idempotent")
+
+	err = inputAll(server)
+	assertNotError(t, err, "packets should be OK")
+
+	n, err = sstream.Read(d)
+	assertEquals(t, err, io.EOF)
+	assertEquals(t, n, 0)
+	assertEquals(t, sstream.RecvState(), RecvStreamStateDataRead)
+}
+
+func TestUnidirectionalStreamRst(t *testing.T) {
+	cTrans, sTrans := newTestTransportPair(true)
+
+	var catcher streamCatcher
+	cconf := testTlsConfig()
+	client := NewConnection(cTrans, RoleClient, cconf, &catcher)
+	assertNotNil(t, client, "Couldn't make client")
+
+	sconf := testTlsConfig()
+	server := NewConnection(sTrans, RoleServer, sconf, nil)
+	assertNotNil(t, server, "Couldn't make server")
+
+	pair := csPair{client, server}
+	pair.handshake(t)
+
+	testString := []byte("abcdef")
+	sstream := server.CreateSendStream()
+	assertEquals(t, sstream, server.GetSendStream(3))
+	n, err := sstream.Write(testString)
+	assertNotError(t, err, "write should work")
+	assertEquals(t, n, len(testString))
+
+	err = inputAll(client)
+	assertNotError(t, err, "packets should be OK")
+
+	cstream := catcher.lastRecv
+	assertEquals(t, cstream, client.GetRecvStream(sstream.Id()))
+
+	d, err := ioutil.ReadAll(cstream)
+	assertEquals(t, ErrorWouldBlock, err)
+	assertNotNil(t, d, "Read data from server")
+	assertByteEquals(t, d, testString)
+
+	err = sstream.Reset(kQuicErrorNoError)
+	assertNotError(t, err, "reset works")
+
+	err = inputAll(client)
+	assertNotError(t, err, "packets should be OK")
+
+	n, err = cstream.Read(d)
+	assertEquals(t, err, io.EOF)
+	assertEquals(t, n, 0)
+	assertEquals(t, cstream.RecvState(), RecvStreamStateResetRecvd)
+}
+
+func TestUnidirectionalStreamRstImmediate(t *testing.T) {
+	pair := newCsPair(t)
+	pair.handshake(t)
+
+	sstream := pair.server.CreateSendStream()
+	err := sstream.Reset(kQuicErrorNoError)
+	assertNotError(t, err, "reset works")
+
+	err = inputAll(pair.client)
+	assertNotError(t, err, "packets should be OK")
+
+	cstream := pair.client.GetRecvStream(sstream.Id())
+	var d [3]byte
+	n, err := cstream.Read(d[:])
+	assertEquals(t, err, io.EOF)
+	assertEquals(t, n, 0)
+	assertEquals(t, cstream.RecvState(), RecvStreamStateResetRecvd)
+}
+
+func TestUnidirectionalStopSending(t *testing.T) {
+	pair := newCsPair(t)
+	pair.handshake(t)
+
+	testString := []byte("abcdef")
+	cstream := pair.client.CreateSendStream()
+	n, err := cstream.Write(testString)
+	assertNotError(t, err, "write should work")
+	assertEquals(t, n, len(testString))
+
+	err = inputAll(pair.server)
+	assertNotError(t, err, "packets should be OK")
+
+	sstream := pair.server.GetRecvStream(cstream.Id())
+
+	d, err := ioutil.ReadAll(sstream)
+	assertEquals(t, ErrorWouldBlock, err)
+	assertNotNil(t, d, "Read data from client")
+	assertByteEquals(t, d, testString)
+
+	err = sstream.StopSending(kQuicErrorNoError)
+	assertNotError(t, err, "stop sending just works")
+
+	err = inputAll(pair.client)
+	assertNotError(t, err, "packets should be OK")
+
+	assertEquals(t, cstream.SendState(), SendStreamStateResetSent)
+
+	err = inputAll(pair.server)
+	assertNotError(t, err, "packets should be OK")
+
+	n, err = sstream.Read(d)
+	assertEquals(t, err, io.EOF)
+	assertEquals(t, n, 0)
+	assertEquals(t, sstream.RecvState(), RecvStreamStateResetRecvd)
+}
+
+func TestBidirectionalStopSending(t *testing.T) {
+	pair := newCsPair(t)
+	pair.handshake(t)
+
+	// Open a stream at the client and start using it (until it is used, it can't
+	// exist at the server).
+	testString := []byte("abcdef")
+	cstream := pair.client.CreateStream()
+	n, err := cstream.Write(testString)
+	assertNotError(t, err, "write should work")
+	assertEquals(t, n, len(testString))
+
+	// Feed packets to the server.
+	err = inputAll(pair.server)
+	assertNotError(t, err, "packets should be OK")
+
+	// The server then reads from the stream.
+	sstream := pair.server.GetStream(cstream.Id())
+	d, err := ioutil.ReadAll(sstream)
+	assertEquals(t, err, ErrorWouldBlock)
+	assertNotNil(t, d, "Read data from client")
+	assertByteEquals(t, d, testString)
+
+	// Now to test.  The server sends STOP_SENDING.
+	testString2 := []byte("zyxwvut")
+	err = sstream.StopSending(kQuicErrorNoError)
+	assertNotError(t, err, "stop sending just works")
+	assertEquals(t, sstream.RecvState(), RecvStreamStateRecv) // no change
+
+	// But it also continues to write to the stream.
+	n, err = sstream.Write(testString2)
+	assertNotError(t, err, "write should work")
+	assertEquals(t, n, len(testString2))
+	assertEquals(t, sstream.SendState(), SendStreamStateSend) // no change
+
+	// After reading, the client should have responded to STOP_SENDING with RST_STREAM.
+	err = inputAll(pair.client)
+	assertNotError(t, err, "packets should be OK")
+	assertEquals(t, cstream.SendState(), SendStreamStateResetSent)
+	assertEquals(t, cstream.RecvState(), RecvStreamStateRecv)
+
+	// Writing at the client now fails.
+	n, err = cstream.Write(testString)
+	assertEquals(t, err, ErrorStreamIsClosed)
+	assertEquals(t, n, 0)
+
+	// Reading can continue.
+	d, err = ioutil.ReadAll(cstream)
+	assertEquals(t, err, ErrorWouldBlock)
+	assertByteEquals(t, d, testString2)
+	assertEquals(t, sstream.RecvState(), RecvStreamStateRecv)
+
+	sstream.Close()
+
+	err = inputAll(pair.client)
+	assertNotError(t, err, "packets should be OK")
+
+	n, err = cstream.Read(d)
+	assertEquals(t, err, io.EOF)
+	assertEquals(t, n, 0)
+	assertEquals(t, cstream.RecvState(), RecvStreamStateDataRead)
 }

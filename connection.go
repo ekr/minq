@@ -12,31 +12,35 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"io/ioutil"
 	"time"
 
 	"github.com/bifurcation/mint"
 	"github.com/bifurcation/mint/syntax"
 )
 
+// Role determines whether an endpoint is client or server.
 type Role uint8
 
+// These are roles.
 const (
-	RoleClient = Role(iota)
-	RoleServer = Role(iota)
+	RoleClient = Role(1)
+	RoleServer = Role(2)
 )
 
-// The state of a QUIC connection.
+// State is the state of a QUIC connection.
 type State uint8
 
+// These are connection states.
 const (
-	StateInit                   = State(iota)
-	StateWaitClientInitial      = State(iota)
-	StateWaitServerFirstFlight  = State(iota)
-	StateWaitClientSecondFlight = State(iota)
-	StateEstablished            = State(iota)
-	StateClosing                = State(iota)
-	StateClosed                 = State(iota)
-	StateError                  = State(iota)
+	StateInit                   = State(1)
+	StateWaitClientInitial      = State(2)
+	StateWaitServerFirstFlight  = State(3)
+	StateWaitClientSecondFlight = State(4)
+	StateEstablished            = State(5)
+	StateClosing                = State(6)
+	StateClosed                 = State(7)
+	StateError                  = State(8)
 )
 
 const (
@@ -66,12 +70,16 @@ type ConnectionHandler interface {
 	// The connection has changed state to state |s|
 	StateChanged(s State)
 
-	// A new stream has been created (by receiving a frame
-	// from the other side. |s| contains the stream.
-	NewStream(s *Stream)
+	// NewRecvStream indicates that a new unidirectional stream has been
+	// created by the remote peer. |s| contains the stream.
+	NewRecvStream(s RecvStream)
 
-	// Stream |s| is now readable.
-	StreamReadable(s *Stream)
+	// NewStream indicates that a new bidirectional stream has been
+	// created by the remote peer. |s| contains the stream.
+	NewStream(s Stream)
+
+	// StreamReadable indicates that |s| is now readable.
+	StreamReadable(s RecvStream)
 }
 
 // Internal structures indicating ranges to ACK
@@ -100,7 +108,7 @@ calls to notify it of various events.
 */
 type Connection struct {
 	handler            ConnectionHandler
-	Role               Role
+	role               Role
 	state              State
 	version            VersionNumber
 	clientConnId       ConnectionId
@@ -113,15 +121,18 @@ type Connection struct {
 	readProtected      *cryptoState
 	nextSendPacket     uint64
 	mtu                int
-	streams            []*Stream
-	maxStream          uint64
+	stream0            *stream
+	localBidiStreams   *streamSet
+	remoteBidiStreams  *streamSet
+	localUniStreams    *streamSet
+	remoteUniStreams   *streamSet
 	outputClearQ       []frame // For stream 0
 	outputProtectedQ   []frame // For stream >= 0
 	clientInitial      []byte
 	recvd              *recvdPackets
 	sentAcks           map[uint64]ackRanges
 	lastInput          time.Time
-	idleTimeout        uint16
+	idleTimeout        time.Duration
 	tpHandler          *transportParametersHandler
 	log                loggingFunction
 	retransmitTime     time.Duration
@@ -134,42 +145,45 @@ type Connection struct {
 // Create a new QUIC connection. Should only be used with role=RoleClient,
 // though we use it with RoleServer internally.
 func NewConnection(trans Transport, role Role, tls *TlsConfig, handler ConnectionHandler) *Connection {
-	c := Connection{
-		handler,
-		role,
-		StateInit,
-		kQuicVersion,
-		0,
-		0,
-		trans,
-		newTlsConn(tls, role),
-		nil,
-		nil,
-		nil,
-		nil,
-		uint64(0),
-		kInitialMTU,
-		nil,
-		0,
-		nil,
-		nil,
-		nil,
-		nil,
-		make(map[uint64]ackRanges, 0),
-		time.Now(),
-		10, // Very short idle timeout.
-		nil,
-		nil,
-		kDefaultInitialRtt,
-		nil,
-		time.Now(),
-		time.Time{}, // Zero time
-		nil,
+	c := &Connection{
+		handler:            handler,
+		role:               role,
+		state:              StateInit,
+		version:            kQuicVersion,
+		clientConnId:       0,
+		serverConnId:       0,
+		transport:          trans,
+		tls:                newTlsConn(tls, role),
+		writeClear:         nil,
+		readClear:          nil,
+		writeProtected:     nil,
+		readProtected:      nil,
+		nextSendPacket:     uint64(0),
+		mtu:                kInitialMTU,
+		stream0:            nil,
+		localBidiStreams:   newStreamSet(streamTypeBidirectionalLocal, role, 1),
+		remoteBidiStreams:  newStreamSet(streamTypeBidirectionalRemote, role, kConcurrentStreamsBidi),
+		localUniStreams:    newStreamSet(streamTypeUnidirectionalLocal, role, 0),
+		remoteUniStreams:   newStreamSet(streamTypeUnidirectionalRemote, role, kConcurrentStreamsUni),
+		outputClearQ:       nil,
+		outputProtectedQ:   nil,
+		clientInitial:      nil,
+		recvd:              nil,
+		sentAcks:           make(map[uint64]ackRanges, 0),
+		lastInput:          time.Now(),
+		idleTimeout:        time.Second * 5, // a pretty short time
+		tpHandler:          nil,
+		log:                nil,
+		retransmitTime:     kDefaultInitialRtt,
+		congestion:         nil,
+		lastSendQueuedTime: time.Now(),
+		closingEnd:         time.Time{}, // Zero time
+		closePacket:        nil,
 	}
 
-	c.log = newConnectionLogger(&c)
+	c.log = newConnectionLogger(c)
 
-	//c.congestion = newCongestionControllerIetf(&c)
+	//c.congestion = newCongestionControllerIetf(c)
 	c.congestion = &CongestionControllerDummy{}
 	c.congestion.setLostPacketHandler(c.handleLostPacket)
 
@@ -183,27 +197,34 @@ func NewConnection(trans Transport, role Role, tls *TlsConfig, handler Connectio
 	if err != nil {
 		return nil
 	}
-	connId := ConnectionId(tmp)
+	cid := ConnectionId(tmp)
+	var clientStreams *streamSet
 	if role == RoleClient {
-		c.clientConnId = connId
+		c.clientConnId = cid
 		err = c.setupAeadMasking()
 		if err != nil {
 			return nil
 		}
+		clientStreams = c.localBidiStreams
 	} else {
-		c.serverConnId = connId
+		c.serverConnId = cid
 		c.setState(StateWaitClientInitial)
+		clientStreams = c.remoteBidiStreams
 	}
+	c.stream0 = newStream(c, 0, ^uint64(0), ^uint64(0)).(*stream)
+	clientStreams.streams = append(clientStreams.streams, c.stream0)
+
 	tmp, err = generateRand64()
 	if err != nil {
 		return nil
 	}
 	c.nextSendPacket = tmp & 0x7fffffff
-	s, newframe, _ := c.ensureStream(0, false)
-	if newframe {
-		s.setState(kStreamStateOpen)
-	}
-	return &c
+
+	return c
+}
+
+func (c *Connection) String() string {
+	return fmt.Sprintf("Conn: %.16x:%.16x: %s", c.clientConnId, c.serverConnId, c.role)
 }
 
 func (c *Connection) zeroRttAllowed() bool {
@@ -215,11 +236,19 @@ func (c *Connection) start() error {
 	return nil
 }
 
-func (c *Connection) label() string {
-	if c.Role == RoleClient {
+func (c *Connection) Role() Role {
+	return c.role
+}
+
+func (r Role) String() string {
+	switch r {
+	case RoleClient:
 		return "client"
+	case RoleServer:
+		return "server"
+	default:
+		panic("invalid role")
 	}
-	return "server"
 }
 
 func (c *Connection) setState(state State) {
@@ -227,26 +256,13 @@ func (c *Connection) setState(state State) {
 		return
 	}
 
-	c.log(logTypeConnection, "%s: Connection state %v -> %v", c.label(), c.state, state)
+	c.log(logTypeConnection, "Connection state %v -> %v", c.state, state)
 	if c.handler != nil {
 		c.handler.StateChanged(state)
 	}
 	c.state = state
 }
 
-// String converts a Role into something usable for debugging.
-func (role Role) String() string {
-	switch role {
-	case RoleClient:
-		return "client"
-	case RoleServer:
-		return "server"
-	default:
-		panic("unknown minq.Role")
-	}
-}
-
-// String converts a State into something usable for debugging.
 func (state State) String() string {
 	// TODO(ekr@rtfm.com): is there a way to get the name from the
 	// const value.
@@ -268,84 +284,91 @@ func (state State) String() string {
 	case StateError:
 		return "StateError"
 	default:
-		panic("unknown minq.State")
+		return "Unknown state"
 	}
 }
 
-func (c *Connection) myStream(id uint64) bool {
-	return id == 0 || (((id & 1) == 1) == (c.Role == RoleServer))
-}
-
-func (c *Connection) sameTypeStream(id1 uint64, id2 uint64) bool {
-	return (id1 & 0x3) == (id2 & 0x3)
-}
-
-func (c *Connection) streamSuffix(initiator Role, bidi bool) uint64 {
-	var suff uint64
-	if bidi {
-		suff |= 2
-	}
-	if initiator == RoleServer {
-		suff |= 1
-	}
-	return suff
-}
-
-func (c *Connection) ensureStream(id uint64, remote bool) (*Stream, bool, error) {
-	c.log(logTypeStream, "Ensuring stream %d exists", id)
-	// TODO(ekr@rtfm.com): this is not really done, because we never clean up
-	// Resize to fit.
-	if uint64(len(c.streams)) >= id+1 {
-		return c.streams[id], false, nil
-	}
-
-	// Don't create the stream if it's the wrong direction.
-	if remote == c.myStream(id) {
-		return nil, false, ErrorProtocolViolation
-	}
-
-	needed := id - uint64(len(c.streams)) + 1
-	c.log(logTypeTrace, "Needed=%d", needed)
-	c.streams = append(c.streams, make([]*Stream, needed)...)
-	// Now make all the streams in the same direction
-	i := id
-
-	var initialMax uint64
-	if c.tpHandler.peerParams != nil {
-		initialMax = uint64(c.tpHandler.peerParams.maxStreamsData)
-	} else {
-		assert(id == 0)
-		initialMax = 1280
-	}
-
-	for {
-		if c.streams[i] != nil {
-			break
+func (c *Connection) ensureRemoteBidi(id uint64) hasIdentity {
+	return c.remoteBidiStreams.ensure(id, func(x uint64) hasIdentity {
+		msd := uint64(c.tpHandler.peerParams.maxStreamsData)
+		return newStream(c, x, kInitialMaxStreamData, msd)
+	}, func(s hasIdentity) {
+		if c.handler != nil {
+			c.handler.NewStream(s.(Stream))
 		}
+	})
+}
 
-		if c.sameTypeStream(i, id) {
-			s := newStream(c, i, initialMax, kStreamStateIdle)
-			c.streams[i] = s
-			if id != i {
-				// Any lower-numbered streams start in open, so set the
-				// state and notify.
-				s.setState(kStreamStateOpen)
-				if c.handler != nil {
-					c.handler.NewStream(s)
-				}
+// This manages the creation of local and remote bidirectional streams as well
+// as remote unidirectional streams.
+func (c *Connection) ensureSendStream(id uint64) sendStreamPrivate {
+	var s hasIdentity
+	switch streamTypeFromId(id, c.role) {
+	case streamTypeBidirectionalLocal:
+		s = c.localBidiStreams.get(id)
+	case streamTypeBidirectionalRemote:
+		s = c.ensureRemoteBidi(id)
+	case streamTypeUnidirectionalLocal:
+		s = c.localUniStreams.get(id)
+	default:
+		// Local unidirectional streams can't receive.
+		return nil
+	}
+	if s == nil {
+		return nil
+	}
+	return s.(sendStreamPrivate)
+}
+
+// This manages the creation of local and remote bidirectional streams as well
+// as remote unidirectional streams.
+func (c *Connection) ensureRecvStream(id uint64) recvStreamPrivate {
+	var s hasIdentity
+	switch streamTypeFromId(id, c.role) {
+	case streamTypeBidirectionalLocal:
+		s = c.localBidiStreams.get(id)
+	case streamTypeBidirectionalRemote:
+		s = c.ensureRemoteBidi(id)
+	case streamTypeUnidirectionalRemote:
+		s = c.remoteUniStreams.ensure(id, func(x uint64) hasIdentity {
+			return newRecvStream(c, x, kInitialMaxStreamData)
+		}, func(s hasIdentity) {
+			if c.handler != nil {
+				c.handler.NewRecvStream(s.(RecvStream))
 			}
-		}
-
-		if i == 0 {
-			break
-		}
-		i--
+		})
+	default:
+		// Local unidirectional streams can't receive.
+		return nil
 	}
-	if id > c.maxStream {
-		c.maxStream = id
+	if s == nil {
+		return nil
 	}
+	return s.(recvStreamPrivate)
+}
 
-	return c.streams[id], true, nil
+func (c *Connection) forEachSend(f func(sendStreamPrivate)) {
+	c.localBidiStreams.forEach(func(s hasIdentity) {
+		f(s.(sendStreamPrivate))
+	})
+	c.remoteBidiStreams.forEach(func(s hasIdentity) {
+		f(s.(sendStreamPrivate))
+	})
+	c.localUniStreams.forEach(func(s hasIdentity) {
+		f(s.(sendStreamPrivate))
+	})
+}
+
+func (c *Connection) forEachRecv(f func(recvStreamPrivate)) {
+	c.localBidiStreams.forEach(func(s hasIdentity) {
+		f(s.(recvStreamPrivate))
+	})
+	c.remoteBidiStreams.forEach(func(s hasIdentity) {
+		f(s.(recvStreamPrivate))
+	})
+	c.remoteUniStreams.forEach(func(s hasIdentity) {
+		f(s.(recvStreamPrivate))
+	})
 }
 
 func (c *Connection) sendClientInitial() error {
@@ -380,7 +403,7 @@ func (c *Connection) sendClientInitial() error {
 	// Enqueue the frame for transmission.
 	queued = append(queued, f)
 
-	c.streams[0].send.setOffset(uint64(len(c.clientInitial)))
+	c.stream0.sendStreamPrivate.(*sendStream).offset = uint64(len(c.clientInitial))
 
 	for i := 0; i < topad; i++ {
 		queued = append(queued, newPaddingFrame(0))
@@ -420,7 +443,7 @@ func (c *Connection) determineAead(pt uint8) cipher.AEAD {
 		aead = c.writeProtected.aead
 	}
 
-	if c.Role == RoleClient {
+	if c.role == RoleClient {
 		switch {
 		case pt == packetTypeInitial:
 			aead = c.writeClear.aead
@@ -512,7 +535,7 @@ func (c *Connection) sendPacket(pt uint8, tosend []frame, containsOnlyAcks bool)
 	}
 
 	connId := c.serverConnId
-	if c.Role == RoleClient {
+	if c.role == RoleClient {
 		if pt == packetTypeInitial {
 			connId = c.clientConnId
 		}
@@ -529,7 +552,7 @@ func (c *Connection) sendPacket(pt uint8, tosend []frame, containsOnlyAcks bool)
 }
 
 func (c *Connection) sendFramesInPacket(pt uint8, tosend []frame) error {
-	c.log(logTypeConnection, "%s: Sending packet of type %v. %v frames", c.label(), pt, len(tosend))
+	c.log(logTypeConnection, "%s: Sending packet of type %v. %v frames", c.role, pt, len(tosend))
 	c.log(logTypeTrace, "Sending packet of type %v. %v frames", pt, len(tosend))
 	left := c.mtu
 
@@ -541,7 +564,7 @@ func (c *Connection) sendFramesInPacket(pt uint8, tosend []frame) error {
 	connId = c.serverConnId
 
 	longHeader := true
-	if c.Role == RoleClient {
+	if c.role == RoleClient {
 		switch {
 		case pt == packetTypeInitial:
 			aead = c.writeClear.aead
@@ -613,14 +636,9 @@ func (c *Connection) sendFramesInPacket(pt uint8, tosend []frame) error {
 	return nil
 }
 
-func (c *Connection) sendOnStream(streamId uint64, data []byte) error {
-	c.log(logTypeConnection, "%v: sending %v bytes on stream %v", c.label(), len(data), streamId)
-	stream, newStream, _ := c.ensureStream(streamId, false)
-	if newStream {
-		stream.setState(kStreamStateOpen)
-	}
-
-	_, err := stream.Write(data)
+func (c *Connection) sendOnStream0(data []byte) error {
+	c.log(logTypeConnection, "sending %v bytes on stream 0", len(data))
+	_, err := c.stream0.Write(data)
 	return err
 }
 
@@ -717,43 +735,52 @@ func (c *Connection) sendCombinedPacket(pt uint8, frames []frame, acks ackRanges
 
 func (c *Connection) queueFrame(q *[]frame, f frame) {
 	*q = append(*q, f)
+}
 
+func (c *Connection) enqueueStreamFrames(s sendStreamPrivate, q *[]frame) {
+	if s == nil {
+		return
+	}
+	chunks, _ := s.outputWritable()
+	for _, ch := range chunks {
+		f := newStreamFrame(s.Id(), ch.offset, ch.data, ch.last)
+		c.queueFrame(q, f)
+	}
 }
 
 // Send all the queued data on a set of streams with packet type |pt|
 func (c *Connection) queueStreamFrames(protected bool) error {
 	c.log(logTypeConnection, "%v: queueStreamFrames, protected=%v",
-		c.label(), protected)
+		c.role, protected)
 
-	var streams []*Stream
-	var q *[]frame
 	if !protected {
-		streams = c.streams[0:1]
-		q = &c.outputClearQ
-	} else {
-		streams = c.streams[1:]
-		q = &c.outputProtectedQ
+		c.enqueueStreamFrames(c.stream0, &c.outputClearQ)
+		return nil
 	}
 
 	// Output all the stream frames that are now permitted by stream flow control
-	for _, s := range streams {
-		if s != nil {
-			chunks, _ := s.outputWritable()
-			for _, ch := range chunks {
-				c.queueFrame(q, newStreamFrame(s.id, ch.offset, ch.data, ch.last))
-			}
+	c.forEachSend(func(s sendStreamPrivate) {
+		if s.Id() != 0 {
+			c.enqueueStreamFrames(s, &c.outputProtectedQ)
 		}
-	}
-
+	})
 	return nil
+}
+
+func (c *Connection) sendFrame(f frame) error {
+	if c.state != StateEstablished {
+		return ErrorWouldBlock
+	}
+	c.queueFrame(&c.outputProtectedQ, f)
+	_, err := c.sendQueued(false)
+	return err
 }
 
 /* Transmit all the frames permitted by connection level flow control and
 * the congestion controller. We're going to need to be more sophisticated
 * when we actually do connection level flow control. */
 func (c *Connection) sendQueuedFrames(pt uint8, protected bool, bareAcks bool) (int, error) {
-	c.log(logTypeConnection, "%v: sendQueuedFrames, pt=%v, protected=%v",
-		c.label(), pt, protected)
+	c.log(logTypeConnection, "sendQueuedFrames, pt=%v, protected=%v", pt, protected)
 
 	acks := c.recvd.prepareAckRange(protected, false)
 	now := time.Now()
@@ -830,16 +857,12 @@ func (c *Connection) sendQueuedFrames(pt uint8, protected bool, bareAcks bool) (
 		spaceInCongestionWindow -= frameLength
 		// Record that we send this chunk in the current packet
 		f.pns = append(f.pns, c.nextSendPacket)
-		sf, ok := f.f.(*streamFrame)
-		if ok && sf.hasFin() {
-			c.streams[sf.StreamId].closeSend()
-		}
 	}
 
 	// Send the remainder, plus any ACKs that are left.
 	// TODO(piet@devae.re) This might push the outstanding data over the congestion window
-	c.log(logTypeConnection, "%s: Remainder to send? sent=%v frames=%v acks=%v bareAcks=%v",
-		c.label(), sent, len(frames), len(acks), bareAcks)
+	c.log(logTypeConnection, "Remainder to send? sent=%v frames=%v acks=%v bareAcks=%v",
+		sent, len(frames), len(acks), bareAcks)
 	if len(frames) > 0 || (len(acks) > 0 && bareAcks) {
 		// TODO(ekr@rtfm.com): this may skip acks if there isn't
 		// room, but hopefully we eventually catch up.
@@ -883,9 +906,9 @@ func (c *Connection) handleLostPacket(lostPn uint64) {
 // Right now this is very expensive.
 
 func (c *Connection) outstandingQueuedBytes() (n int) {
-	for _, s := range c.streams {
+	c.forEachSend(func(s sendStreamPrivate) {
 		n += s.outstandingQueuedBytes()
-	}
+	})
 
 	cd := func(frames []frame) int {
 		ret := 0
@@ -904,12 +927,23 @@ func (c *Connection) outstandingQueuedBytes() (n int) {
 	return
 }
 
-// Provide a packet to the connection.
+// Input provides a packet to the connection.
 //
 // TODO(ekr@rtfm.com): when is error returned?
-
 func (c *Connection) Input(p []byte) error {
 	return c.handleError(c.input(p))
+}
+
+func (c *Connection) fireReadable() {
+	if c.handler == nil {
+		return
+	}
+
+	c.forEachRecv(func(s recvStreamPrivate) {
+		if s.Id() != 0 && s.clearReadable() {
+			c.handler.StreamReadable(s)
+		}
+	})
 }
 
 func (c *Connection) input(p []byte) error {
@@ -922,7 +956,7 @@ func (c *Connection) input(p []byte) error {
 		if c.closePacket != nil {
 			c.transport.Send(c.closePacket)
 		}
-		return nil
+		return ErrorConnIsClosing
 	}
 
 	c.lastInput = time.Now()
@@ -938,8 +972,8 @@ func (c *Connection) input(p []byte) error {
 	assert(int(hdrlen) <= len(p))
 
 	if isLongHeader(&hdr) && hdr.Version != c.version {
-		if c.Role == RoleServer {
-			c.log(logTypeConnection, "%s: Received unsupported version %v, expected %v", c.label(), hdr.Version, c.version)
+		if c.role == RoleServer {
+			c.log(logTypeConnection, "Received unsupported version %v, expected %v", hdr.Version, c.version)
 			err = c.sendVersionNegotiation(hdr.ConnectionID, hdr.PacketNumber, hdr.Version)
 			if err != nil {
 				return err
@@ -991,8 +1025,8 @@ func (c *Connection) input(p []byte) error {
 	// TODO(ekr@rtfm.com): this dup detection doesn't work right if you
 	// get a cleartext packet that has the same PN as a ciphertext or vice versa.
 	// Need to fix.
-	c.log(logTypeConnection, "%s: Received (unverified) packet with PN=%x PT=%v",
-		c.label(), hdr.PacketNumber, hdr.getHeaderType())
+	c.log(logTypeConnection, "Received (unverified) packet with PN=%x PT=%v",
+		hdr.PacketNumber, hdr.getHeaderType())
 
 	packetNumber := hdr.PacketNumber
 	if c.recvd.initialized() {
@@ -1045,12 +1079,7 @@ func (c *Connection) input(p []byte) error {
 
 	lastSendQueuedTime := c.lastSendQueuedTime
 
-	for _, stream := range c.streams {
-		if stream != nil && stream.readable && c.handler != nil {
-			c.handler.StreamReadable(stream)
-			stream.readable = false
-		}
-	}
+	c.fireReadable()
 
 	// TODO(ekr@rtfm.com): Check for more on stream 0, but we need to properly handle
 	// encrypted NST.
@@ -1104,9 +1133,6 @@ func (c *Connection) processClientInitial(hdr *packetHeader, payload []byte) err
 	}
 
 	if c.state != StateWaitClientInitial {
-		if uint64(len(sf.Data)) > c.streams[0].recv.offset {
-			return nonFatalError("Received second ClientInitial which seems to be too long, offset=%v len=%v", c.streams[0].recv.offset, n)
-		}
 		c.log(logTypeConnection, "Received ClientInitial but state = %v", c.GetState())
 		return nil
 	}
@@ -1140,10 +1166,10 @@ func (c *Connection) processClientInitial(hdr *packetHeader, payload []byte) err
 		return err
 	}
 
-	c.streams[0].recv.setOffset(uint64(len(sf.Data)))
+	c.stream0.recvStreamPrivate.(*recvStream).offset = uint64(len(sf.Data))
 	c.setTransportParameters()
 
-	err = c.sendOnStream(0, sflt)
+	err = c.sendOnStream0(sflt)
 	if err != nil {
 		return err
 	}
@@ -1166,7 +1192,7 @@ func (c *Connection) processCleartext(hdr *packetHeader, payload []byte, naf *bo
 		}*/
 
 	for len(payload) > 0 {
-		c.log(logTypeConnection, "%s: payload bytes left %d", c.label(), len(payload))
+		c.log(logTypeConnection, "payload bytes left %d", len(payload))
 		n, f, err := decodeFrame(payload)
 		if err != nil {
 			c.log(logTypeConnection, "Couldn't decode frame %v", err)
@@ -1184,19 +1210,16 @@ func (c *Connection) processCleartext(hdr *packetHeader, payload []byte, naf *bo
 			if inner.StreamId != 0 {
 				return ErrorProtocolViolation
 			}
-			err := c.streams[0].processMaxStreamData(inner.MaximumStreamData)
-			if err != nil {
-				return err
-			}
+			c.stream0.processMaxStreamData(inner.MaximumStreamData)
 
 		case *streamFrame:
 			// If this is duplicate data and if so early abort.
-			if inner.Offset+uint64(len(inner.Data)) <= c.streams[0].recv.offset {
+			if inner.Offset+uint64(len(inner.Data)) <= c.stream0.recvStreamPrivate.(*recvStream).offset {
 				continue
 			}
 
 			// This is fresh data so sanity check.
-			if c.Role == RoleClient {
+			if c.role == RoleClient {
 				if c.state != StateWaitServerFirstFlight {
 					// TODO(ekr@rtfm.com): Not clear what to do here. It's
 					// clearly a protocol error, but also allows on-path
@@ -1211,7 +1234,7 @@ func (c *Connection) processCleartext(hdr *packetHeader, payload []byte, naf *bo
 				// 2. Set the outgoing stream offset accordingly
 				// 3. Remember the connection ID
 				if len(c.clientInitial) > 0 {
-					c.streams[0].send.setOffset(uint64(len(c.clientInitial)))
+					c.stream0.sendStreamPrivate.(*sendStream).offset = uint64(len(c.clientInitial))
 					c.clientInitial = nil
 					c.serverConnId = hdr.ConnectionID
 				}
@@ -1230,11 +1253,14 @@ func (c *Connection) processCleartext(hdr *packetHeader, payload []byte, naf *bo
 				return nonFatalError("Received cleartext with stream id != 0")
 			}
 
-			err = c.newFrameData(c.streams[0], inner)
+			err = c.newFrameData(c.stream0, inner)
 			if err != nil {
 				return err
 			}
-			available := c.streams[0].readAll()
+			available, err := ioutil.ReadAll(c.stream0)
+			if err != nil && err != ErrorWouldBlock {
+				return err
+			}
 			// c.issueStreamCredit(c.streams[0], len(available))
 			out, err := c.tls.handshake(available)
 			if err != nil {
@@ -1246,14 +1272,14 @@ func (c *Connection) processCleartext(hdr *packetHeader, payload []byte, naf *bo
 				if err != nil {
 					return err
 				}
-				if c.Role == RoleClient {
+				if c.role == RoleClient {
 					// We did this on the server already.
 					c.setTransportParameters()
 				}
 			}
 
 			if len(out) > 0 {
-				c.sendOnStream(0, out)
+				c.sendOnStream0(out)
 				if err != nil {
 					return err
 				}
@@ -1306,9 +1332,9 @@ func (c *Connection) sendVersionNegotiation(connId ConnectionId, pn uint64, vers
 }
 
 func (c *Connection) processVersionNegotiation(hdr *packetHeader, payload []byte) error {
-	c.log(logTypeConnection, "%s: Processing version negotiation packet", c.label())
+	c.log(logTypeConnection, "Processing version negotiation packet")
 	if c.recvd.initialized() {
-		c.log(logTypeConnection, "%s: Ignoring version negotiation after received another packet", c.label())
+		c.log(logTypeConnection, "Ignoring version negotiation after received another packet")
 	}
 
 	// TODO(ekr@rtfm.com): Check the version negotiation fields.
@@ -1333,9 +1359,9 @@ func (c *Connection) processVersionNegotiation(hdr *packetHeader, payload []byte
 // I assume here that Stateless Retry contains just a single stream frame,
 // contra the spec but per https://github.com/quicwg/base-drafts/pull/817
 func (c *Connection) processStatelessRetry(hdr *packetHeader, payload []byte) error {
-	c.log(logTypeConnection, "%s: Processing stateless retry packet %s", c.label(), dumpPacket(payload))
+	c.log(logTypeConnection, "Processing stateless retry packet %s", dumpPacket(payload))
 	if c.recvd.initialized() {
-		c.log(logTypeConnection, "%s: Ignoring stateless retry after received another packet", c.label())
+		c.log(logTypeConnection, "Ignoring stateless retry after received another packet")
 	}
 
 	// Directly parse the Stateless Retry rather than inserting it into
@@ -1390,27 +1416,16 @@ func filterFrames(in []frame, f frameFilterFunc) []frame {
 	return out
 }
 
-func (c *Connection) issueStreamCredit(s *Stream, credit int) error {
-	max := ^uint64(0)
-
-	// Figure out how much credit to issue.
-	if max-s.recv.maxStreamData > uint64(credit) {
-		max = s.recv.maxStreamData + uint64(credit)
-	}
-	s.recv.maxStreamData = max
-
-	// Now issue it.
-	var q *[]frame
-	if s.id == 0 {
-		q = &c.outputClearQ
-	} else {
-		q = &c.outputProtectedQ
+func (c *Connection) issueStreamCredit(s RecvStream, max uint64) {
+	// Don't issue credit for stream 0 during the handshake.
+	if s.Id() == 0 && c.state != StateEstablished {
+		return
 	}
 
 	// Remove other MAX_STREAM_DATA frames so we don't retransmit them. This violates
 	// the current spec, but offline we all agree it's silly. See:
 	// https://github.com/quicwg/base-drafts/issues/806
-	*q = filterFrames(*q, func(f *frame) bool {
+	c.outputProtectedQ = filterFrames(c.outputProtectedQ, func(f *frame) bool {
 		inner, ok := f.f.(*maxStreamDataFrame)
 		if !ok {
 			return true
@@ -1418,12 +1433,26 @@ func (c *Connection) issueStreamCredit(s *Stream, credit int) error {
 		return !(inner.StreamId == s.Id())
 	})
 
-	c.queueFrame(q, newMaxStreamData(s.Id(), max))
+	_ = c.sendFrame(newMaxStreamData(s.Id(), max))
 	c.log(logTypeFlowControl, "Issuing more stream credit for stream %d new offset=%d", s.Id(), max)
+}
 
-	// TODO(ekr@rtfm.com): We do need to do something to send this
-	// immediately, because we don't always.
-	return nil
+func (c *Connection) issueStreamIdCredit(t streamType) {
+	// TODO work out how to issue in more reasonable increments.
+	var max uint64
+	switch t {
+	case streamTypeBidirectionalRemote:
+		max = c.remoteBidiStreams.credit(1)
+	case streamTypeUnidirectionalRemote:
+		max = c.remoteUniStreams.credit(1)
+	}
+	c.outputProtectedQ = filterFrames(c.outputProtectedQ, func(f *frame) bool {
+		_, ok := f.f.(*maxStreamIdFrame)
+		return !ok
+	})
+
+	_ = c.sendFrame(newMaxStreamId(max))
+	c.log(logTypeFlowControl, "Issuing more %v stream ID credit: %d", t, max)
 }
 
 func (c *Connection) processUnprotected(hdr *packetHeader, packetNumber uint64, payload []byte, naf *bool) error {
@@ -1431,7 +1460,7 @@ func (c *Connection) processUnprotected(hdr *packetHeader, packetNumber uint64, 
 	c.log(logTypeConnection, "Received Packet=%v", dumpPacket(payload))
 	*naf = false
 	for len(payload) > 0 {
-		c.log(logTypeConnection, "%s: payload bytes left %d", c.label(), len(payload))
+		c.log(logTypeConnection, "payload bytes left %d", len(payload))
 		n, f, err := decodeFrame(payload)
 		if err != nil {
 			c.log(logTypeConnection, "Couldn't decode frame %v", err)
@@ -1448,14 +1477,27 @@ func (c *Connection) processUnprotected(hdr *packetHeader, packetNumber uint64, 
 			// TODO(ekr@rtfm.com): Don't let the other side initiate
 			// streams that are the wrong parity.
 			c.log(logTypeStream, "Received RST_STREAM on stream %v", inner.StreamId)
-			s, notifyCreated, err := c.ensureStream(inner.StreamId, true)
+			s := c.ensureRecvStream(inner.StreamId)
+			if s == nil {
+				return ErrorProtocolViolation
+			}
+
+			err = s.handleReset(inner.FinalOffset)
 			if err != nil {
 				return err
 			}
+			c.issueStreamIdCredit(streamTypeFromId(inner.StreamId, c.role))
 
-			s.closeRecv()
-			if notifyCreated && c.handler != nil {
-				c.handler.NewStream(s)
+		case *stopSendingFrame:
+			c.log(logTypeStream, "Received STOP_SENDING on stream %v", inner.StreamId)
+			s := c.ensureSendStream(inner.StreamId)
+			if s == nil {
+				return ErrorProtocolViolation
+			}
+
+			err = s.Reset(kQuicErrorNoError)
+			if err != nil {
+				return err
 			}
 
 		case *connectionCloseFrame:
@@ -1469,17 +1511,20 @@ func (c *Connection) processUnprotected(hdr *packetHeader, packetNumber uint64, 
 			return nil
 
 		case *maxStreamDataFrame:
-			s, notifyCreated, err := c.ensureStream(inner.StreamId, true)
-			if err != nil {
-				return err
+			s := c.ensureSendStream(inner.StreamId)
+			if s == nil {
+				return ErrorProtocolViolation
 			}
-			if notifyCreated && c.handler != nil {
-				s.setState(kStreamStateOpen)
-				c.handler.NewStream(s)
-			}
-			err = s.processMaxStreamData(inner.MaximumStreamData)
-			if err != nil {
-				return err
+			s.processMaxStreamData(inner.MaximumStreamData)
+
+		case *maxStreamIdFrame:
+			switch streamTypeFromId(inner.MaximumStreamId, c.role) {
+			case streamTypeBidirectionalLocal:
+				c.localBidiStreams.updateMax(inner.MaximumStreamId)
+			case streamTypeUnidirectionalLocal:
+				c.localUniStreams.updateMax(inner.MaximumStreamId)
+			default:
+				return ErrorProtocolViolation
 			}
 
 		case *ackFrame:
@@ -1491,25 +1536,17 @@ func (c *Connection) processUnprotected(hdr *packetHeader, packetNumber uint64, 
 			nonAck = false
 
 		case *streamBlockedFrame:
-			s, notifyCreated, err := c.ensureStream(inner.StreamId, true)
-			if err != nil {
-				return err
+			s := c.ensureRecvStream(inner.StreamId)
+			if s == nil {
+				return ErrorProtocolViolation
 			}
-			if notifyCreated && c.handler != nil {
-				s.setState(kStreamStateOpen)
-				c.handler.NewStream(s)
-			}
+			c.log(logTypeFlowControl, "stream %d is blocked", s.Id())
 
 		case *streamFrame:
 			c.log(logTypeTrace, "Received on stream %v %x", inner.StreamId, inner.Data)
-			s, notifyCreated, err := c.ensureStream(inner.StreamId, true)
-			if err != nil {
-				return err
-			}
-			if notifyCreated && c.handler != nil {
-				c.log(logTypeTrace, "Notifying of stream creation")
-				s.setState(kStreamStateOpen)
-				c.handler.NewStream(s)
+			s := c.ensureRecvStream(inner.StreamId)
+			if s == nil {
+				return ErrorProtocolViolation
 			}
 
 			err = c.newFrameData(s, inner)
@@ -1519,8 +1556,11 @@ func (c *Connection) processUnprotected(hdr *packetHeader, packetNumber uint64, 
 
 			if inner.StreamId == 0 {
 				// TLS process for NST.
-				available := c.streams[0].readAll()
-				err := c.tls.readPostHandshake(available)
+				available, err := ioutil.ReadAll(s)
+				if err != nil && err != ErrorWouldBlock {
+					return err
+				}
+				err = c.tls.readPostHandshake(available)
 				if err != nil {
 					return err
 				}
@@ -1537,18 +1577,14 @@ func (c *Connection) processUnprotected(hdr *packetHeader, packetNumber uint64, 
 	return nil
 }
 
-func (c *Connection) newFrameData(s *Stream, inner *streamFrame) error {
-	if s.recv.maxStreamData-inner.Offset < uint64(len(inner.Data)) {
-		return ErrorFrameFormatError
+func (c *Connection) newFrameData(s recvStreamPrivate, inner *streamFrame) error {
+	err := s.newFrameData(inner.Offset, inner.hasFin(), inner.Data)
+	if err != nil {
+		return err
 	}
-
-	s.newFrameData(inner.Offset, inner.hasFin(), inner.Data)
-
-	remaining := s.recv.maxStreamData - s.recv.lastReceivedByte()
-	c.log(logTypeFlowControl, "Stream %d has %d bytes of credit remaining, last byte received was",
-		s.Id(), remaining, s.recv.lastReceivedByte())
-	if remaining < uint64(kInitialMaxStreamData) && s.Id() != 0 {
-		c.issueStreamCredit(s, int(kInitialMaxStreamData))
+	max, credit := s.creditMaxStreamData()
+	if credit {
+		c.issueStreamCredit(s, max)
 	}
 	return nil
 }
@@ -1588,7 +1624,7 @@ func (c *Connection) processAckRange(start uint64, end uint64, protected bool) {
 	for {
 		// TODO(ekr@rtfm.com): properly filter for ACKed packets which are in the
 		// wrong key phase.
-		c.log(logTypeConnection, "%s: processing ACK for PN=%x", c.label(), pn)
+		c.log(logTypeConnection, "processing ACK for PN=%x", pn)
 
 		// 1. Go through the outgoing queues and remove all the acked chunks.
 		c.removeAckedFrames(pn, &c.outputClearQ)
@@ -1621,7 +1657,7 @@ func (c *Connection) processAckRange(start uint64, end uint64, protected bool) {
 
 func (c *Connection) processAckFrame(f *ackFrame, protected bool) error {
 	var receivedAcks ackRanges
-	c.log(logTypeAck, "%s: processing ACK last=%x first ack block=%d", c.label(), f.LargestAcknowledged, f.FirstAckBlock)
+	c.log(logTypeAck, "processing ACK last=%x first ack block=%d", f.LargestAcknowledged, f.FirstAckBlock)
 	end := f.LargestAcknowledged
 
 	start := (end - f.FirstAckBlock)
@@ -1631,7 +1667,7 @@ func (c *Connection) processAckFrame(f *ackFrame, protected bool) error {
 	ackDelay := time.Duration(ackDelayMicros * 1e3)
 
 	// Process the First ACK Block
-	c.log(logTypeAck, "%s: processing ACK range %x-%x", c.label(), start, end)
+	c.log(logTypeAck, "processing ACK range %x-%x", start, end)
 	c.processAckRange(start, end, protected)
 	receivedAcks = append(receivedAcks, ackRange{end, end - start})
 
@@ -1647,12 +1683,12 @@ func (c *Connection) processAckFrame(f *ackFrame, protected bool) error {
 		// Not clear why the peer did this, but ignore.
 		if block.Length == 0 {
 			last -= uint64(block.Gap)
-			c.log(logTypeAck, "%s: encountered empty ACK block", c.label())
+			c.log(logTypeAck, "encountered empty ACK block")
 			continue
 		}
 
 		last = start
-		c.log(logTypeAck, "%s: processing ACK range %x-%x", c.label(), start, end)
+		c.log(logTypeAck, "processing ACK range %x-%x", start, end)
 		c.processAckRange(start, end, protected)
 		receivedAcks = append(receivedAcks, ackRange{end, end - start})
 	}
@@ -1671,21 +1707,26 @@ func (c *Connection) CheckTimer() (int, error) {
 
 	c.log(logTypeConnection, "Checking timer")
 
-	if time.Now().After(c.lastInput.Add(time.Second * time.Duration(c.idleTimeout))) {
-		c.log(logTypeConnection, "Connection is idle for more than %v", c.idleTimeout)
-		return 0, ErrorConnectionTimedOut
+	if c.state == StateClosing {
+		if time.Now().After(c.closingEnd) {
+			c.log(logTypeConnection, "End of draining period, closing")
+			c.setState(StateClosed)
+			return 0, ErrorConnIsClosed
+		}
+		return 0, ErrorConnIsClosing
 	}
 
-	if c.state == StateClosing && time.Now().After(c.closingEnd) {
-		c.log(logTypeConnection, "End of draining period, closing")
-		c.setState(StateClosed)
-		return 0, ErrorConnIsClosed
+	if time.Now().After(c.lastInput.Add(c.idleTimeout)) {
+		c.log(logTypeConnection, "Connection is idle for more than %v", c.idleTimeout)
+		c.setState(StateClosing)
+		c.closingEnd = time.Now()
+		return 0, ErrorConnIsClosing
 	}
 
 	// Right now just re-send everything we might need to send.
 
 	// Special case the client's first message.
-	if c.Role == RoleClient && (c.state == StateInit ||
+	if c.role == RoleClient && (c.state == StateInit ||
 		c.state == StateWaitServerFirstFlight) {
 		err := c.sendClientInitial()
 		return 1, err
@@ -1697,7 +1738,12 @@ func (c *Connection) CheckTimer() (int, error) {
 
 func (c *Connection) setTransportParameters() {
 	// TODO(ekr@rtfm.com): Process the others..
-	_ = c.streams[0].processMaxStreamData(uint64(c.tpHandler.peerParams.maxStreamsData))
+
+	// Cut stream 0 flow control down to something reasonable.
+	c.stream0.sendStreamPrivate.(*sendStream).maxStreamData = uint64(c.tpHandler.peerParams.maxStreamsData)
+
+	c.localBidiStreams.updateMax(uint64(c.tpHandler.peerParams.maxStreamIdBidi))
+	c.localUniStreams.updateMax(uint64(c.tpHandler.peerParams.maxStreamIdUni))
 }
 
 func (c *Connection) setupAeadMasking() (err error) {
@@ -1710,7 +1756,7 @@ func (c *Connection) setupAeadMasking() (err error) {
 	}
 
 	var sendLabel, recvLabel string
-	if c.Role == RoleClient {
+	if c.role == RoleClient {
 		sendLabel = clientCtSecretLabel
 		recvLabel = serverCtSecretLabel
 	} else {
@@ -1733,7 +1779,7 @@ func (c *Connection) setupAeadMasking() (err error) {
 // Called when the handshake is complete.
 func (c *Connection) handshakeComplete() (err error) {
 	var sendLabel, recvLabel string
-	if c.Role == RoleClient {
+	if c.role == RoleClient {
 		sendLabel = clientPpSecretLabel
 		recvLabel = serverPpSecretLabel
 	} else {
@@ -1758,45 +1804,68 @@ func (c *Connection) packetNonce(pn uint64) []byte {
 	return encodeArgs(pn)
 }
 
-// Create a stream on a given connection. Returns the created
-// stream.
-func (c *Connection) CreateStream() *Stream {
-	// First see if there is a stream that we haven't
-	// created with this suffix.
-	suff := c.streamSuffix(c.Role, false)
-	var i uint64
-	for i = 0; i <= c.maxStream; i++ {
-		if (i & 0x3) != suff {
-			continue
-		}
-		if c.streams[i] == nil {
-			s, _, _ := c.ensureStream(i, false)
-			s.setState(kStreamStateOpen)
-			return s
-		}
+// CreateStream creates a stream that can send and receive.
+func (c *Connection) CreateStream() Stream {
+	c.log(logTypeStream, "Creating new Stream")
+	s := c.localBidiStreams.create(func(id uint64) hasIdentity {
+		recvMax := uint64(c.tpHandler.peerParams.maxStreamsData)
+		return newStream(c, id, kInitialMaxStreamData, recvMax)
+	})
+	if s != nil {
+		return s.(Stream)
 	}
-
-	// TODO(ekr@rtfm.com): Too tired to figure out the math here
-	// for the same parity.
-	for i = c.maxStream + 1; (i & 0x3) != suff; i++ {
-	}
-
-	c.log(logTypeStream, "Creating stream %v", i)
-	s, _, _ := c.ensureStream(i, false)
-	s.setState(kStreamStateOpen)
-	return s
+	return nil
 }
 
-// Get the stream with stream id |id|. Returns nil if no such
-// stream exists.
-func (c *Connection) GetStream(id uint32) *Stream {
-	iid := int(id)
+// CreateSendStream creates a stream that can send only.
+func (c *Connection) CreateSendStream() SendStream {
+	c.log(logTypeStream, "Creating new SendStream")
+	s := c.localUniStreams.create(func(id uint64) hasIdentity {
+		recvMax := uint64(c.tpHandler.peerParams.maxStreamsData)
+		return newSendStream(c, id, recvMax)
+	})
+	if s != nil {
+		return s.(SendStream)
+	}
+	return nil
+}
 
-	if iid >= len(c.streams) {
+// GetStream retrieves a stream with the given id. Returns nil if
+// no such stream exists.
+func (c *Connection) GetStream(id uint64) Stream {
+	var s hasIdentity
+	switch streamTypeFromId(id, c.role) {
+	case streamTypeBidirectionalLocal:
+		s = c.localBidiStreams.get(id)
+	case streamTypeBidirectionalRemote:
+		s = c.remoteBidiStreams.get(id)
+	default:
 		return nil
 	}
+	if s != nil {
+		return s.(Stream)
+	}
+	return nil
+}
 
-	return c.streams[iid]
+// GetSendStream retrieves a stream with the given id. Returns
+// nil if no such stream exists.
+func (c *Connection) GetSendStream(id uint64) SendStream {
+	s := c.localUniStreams.get(id)
+	if s != nil {
+		return s.(SendStream)
+	}
+	return nil
+}
+
+// GetRecvStream retrieves a stream with the given id. Returns
+// nil if no such stream exists.
+func (c *Connection) GetRecvStream(id uint64) RecvStream {
+	s := c.remoteUniStreams.get(id)
+	if s != nil {
+		return s.(RecvStream)
+	}
+	return nil
 }
 
 func generateRand64() (uint64, error) {
@@ -1844,7 +1913,7 @@ func (c *Connection) close(code ErrorCode, reason string, savePacket bool) error
 
 // Close a connection.
 func (c *Connection) Close() error {
-	c.log(logTypeConnection, "%v Close()", c.label())
+	c.log(logTypeConnection, "Close()")
 	return c.close(kQuicErrorNoError, "You don't have to go home but you can't stay here", true)
 }
 
@@ -1883,7 +1952,7 @@ func (c *Connection) handleError(e error) error {
 	}
 
 	// Connection has failed.
-	logf(logTypeConnection, "%v: failed with Error=%v", c.label(), e.Error())
+	logf(logTypeConnection, "failed with Error=%v", e.Error())
 	c.setState(StateError)
 
 	return e
