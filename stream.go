@@ -621,7 +621,9 @@ func newStreamSet(t streamType, role Role, nstreams int) *streamSet {
 }
 
 func (ss *streamSet) check(id uint64) {
-	assert((id >> 2) < uint64(^uint(0)>>1)) // safeguard against overflow
+	// If sizeof(int) == sizeof(uint64), then we will never overflow int.
+	assert(^uint64(0) == uint64(^uint(0)))
+	assert((id & (^uint64(0) >> 2)) == id) // The top bits should be clear.
 	assert((id & 3) == ss.t.suffix(ss.role))
 }
 
