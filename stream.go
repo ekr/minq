@@ -637,11 +637,7 @@ func (ss *streamSet) id(index int) uint64 {
 }
 
 func (ss *streamSet) updateMax(id uint64) {
-	ss.nstreams = ss.index(id)
-	// Stream 0 is a nightmare.
-	if ss.t.suffix(ss.role) != 0 {
-		ss.nstreams--
-	}
+	ss.nstreams = ss.index(id) + 1
 }
 
 func (ss *streamSet) credit(n int) uint64 {
