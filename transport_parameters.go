@@ -29,7 +29,7 @@ const (
 )
 
 const (
-	kTpDefaultAckDelayExponent  = 3
+	kTpDefaultAckDelayExponent = 3
 )
 
 type tpDef struct {
@@ -53,12 +53,12 @@ var (
 )
 
 type transportParameters struct {
-	maxStreamsData  uint32
-	maxData         uint32
-	maxStreamIdBidi uint32
-	maxStreamIdUni  uint32
-	idleTimeout     uint16
-	ackDelayExp     uint8
+	maxStreamsData uint32
+	maxData        uint32
+	maxStreamsBidi int
+	maxStreamsUni  int
+	idleTimeout    uint16
+	ackDelayExp    uint8
 }
 
 type TransportParameterList []transportParameter
@@ -282,18 +282,30 @@ func (h *transportParametersHandler) Receive(hs mint.HandshakeType, el *mint.Ext
 	if err != nil {
 		return err
 	}
-	tp.maxStreamIdBidi, err = params.getUintParameter(kTpIdInitialMaxStreamIdBidi, 4)
+	maxStream, err := params.getUintParameter(kTpIdInitialMaxStreamIdBidi, 4)
 	if err == ErrorMissingValue {
-		tp.maxStreamIdBidi = 0
-	} else if err != nil {
-		return err
+		maxStream = 0
+	} else {
+		if err != nil {
+			return err
+		}
+		if (uint64(maxStream) & 3) != streamTypeBidirectionalLocal.suffix(h.role) {
+			return ErrorInvalidEncoding
+		}
 	}
-	tp.maxStreamIdUni, err = params.getUintParameter(kTpIdInitialMaxStreamIdUni, 4)
+	tp.maxStreamsBidi = (int(maxStream) >> 2) + 1
+	maxStream, err = params.getUintParameter(kTpIdInitialMaxStreamIdUni, 4)
 	if err == ErrorMissingValue {
-		tp.maxStreamIdUni = 0
-	} else if err != nil {
-		return err
+		maxStream = 0
+	} else {
+		if err != nil {
+			return err
+		}
+		if (uint64(maxStream) & 3) != streamTypeUnidirectionalLocal.suffix(h.role) {
+			return ErrorInvalidEncoding
+		}
 	}
+	tp.maxStreamsUni = (int(maxStream) >> 2) + 1
 	var tmp uint32
 	tmp, err = params.getUintParameter(kTpIdIdleTimeout, 2)
 	if err != nil {

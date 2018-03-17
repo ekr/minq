@@ -1748,8 +1748,8 @@ func (c *Connection) setTransportParameters() {
 	c.stream0.sendStreamPrivate.(*sendStream).maxStreamData = uint64(c.tpHandler.peerParams.maxStreamsData)
 
 	c.flowControl.update(uint64(c.tpHandler.peerParams.maxData))
-	c.localBidiStreams.updateMax(uint64(c.tpHandler.peerParams.maxStreamIdBidi))
-	c.localUniStreams.updateMax(uint64(c.tpHandler.peerParams.maxStreamIdUni))
+	c.localBidiStreams.nstreams = c.tpHandler.peerParams.maxStreamsBidi
+	c.localUniStreams.nstreams = c.tpHandler.peerParams.maxStreamsUni
 }
 
 func (c *Connection) setupAeadMasking() (err error) {
