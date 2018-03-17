@@ -28,6 +28,10 @@ const (
 	kTpIdInitialMaxStreamIdUni  = TransportParameterId(0x0008)
 )
 
+const (
+	kTpDefaultAckDelayExponent  = 3
+)
+
 type tpDef struct {
 	parameter TransportParameterId
 	val       uint32
@@ -53,6 +57,7 @@ type transportParameters struct {
 	maxStreamIdBidi uint32
 	maxStreamIdUni  uint32
 	idleTimeout     uint16
+	ackDelayExp     uint8
 }
 
 type TransportParameterList []transportParameter
@@ -308,6 +313,14 @@ func (h *transportParametersHandler) Receive(hs mint.HandshakeType, el *mint.Ext
 		return err
 	}
 	tp.idleTimeout = uint16(tmp)
+
+	tmp, err = params.getUintParameter(kTpIdAckDelayExponent, 1)
+	if err == ErrorMissingValue {
+		tmp = kTpDefaultAckDelayExponent
+	} else if err != nil {
+		return err
+	}
+	tp.ackDelayExp = uint8(tmp)
 
 	h.peerParams = &tp
 
