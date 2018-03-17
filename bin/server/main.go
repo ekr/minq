@@ -66,11 +66,14 @@ func (h *feedthroughConnHandler) StateChanged(s minq.State) {
 	log.Println("State changed to ", s)
 }
 
-func (h *feedthroughConnHandler) NewStream(s *minq.Stream) {
+func (h *feedthroughConnHandler) NewStream(s minq.Stream) {
+	log.Println("Created new stream id=", s.Id())
+}
+func (h *feedthroughConnHandler) NewRecvStream(s minq.RecvStream) {
 	log.Println("Created new stream id=", s.Id())
 }
 
-func (h *feedthroughConnHandler) StreamReadable(s *minq.Stream) {
+func (h *feedthroughConnHandler) StreamReadable(s minq.RecvStream) {
 	log.Println("Ready to read for stream id=", s.Id())
 	for {
 		b := make([]byte, 1024)
@@ -91,7 +94,7 @@ func (h *feedthroughConnHandler) StreamReadable(s *minq.Stream) {
 		b = b[:n]
 		h.bytesRead += n
 		os.Stdout.Write(b)
-		log.Println("Total bytes read = %d", h.bytesRead)
+		log.Printf("Total bytes read = %d\n", h.bytesRead)
 
 		if echo {
 			// Flip the case so we can distinguish echo
@@ -100,7 +103,8 @@ func (h *feedthroughConnHandler) StreamReadable(s *minq.Stream) {
 					b[i] ^= 0x20
 				}
 			}
-			s.Write(b)
+			// This isn't really going to work but for now.
+			s.(minq.SendStream).Write(b)
 		}
 	}
 }
@@ -116,7 +120,7 @@ func (h *httpServerHandler) NewConnection(c *minq.Connection) {
 }
 
 type httpStream struct {
-	s      *minq.Stream
+	s      minq.Stream
 	buf    []byte
 	closed bool
 }
@@ -129,8 +133,12 @@ func (h *httpConnHandler) StateChanged(s minq.State) {
 	log.Println("State changed to ", s)
 }
 
-func (h *httpConnHandler) NewStream(s *minq.Stream) {
+func (h *httpConnHandler) NewStream(s minq.Stream) {
 	h.streams[s.Id()] = &httpStream{s, nil, false}
+}
+
+func (h *httpConnHandler) NewRecvStream(s minq.RecvStream) {
+	log.Println("For some reason some opened a unidirectional stream. Ignoring")
 }
 
 func (h *httpStream) Respond(val []byte) {
@@ -149,7 +157,7 @@ func (h *httpStream) Error(err string) {
 // Xs, up to 10,000
 // A non-number, in which case we respond with 10 repetitions
 // of that value.
-func (h *httpConnHandler) StreamReadable(s *minq.Stream) {
+func (h *httpConnHandler) StreamReadable(s minq.RecvStream) {
 	log.Println("Ready to read for stream id=", s.Id())
 	st := h.streams[s.Id()]
 	if st.closed {
