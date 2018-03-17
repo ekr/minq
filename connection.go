@@ -130,6 +130,7 @@ type Connection struct {
 	outputProtectedQ   []frame // For stream >= 0
 	clientInitial      []byte
 	recvd              *recvdPackets
+	flowControl        flowControl
 	sentAcks           map[uint64]ackRanges
 	lastInput          time.Time
 	idleTimeout        time.Duration
@@ -169,6 +170,7 @@ func NewConnection(trans Transport, role Role, tls *TlsConfig, handler Connectio
 		outputProtectedQ:   nil,
 		clientInitial:      nil,
 		recvd:              nil,
+		flowControl:        flowControl{0, 0},
 		sentAcks:           make(map[uint64]ackRanges, 0),
 		lastInput:          time.Now(),
 		idleTimeout:        time.Second * 5, // a pretty short time
@@ -1510,6 +1512,9 @@ func (c *Connection) processUnprotected(hdr *packetHeader, packetNumber uint64, 
 			// Stop processing any more frames.
 			return nil
 
+		case *maxDataFrame:
+			c.flowControl.update(inner.MaximumData)
+
 		case *maxStreamDataFrame:
 			s := c.ensureSendStream(inner.StreamId)
 			if s == nil {
@@ -1742,6 +1747,7 @@ func (c *Connection) setTransportParameters() {
 	// Cut stream 0 flow control down to something reasonable.
 	c.stream0.sendStreamPrivate.(*sendStream).maxStreamData = uint64(c.tpHandler.peerParams.maxStreamsData)
 
+	c.flowControl.update(uint64(c.tpHandler.peerParams.maxData))
 	c.localBidiStreams.updateMax(uint64(c.tpHandler.peerParams.maxStreamIdBidi))
 	c.localUniStreams.updateMax(uint64(c.tpHandler.peerParams.maxStreamIdUni))
 }

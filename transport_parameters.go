@@ -35,12 +35,13 @@ type tpDef struct {
 }
 
 var (
+	kInitialMaxData             = uint64(65536)
 	kInitialMaxStreamData       = uint64(8192)
 	kConcurrentStreamsBidi      = 16
 	kConcurrentStreamsUni       = 16
 	kTransportParameterDefaults = []tpDef{
 		{kTpIdInitialMaxStreamsData, uint32(kInitialMaxStreamData), 4},
-		{kTpIdInitialMaxData, 8192, 4},
+		{kTpIdInitialMaxData, uint32(kInitialMaxData), 4},
 		{kTpIdInitialMaxStreamIdBidi, 0, 4},
 		{kTpIdIdleTimeout, 5, 2},
 		{kTpIdInitialMaxStreamIdUni, 0, 4},
@@ -277,11 +278,15 @@ func (h *transportParametersHandler) Receive(hs mint.HandshakeType, el *mint.Ext
 		return err
 	}
 	tp.maxStreamIdBidi, err = params.getUintParameter(kTpIdInitialMaxStreamIdBidi, 4)
-	if err != nil {
+	if err == ErrorMissingValue {
+		tp.maxStreamIdBidi = 0
+	} else if err != nil {
 		return err
 	}
 	tp.maxStreamIdUni, err = params.getUintParameter(kTpIdInitialMaxStreamIdUni, 4)
-	if err != nil {
+	if err == ErrorMissingValue {
+		tp.maxStreamIdUni = 0
+	} else if err != nil {
 		return err
 	}
 	var tmp uint32
