@@ -4,10 +4,10 @@ import (
 	"flag"
 	"fmt"
 	"github.com/ekr/minq"
+	"log"
 	"net"
 	"os"
 	"runtime/pprof"
-	"log"
 	"time"
 )
 
@@ -23,14 +23,16 @@ type connHandler struct {
 }
 
 func (h *connHandler) StateChanged(s minq.State) {
-	log.Println("State changed to ", minq.StateName(s))
+	log.Println("State changed to ", s)
 }
 
-
-func (h *connHandler) NewStream(s *minq.Stream) {
+func (h *connHandler) NewStream(s minq.Stream) {
 }
 
-func (h *connHandler) StreamReadable(s *minq.Stream) {
+func (h *connHandler) NewRecvStream(s minq.RecvStream) {
+}
+
+func (h *connHandler) StreamReadable(s minq.RecvStream) {
 	for {
 		b := make([]byte, 1024)
 
@@ -95,7 +97,7 @@ func main() {
 		pprof.StartCPUProfile(f)
 		log.Println("CPU profiler started")
 		defer pprof.StopCPUProfile()
-    }
+	}
 
 	// Default to the host component of addr.
 	if serverName == "" {
@@ -151,7 +153,7 @@ func main() {
 	log.Println("Connection established")
 
 	// Make all the streams we need
-	streams := make([]*minq.Stream, httpCount)
+	streams := make([]minq.Stream, httpCount)
 	for i := 0; i < httpCount; i++ {
 		streams[i] = conn.CreateStream()
 	}
@@ -219,7 +221,7 @@ func main() {
 			}
 		case i := <-stdin:
 			if i == nil {
-			// TODO(piet@devae.re) close the apropriate stream(s)
+				// TODO(piet@devae.re) close the apropriate stream(s)
 			}
 			streams[0].Write(i)
 			if err != nil {
