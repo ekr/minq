@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"os"
 	"testing"
 	"time"
 )
@@ -611,6 +612,7 @@ func TestSessionResumption(t *testing.T) {
 	pair := csPair{client, server}
 	pair.handshake(t)
 
+	fmt.Fprintln(os.Stderr, "Consuming NST")
 	// Consume NST.
 	err := inputAll(pair.client)
 	assertNotError(t, err, "Couldn't read NST")

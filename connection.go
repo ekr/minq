@@ -666,28 +666,23 @@ func (c *Connection) sendQueued(bareAcks bool) (int, error) {
 
 	sent := int(0)
 
-	/*
-	 * ENQUEUE STUFF
-	 */
-
-	// FIRST enqueue data for stream 0
-	err := c.queueStreamFrames(false)
-	if err != nil {
-		return sent, err
-	}
-
-	// SECOND enqueue data for protected streams
-	if c.state == StateEstablished {
-		err := c.queueStreamFrames(true)
-		if err != nil {
-			return sent, err
+	if c.state != StateEstablished {
+		c.enqueueStreamFrames(c.stream0, &c.outputClearQ)
+	} else {
+		// We still need to send client Finished.
+		if c.role == RoleClient {
+			c.enqueueStreamFrames(c.stream0, &c.outputClearQ)
 		}
+		// Output all the stream frames that are now permitted by stream flow control
+		c.forEachSend(func(s sendStreamPrivate) {
+			if c.role == RoleServer || s.Id() != 0 {
+				c.enqueueStreamFrames(s, &c.outputProtectedQ)
+			}
+		})
 
 		/*
 		 * SEND STUFF
 		 */
-
-		// THIRD send enqueued data from protected streams
 		s, err := c.sendQueuedFrames(packetTypeProtectedShort, true, bareAcks)
 		if err != nil {
 			return sent, err
@@ -697,7 +692,8 @@ func (c *Connection) sendQueued(bareAcks bool) (int, error) {
 		bareAcks = false
 	}
 
-	// FOURTH send enqueued data from stream 0
+	// Finally send enqueued data from stream 0 in case there is still
+	// some hanging around.
 	s, err := c.sendQueuedFrames(packetTypeHandshake, false, bareAcks)
 	if err != nil {
 		return sent, err
@@ -740,6 +736,7 @@ func (c *Connection) queueFrame(q *[]frame, f frame) {
 }
 
 func (c *Connection) enqueueStreamFrames(s sendStreamPrivate, q *[]frame) {
+	c.log(logTypeStream, "enqeueStream frames id=%v", s.Id())
 	if s == nil {
 		return
 	}
@@ -750,7 +747,6 @@ func (c *Connection) enqueueStreamFrames(s sendStreamPrivate, q *[]frame) {
 	}
 }
 
-// Send all the queued data on a set of streams with packet type |pt|
 func (c *Connection) queueStreamFrames(protected bool) error {
 	c.log(logTypeConnection, "%v: queueStreamFrames, protected=%v",
 		c.role, protected)
@@ -762,7 +758,7 @@ func (c *Connection) queueStreamFrames(protected bool) error {
 
 	// Output all the stream frames that are now permitted by stream flow control
 	c.forEachSend(func(s sendStreamPrivate) {
-		if s.Id() != 0 {
+		if protected || s.Id() != 0 {
 			c.enqueueStreamFrames(s, &c.outputProtectedQ)
 		}
 	})
@@ -1548,6 +1544,7 @@ func (c *Connection) processUnprotected(hdr *packetHeader, packetNumber uint64, 
 			c.log(logTypeFlowControl, "stream %d is blocked", s.Id())
 
 		case *streamFrame:
+			c.log(logTypeConnection, "Received data on stream %v length=%v", inner.StreamId, len(inner.Data))
 			c.log(logTypeTrace, "Received on stream %v %x", inner.StreamId, inner.Data)
 			s := c.ensureRecvStream(inner.StreamId)
 			if s == nil {
