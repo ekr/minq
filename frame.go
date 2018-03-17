@@ -23,7 +23,7 @@ const (
 	kFrameTypePing            = frameType(0x7)
 	kFrameTypeBlocked         = frameType(0x8)
 	kFrameTypeStreamBlocked   = frameType(0x9)
-	kFrameTypeStreamIdNeeded  = frameType(0xa)
+	kFrameTypeStreamIdBlocked = frameType(0xa)
 	kFrameTypeNewConnectionId = frameType(0xb)
 	kFrameTypeStopSending     = frameType(0xc)
 	kFrameTypeAck             = frameType(0xe)
@@ -114,8 +114,8 @@ func decodeFrame(data []byte) (uintptr, *frame, error) {
 		inner = &blockedFrame{}
 	case t == uint8(kFrameTypeStreamBlocked):
 		inner = &streamBlockedFrame{}
-	case t == uint8(kFrameTypeStreamIdNeeded):
-		inner = &streamIdNeededFrame{}
+	case t == uint8(kFrameTypeStreamIdBlocked):
+		inner = &streamIdBlockedFrame{}
 	case t == uint8(kFrameTypeNewConnectionId):
 		inner = &newConnectionIdFrame{}
 	case t == uint8(kFrameTypeStopSending):
@@ -336,17 +336,24 @@ func (f streamBlockedFrame) getType() frameType {
 	return kFrameTypeStreamBlocked
 }
 
-// STREAM_ID_NEEDED
-type streamIdNeededFrame struct {
-	Type frameType
+// STREAM_ID_BLOCKED
+type streamIdBlockedFrame struct {
+	Type     frameType
+	StreamId uint64 `tls:"varint"`
 }
 
-func (f streamIdNeededFrame) String() string {
-	return "STREAM_ID_NEEDED"
+func (f streamIdBlockedFrame) String() string {
+	return "STREAM_ID_BLOCKED"
 }
 
-func (f streamIdNeededFrame) getType() frameType {
-	return kFrameTypeStreamIdNeeded
+func (f streamIdBlockedFrame) getType() frameType {
+	return kFrameTypeStreamIdBlocked
+}
+
+func newStreamIdBlockedFrame(id uint64) frame {
+	return newFrame(0, &streamIdBlockedFrame{
+		kFrameTypeStreamIdBlocked,
+		id})
 }
 
 // NEW_CONNECTION_ID

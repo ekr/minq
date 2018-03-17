@@ -1814,6 +1814,8 @@ func (c *Connection) CreateStream() Stream {
 	if s != nil {
 		return s.(Stream)
 	}
+	nextStreamId := c.localBidiStreams.id(len(c.localBidiStreams.streams))
+	c.sendFrame(newStreamIdBlockedFrame(nextStreamId))
 	return nil
 }
 
