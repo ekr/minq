@@ -47,12 +47,13 @@ func newTestStreamFixture(t *testing.T) *testStreamFixture {
 		logf(tag, fullFormat, args...)
 	}
 
+	fc := flowControl{2048, 0}
 	return &testStreamFixture{
 		t:    t,
 		name: name,
 		log:  log,
-		r:    &recvStreamBase{streamCommon: streamCommon{log: log, maxStreamData: 2048}},
-		w:    &sendStreamBase{streamCommon: streamCommon{log: log, maxStreamData: 2048}},
+		r:    &recvStreamBase{streamCommon: streamCommon{log: log, fc: fc}},
+		w:    &sendStreamBase{streamCommon: streamCommon{log: log, fc: fc}},
 		b:    nil,
 	}
 }
@@ -154,7 +155,7 @@ func TestStreamIncreaseFlowControl(t *testing.T) {
 	f := newTestStreamFixture(t)
 	f.w.processMaxStreamData(2050)
 	f.w.processMaxStreamData(2000)
-	assertEquals(t, uint64(2050), f.w.maxStreamData)
+	assertEquals(t, uint64(2050), f.w.fc.max)
 }
 
 func countChunkLens(chunks []streamChunk) int {

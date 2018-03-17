@@ -1747,7 +1747,7 @@ func (c *Connection) setTransportParameters() {
 	// TODO(ekr@rtfm.com): Process the others..
 
 	// Cut stream 0 flow control down to something reasonable.
-	c.stream0.sendStreamPrivate.(*sendStream).maxStreamData = uint64(c.tpHandler.peerParams.maxStreamsData)
+	c.stream0.sendStreamPrivate.(*sendStream).fc.max = uint64(c.tpHandler.peerParams.maxStreamsData)
 
 	c.flowControl.update(uint64(c.tpHandler.peerParams.maxData))
 	c.localBidiStreams.nstreams = c.tpHandler.peerParams.maxStreamsBidi

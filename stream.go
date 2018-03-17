@@ -171,10 +171,10 @@ func (sc streamChunk) String() string {
 }
 
 type streamCommon struct {
-	log           loggingFunction
-	offset        uint64
-	chunks        []streamChunk
-	maxStreamData uint64
+	log    loggingFunction
+	offset uint64
+	chunks []streamChunk
+	fc     flowControl
 }
 
 func (s *streamCommon) insertSortedChunk(offset uint64, last bool, payload []byte) {
@@ -268,14 +268,14 @@ func (s *sendStreamBase) outstandingQueuedBytes() int {
 
 // Push out all the frames permitted by flow control.
 func (s *sendStreamBase) outputWritable() ([]streamChunk, bool) {
-	s.log(logTypeStream, "outputWritable, current max offset=%d)", s.maxStreamData)
+	s.log(logTypeStream, "outputWritable, current max offset=%d)", s.fc.max)
 	out := make([]streamChunk, 0)
 	blocked := false
 	for len(s.chunks) > 0 {
 		ch := s.chunks[0]
-		if ch.offset+uint64(len(ch.data)) > s.maxStreamData {
+		if ch.offset+uint64(len(ch.data)) > s.fc.max {
 			blocked = true
-			s.log(logTypeFlowControl, "stream blocked at maxStreamData=%d, chunk(offset=%d, len=%d)", s.maxStreamData, ch.offset, len(ch.data))
+			s.log(logTypeFlowControl, "stream blocked at maxStreamData=%d, chunk(offset=%d, len=%d)", s.fc.max, ch.offset, len(ch.data))
 			break
 		}
 		out = append(out, ch)
@@ -295,11 +295,7 @@ func (s *sendStreamBase) outputWritable() ([]streamChunk, bool) {
 }
 
 func (s *sendStreamBase) processMaxStreamData(offset uint64) {
-	if offset < s.maxStreamData {
-		return
-	}
-	s.log(logTypeFlowControl, "max send offset set to %d", offset)
-	s.maxStreamData = offset
+	s.fc.update(offset)
 }
 
 func (s *sendStreamBase) close() {
@@ -343,7 +339,7 @@ func (s *recvStreamBase) newFrameData(offset uint64, last bool, payload []byte) 
 	s.log(logTypeStream, "New data offset=%d, len=%d", offset, len(payload))
 
 	end := offset + uint64(len(payload))
-	if s.maxStreamData < s.lastReceived {
+	if s.fc.max < s.lastReceived {
 		return ErrorFrameFormatError
 	}
 	if last {
@@ -460,21 +456,17 @@ func (s *recvStreamBase) handleReset(offset uint64) error {
 }
 
 func (s *recvStreamBase) creditMaxStreamData() (uint64, bool) {
-	remaining := s.maxStreamData - s.lastReceived
+	remaining := s.fc.max - s.lastReceived
 	s.log(logTypeFlowControl, "%d bytes of credit remaining, lastReceived=%d",
 		remaining, s.lastReceived)
 	credit := false
 	if remaining < kInitialMaxStreamData/2 {
 		credit = true
 
-		max := ^uint64(0)
-		if max-s.maxStreamData > kInitialMaxStreamData {
-			max = s.maxStreamData + kInitialMaxStreamData
-		}
-		s.maxStreamData = max
+		s.fc.credit(kInitialMaxStreamData)
 	}
 
-	return s.maxStreamData, credit
+	return s.fc.max, credit
 }
 
 // SendStream is a unidirectional stream for sending.
@@ -492,8 +484,8 @@ func newSendStream(c *Connection, id uint64, initialMax uint64) sendStreamPrivat
 		c: c, id: id,
 		sendStreamBase: sendStreamBase{
 			streamCommon: streamCommon{
-				log:           newStreamLogger(id, "send", c.log),
-				maxStreamData: initialMax,
+				log: newStreamLogger(id, "send", c.log),
+				fc:  flowControl{initialMax, 0},
 			},
 			state:   SendStreamStateOpen,
 			blocked: false,
@@ -550,8 +542,8 @@ func newRecvStream(c *Connection, id uint64, maxStreamData uint64) recvStreamPri
 		c: c, id: id,
 		recvStreamBase: recvStreamBase{
 			streamCommon: streamCommon{
-				log:           newStreamLogger(id, "recv", c.log),
-				maxStreamData: maxStreamData,
+				log: newStreamLogger(id, "recv", c.log),
+				fc:  flowControl{maxStreamData, 0},
 			},
 			state:    RecvStreamStateRecv,
 			readable: false,
@@ -693,6 +685,14 @@ func (fc *flowControl) update(max uint64) {
 	if max > fc.max {
 		fc.max = max
 	}
+}
+
+func (fc *flowControl) credit(c uint64) {
+	max := ^uint64(0)
+	if max-fc.max > c {
+		max = fc.max + c
+	}
+	fc.max = max
 }
 
 func (fc *flowControl) take(other *flowControl, amount uint64) uint64 {
