@@ -636,6 +636,32 @@ func (ss *streamSet) id(index int) uint64 {
 	return uint64(index<<2) | uint64(ss.t.suffix(ss.role))
 }
 
+type flowControl struct {
+	max  uint64
+	used uint64
+}
+
+func (fc *flowControl) update(max uint64) {
+	if max > fc.max {
+		fc.max = max
+	}
+}
+
+func (fc *flowControl) take(other *flowControl, amount uint64) uint64 {
+	taken := fc.available()
+	if taken > other.available() {
+		taken = other.available()
+	}
+	if taken > amount {
+		taken = amount
+	}
+	return taken
+}
+
+func (fc *flowControl) available() uint64 {
+	return fc.max - fc.used
+}
+
 func (ss *streamSet) updateMax(id uint64) {
 	ss.nstreams = ss.index(id) + 1
 }
