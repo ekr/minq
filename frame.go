@@ -247,6 +247,10 @@ func (f maxDataFrame) getType() frameType {
 	return kFrameTypeMaxData
 }
 
+func newMaxData(m uint64) frame {
+	return newFrame(0, &maxDataFrame{kFrameTypeMaxData, m})
+}
+
 // MAX_STREAM_DATA
 type maxStreamDataFrame struct {
 	Type              frameType

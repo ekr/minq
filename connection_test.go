@@ -374,7 +374,7 @@ func TestSendReceiveBigData(t *testing.T) {
 	pair.handshake(t)
 	buf := make([]byte, 100000)
 
-	for i, _ := range buf {
+	for i := range buf {
 		buf[i] = byte(i & 0xff)
 	}
 
@@ -383,12 +383,16 @@ func TestSendReceiveBigData(t *testing.T) {
 
 	// Write data C->S
 	cs := pair.client.CreateStream()
-	cs.Write(buf)
-	cs.Close()
-
+	remaining := buf
 	for !handler.done {
-		inputAll(pair.server)
-		inputAll(pair.client)
+		if len(remaining) > 0 {
+			n, err := cs.Write(remaining)
+			assertNotError(t, err, "write should work")
+			remaining = remaining[n:]
+			if len(remaining) == 0 {
+				cs.Close()
+			}
+		}
 		inputAll(pair.server)
 		inputAll(pair.client)
 	}

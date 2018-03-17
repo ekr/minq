@@ -274,14 +274,17 @@ func (h *transportParametersHandler) Receive(hs mint.HandshakeType, el *mint.Ext
 	// TODO(ekr@rtfm.com): Enforce that each param appears only once.
 	var tp transportParameters
 	h.log(logTypeHandshake, "Reading transport parameters values")
+
 	tp.maxStreamsData, err = params.getUintParameter(kTpIdInitialMaxStreamsData, 4)
 	if err != nil {
 		return err
 	}
+
 	tp.maxData, err = params.getUintParameter(kTpIdInitialMaxData, 4)
 	if err != nil {
 		return err
 	}
+
 	maxStream, err := params.getUintParameter(kTpIdInitialMaxStreamIdBidi, 4)
 	if err == ErrorMissingValue {
 		maxStream = 0
@@ -293,6 +296,7 @@ func (h *transportParametersHandler) Receive(hs mint.HandshakeType, el *mint.Ext
 			return ErrorInvalidEncoding
 		}
 	}
+
 	tp.maxStreamsBidi = (int(maxStream) >> 2) + 1
 	maxStream, err = params.getUintParameter(kTpIdInitialMaxStreamIdUni, 4)
 	if err == ErrorMissingValue {
@@ -305,6 +309,7 @@ func (h *transportParametersHandler) Receive(hs mint.HandshakeType, el *mint.Ext
 			return ErrorInvalidEncoding
 		}
 	}
+
 	tp.maxStreamsUni = (int(maxStream) >> 2) + 1
 	var tmp uint32
 	tmp, err = params.getUintParameter(kTpIdIdleTimeout, 2)

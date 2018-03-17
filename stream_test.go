@@ -19,7 +19,7 @@ type testStreamFixture struct {
 func (f *testStreamFixture) read() {
 	assertX(f.t, f.r.readable, "stream should be readable")
 	f.b = make([]byte, 1024)
-	n, err := f.r.read(f.b)
+	n, err := f.r.read(f.b, &flowControl{1024, 0})
 	assertNotError(f.t, err, "Should be able to read bytes")
 	f.b = f.b[:n]
 	assertX(f.t, f.r.clearReadable(), "should have been readable")
@@ -27,7 +27,7 @@ func (f *testStreamFixture) read() {
 
 func (f *testStreamFixture) readExpectError(exerr error) {
 	f.b = make([]byte, 1024)
-	n, err := f.r.read(f.b)
+	n, err := f.r.read(f.b, &flowControl{1024, 0})
 	assertError(f.t, err, "Should not be able to read bytes")
 	assertEquals(f.t, exerr, err)
 	assertEquals(f.t, 0, n)
@@ -169,19 +169,27 @@ func countChunkLens(chunks []streamChunk) int {
 func TestStreamBlockRelease(t *testing.T) {
 	f := newTestStreamFixture(t)
 	b := make([]byte, 5000)
-	err := f.w.write(b)
+	connFc := &flowControl{uint64(len(b)), 0}
+	n, err := f.w.write(b, connFc)
 	assertEquals(t, nil, err)
-	chunks, blocked := f.w.outputWritable()
-	assertX(t, blocked, "Output is blocked")
+	chunks := f.w.outputWritable()
 	assertEquals(t, 2048, countChunkLens(chunks))
+	assertEquals(t, 2048, n)
+	assertEquals(t, uint64(2048), connFc.used)
 	// Calling output writable again returns 0 chunks
-	// and not blocked (so we don't complain twice).
-	chunks, blocked = f.w.outputWritable()
-	assertX(t, !blocked, "Output is blocked")
+	chunks = f.w.outputWritable()
 	assertEquals(t, 0, countChunkLens(chunks))
+
+	// Writing again blocks
+	_, err = f.w.write(b[n:], connFc)
+	assertEquals(t, ErrorWouldBlock, err)
+
 	// Increasing the limit should let us write.
 	f.w.processMaxStreamData(8192)
-	chunks, blocked = f.w.outputWritable()
-	assertX(t, !blocked, "Output is not blocked")
+	n, err = f.w.write(b[n:], connFc)
+	assertNotError(t, err, "Writing works")
+	assertEquals(t, 2952, n)
+	assertEquals(t, connFc.max, connFc.used)
+	chunks = f.w.outputWritable()
 	assertEquals(t, 2952, countChunkLens(chunks))
 }

@@ -130,7 +130,8 @@ type Connection struct {
 	outputProtectedQ   []frame // For stream >= 0
 	clientInitial      []byte
 	recvd              *recvdPackets
-	flowControl        flowControl
+	sendFlowControl    flowControl
+	recvFlowControl    flowControl
 	sentAcks           map[uint64]ackRanges
 	lastInput          time.Time
 	idleTimeout        time.Duration
@@ -170,7 +171,8 @@ func NewConnection(trans Transport, role Role, tls *TlsConfig, handler Connectio
 		outputProtectedQ:   nil,
 		clientInitial:      nil,
 		recvd:              nil,
-		flowControl:        flowControl{0, 0},
+		sendFlowControl:    flowControl{0, 0},
+		recvFlowControl:    flowControl{kInitialMaxData, 0},
 		sentAcks:           make(map[uint64]ackRanges, 0),
 		lastInput:          time.Now(),
 		idleTimeout:        time.Second * 5, // a pretty short time
@@ -407,7 +409,7 @@ func (c *Connection) sendClientInitial() error {
 	// Enqueue the frame for transmission.
 	queued = append(queued, f)
 
-	c.stream0.sendStreamPrivate.(*sendStream).offset = uint64(len(c.clientInitial))
+	c.stream0.sendStreamPrivate.(*sendStream).fc.used = uint64(len(c.clientInitial))
 
 	for i := 0; i < topad; i++ {
 		queued = append(queued, newPaddingFrame(0))
@@ -642,7 +644,11 @@ func (c *Connection) sendFramesInPacket(pt uint8, tosend []frame) error {
 
 func (c *Connection) sendOnStream0(data []byte) error {
 	c.log(logTypeConnection, "sending %v bytes on stream 0", len(data))
+	fc := c.sendFlowControl
+	c.sendFlowControl.max += uint64(len(data))
 	_, err := c.stream0.Write(data)
+	c.sendFlowControl = fc
+	assert(err != ErrorWouldBlock)
 	return err
 }
 
@@ -745,8 +751,7 @@ func (c *Connection) enqueueStreamFrames(s sendStreamPrivate, q *[]frame) {
 	if s == nil {
 		return
 	}
-	chunks, _ := s.outputWritable()
-	for _, ch := range chunks {
+	for _, ch := range s.outputWritable() {
 		f := newStreamFrame(s.Id(), ch.offset, ch.data, ch.last)
 		c.queueFrame(q, f)
 	}
@@ -1170,7 +1175,7 @@ func (c *Connection) processClientInitial(hdr *packetHeader, payload []byte) err
 		return err
 	}
 
-	c.stream0.recvStreamPrivate.(*recvStream).offset = uint64(len(sf.Data))
+	c.stream0.recvStreamPrivate.(*recvStream).fc.used = uint64(len(sf.Data))
 	c.setTransportParameters()
 
 	err = c.sendOnStream0(sflt)
@@ -1218,7 +1223,7 @@ func (c *Connection) processCleartext(hdr *packetHeader, payload []byte, naf *bo
 
 		case *streamFrame:
 			// If this is duplicate data and if so early abort.
-			if inner.Offset+uint64(len(inner.Data)) <= c.stream0.recvStreamPrivate.(*recvStream).offset {
+			if inner.Offset+uint64(len(inner.Data)) <= c.stream0.recvStreamPrivate.(*recvStream).fc.used {
 				continue
 			}
 
@@ -1238,7 +1243,7 @@ func (c *Connection) processCleartext(hdr *packetHeader, payload []byte, naf *bo
 				// 2. Set the outgoing stream offset accordingly
 				// 3. Remember the connection ID
 				if len(c.clientInitial) > 0 {
-					c.stream0.sendStreamPrivate.(*sendStream).offset = uint64(len(c.clientInitial))
+					c.stream0.sendStreamPrivate.(*sendStream).fc.used = uint64(len(c.clientInitial))
 					c.clientInitial = nil
 					c.serverConnId = hdr.ConnectionID
 				}
@@ -1257,7 +1262,10 @@ func (c *Connection) processCleartext(hdr *packetHeader, payload []byte, naf *bo
 				return nonFatalError("Received cleartext with stream id != 0")
 			}
 
-			err = c.newFrameData(c.stream0, inner)
+			fc := c.recvFlowControl
+			c.recvFlowControl.max += uint64(len(inner.Data))
+			err = c.stream0.newFrameData(inner.Offset, inner.hasFin(), inner.Data)
+			c.recvFlowControl = fc
 			if err != nil {
 				return err
 			}
@@ -1265,7 +1273,6 @@ func (c *Connection) processCleartext(hdr *packetHeader, payload []byte, naf *bo
 			if err != nil && err != ErrorWouldBlock {
 				return err
 			}
-			// c.issueStreamCredit(c.streams[0], len(available))
 			out, err := c.tls.handshake(available)
 			if err != nil {
 				return err
@@ -1420,6 +1427,26 @@ func filterFrames(in []frame, f frameFilterFunc) []frame {
 	return out
 }
 
+func (c *Connection) issueCredit(amount int) {
+	remaining := c.recvFlowControl.max - c.recvFlowControl.used
+	if remaining > kInitialMaxData/2 {
+		return
+	}
+
+	c.recvFlowControl.credit(kInitialMaxData)
+	// Remove other MAX_STREAM_DATA frames so we don't retransmit them. This violates
+	// the current spec, but offline we all agree it's silly. See:
+	// https://github.com/quicwg/base-drafts/issues/806
+	c.outputProtectedQ = filterFrames(c.outputProtectedQ, func(f *frame) bool {
+		_, ok := f.f.(*maxDataFrame)
+		return !ok
+	})
+
+	_ = c.sendFrame(newMaxData(c.recvFlowControl.max))
+	c.log(logTypeFlowControl, "Issuing more credit for connection, new offset=%d",
+		c.recvFlowControl.max)
+}
+
 func (c *Connection) issueStreamCredit(s RecvStream, max uint64) {
 	// Don't issue credit for stream 0 during the handshake.
 	if s.Id() == 0 && c.state != StateEstablished {
@@ -1515,7 +1542,7 @@ func (c *Connection) processUnprotected(hdr *packetHeader, packetNumber uint64, 
 			return nil
 
 		case *maxDataFrame:
-			c.flowControl.update(inner.MaximumData)
+			c.sendFlowControl.update(inner.MaximumData)
 
 		case *maxStreamDataFrame:
 			s := c.ensureSendStream(inner.StreamId)
@@ -1556,7 +1583,7 @@ func (c *Connection) processUnprotected(hdr *packetHeader, packetNumber uint64, 
 				return ErrorProtocolViolation
 			}
 
-			err = c.newFrameData(s, inner)
+			err = s.newFrameData(inner.Offset, inner.hasFin(), inner.Data)
 			if err != nil {
 				return err
 			}
@@ -1581,18 +1608,6 @@ func (c *Connection) processUnprotected(hdr *packetHeader, packetNumber uint64, 
 		}
 	}
 
-	return nil
-}
-
-func (c *Connection) newFrameData(s recvStreamPrivate, inner *streamFrame) error {
-	err := s.newFrameData(inner.Offset, inner.hasFin(), inner.Data)
-	if err != nil {
-		return err
-	}
-	max, credit := s.creditMaxStreamData()
-	if credit {
-		c.issueStreamCredit(s, max)
-	}
 	return nil
 }
 
@@ -1749,7 +1764,7 @@ func (c *Connection) setTransportParameters() {
 	// Cut stream 0 flow control down to something reasonable.
 	c.stream0.sendStreamPrivate.(*sendStream).fc.max = uint64(c.tpHandler.peerParams.maxStreamsData)
 
-	c.flowControl.update(uint64(c.tpHandler.peerParams.maxData))
+	c.sendFlowControl.update(uint64(c.tpHandler.peerParams.maxData))
 	c.localBidiStreams.nstreams = c.tpHandler.peerParams.maxStreamsBidi
 	c.localUniStreams.nstreams = c.tpHandler.peerParams.maxStreamsUni
 }
