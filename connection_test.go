@@ -264,7 +264,7 @@ func TestSendReceiveCISI(t *testing.T) {
 
 func drain(t *testing.T, c *Connection) {
 	// Reach into the connection and frob the timer so that we don't have to wait.
-	c.closingEnd = time.Now()
+	c.closingEnd = time.Now().Add(-1 * time.Microsecond)
 	_, err := c.CheckTimer()
 	assertEquals(t, err, ErrorConnIsClosed)
 	assertEquals(t, c.GetState(), StateClosed)
