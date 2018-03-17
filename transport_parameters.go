@@ -78,10 +78,6 @@ type encryptedExtensionsTransportParameters struct {
 	Parameters        TransportParameterList `tls:"head=2"`
 }
 
-type newSessionTicketTransportParameters struct {
-	Parameters TransportParameterList `tls:"head=2"`
-}
-
 func (tp *TransportParameterList) addUintParameter(id TransportParameterId, val uint32, size uintptr) error {
 	var buf bytes.Buffer
 	uintEncodeInt(&buf, uint64(val), size)
@@ -232,59 +228,45 @@ func (h *transportParametersHandler) Receive(hs mint.HandshakeType, el *mint.Ext
 
 	var params *TransportParameterList
 
-	if h.role == RoleClient {
-		if hs == mint.HandshakeTypeEncryptedExtensions {
-			if !found {
-				h.log(logTypeHandshake, "Missing transport parameters")
-				return fmt.Errorf("Missing transport parameters")
-			}
-			var eeParams encryptedExtensionsTransportParameters
-			_, err = syntax.Unmarshal(body.body, &eeParams)
-			if err != nil {
-				h.log(logTypeHandshake, "Failed to decode parameters")
-				return err
-			}
-			params = &eeParams.Parameters
-			// TODO(ekr@rtfm.com): Process version #s
-		} else if hs == mint.HandshakeTypeNewSessionTicket {
-			if !found {
-				h.log(logTypeHandshake, "Missing transport parameters")
-				return fmt.Errorf("Missing transport parameters")
-			}
-			var nstParams newSessionTicketTransportParameters
-			_, err = syntax.Unmarshal(body.body, &nstParams)
-			if err != nil {
-				h.log(logTypeHandshake, "Failed to decode parameters")
-				return err
-			}
-			params = &nstParams.Parameters
-		} else {
-			if found {
-				return fmt.Errorf("Received quic_transport_parameters in inappropriate message %v", hs)
-			}
-			return nil
+	switch hs {
+	case mint.HandshakeTypeEncryptedExtensions:
+		if h.role != RoleClient {
+			return fmt.Errorf("EncryptedExtensions received but not a client")
 		}
-	} else {
-		if hs == mint.HandshakeTypeClientHello {
-			if !found {
-				h.log(logTypeHandshake, "Missing transport parameters")
-				return fmt.Errorf("Missing transport parameters")
-			}
+		if !found {
+			h.log(logTypeHandshake, "Missing transport parameters")
+			return fmt.Errorf("Missing transport parameters")
+		}
+		var eeParams encryptedExtensionsTransportParameters
+		_, err = syntax.Unmarshal(body.body, &eeParams)
+		if err != nil {
+			h.log(logTypeHandshake, "Failed to decode parameters")
+			return err
+		}
+		params = &eeParams.Parameters
+		// TODO(ekr@rtfm.com): Process version #s
+	case mint.HandshakeTypeClientHello:
+		if h.role != RoleServer {
+			return fmt.Errorf("ClientHello received but not a server")
+		}
+		if !found {
+			h.log(logTypeHandshake, "Missing transport parameters")
+			return fmt.Errorf("Missing transport parameters")
+		}
 
-			// TODO(ekr@rtfm.com): Process version #s
-			var chParams clientHelloTransportParameters
-			_, err = syntax.Unmarshal(body.body, &chParams)
-			if err != nil {
-				h.log(logTypeHandshake, "Couldn't unmarshal %v", err)
-				return err
-			}
-			params = &chParams.Parameters
-		} else {
-			if found {
-				return fmt.Errorf("Received quic_transport_parameters in inappropriate message %v", hs)
-			}
-			return nil
+		// TODO(ekr@rtfm.com): Process version #s
+		var chParams clientHelloTransportParameters
+		_, err = syntax.Unmarshal(body.body, &chParams)
+		if err != nil {
+			h.log(logTypeHandshake, "Couldn't unmarshal %v", err)
+			return err
 		}
+		params = &chParams.Parameters
+	default:
+		if found {
+			return fmt.Errorf("Received quic_transport_parameters in inappropriate message %v", hs)
+		}
+		return nil
 	}
 
 	// Now try to process each param.
