@@ -854,3 +854,21 @@ func TestBidirectionalStopSending(t *testing.T) {
 	assertEquals(t, n, 0)
 	assertEquals(t, cstream.RecvState(), RecvStreamStateDataRead)
 }
+
+func TestStreamIdBlocked(t *testing.T) {
+	pair := newCsPair(t)
+	pair.handshake(t)
+
+	for i := 0; i < kConcurrentStreamsBidi; i++ {
+		assertNotNil(t, pair.server.CreateStream(),
+			"create and discard a bidirectional stream")
+	}
+	assertEquals(t, nil, pair.server.CreateStream())
+
+	for i := 0; i < kConcurrentStreamsUni; i++ {
+		assertNotNil(t, pair.client.CreateSendStream(),
+			"create and discard a unidirectional stream")
+	}
+	assertEquals(t, nil, pair.client.CreateSendStream())
+	// TODO: check that both sides send STREAM_ID_BLOCKED
+}

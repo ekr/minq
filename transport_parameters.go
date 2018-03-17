@@ -134,6 +134,10 @@ func (tp *TransportParameterList) createCommonTransportParameters(streamAdd uint
 		switch p.parameter {
 		case kTpIdInitialMaxStreamIdBidi:
 			v = uint32(kConcurrentStreamsBidi-1)*4 + streamAdd
+			if (v & 3) == 0 {
+				// All hail stream 0.
+				v += 4
+			}
 		case kTpIdInitialMaxStreamIdUni:
 			v = uint32(kConcurrentStreamsUni-1)*4 + 2 + streamAdd
 		}
@@ -337,7 +341,7 @@ func (h *transportParametersHandler) createEncryptedExtensionsTransportParameter
 		nil,
 	}
 
-	err := eetp.Parameters.createCommonTransportParameters(4)
+	err := eetp.Parameters.createCommonTransportParameters(0)
 	if err != nil {
 		return nil, err
 	}
