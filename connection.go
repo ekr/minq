@@ -1451,6 +1451,19 @@ func (c *Connection) issueCredit(force bool) {
 		&c.recvFlowControl)
 }
 
+func (c *Connection) updateBlocked() {
+	c.outputProtectedQ = filterFrames(c.outputProtectedQ, func(f *frame) bool {
+		_, ok := f.f.(*blockedFrame)
+		return !ok
+	})
+	if c.sendFlowControl.remaining() > 0 {
+		return
+	}
+	f := newBlockedFrame(c.sendFlowControl.used)
+	_ = c.sendFrame(f)
+	c.log(logTypeFlowControl, "sending %v", f)
+}
+
 func (c *Connection) issueStreamCredit(s RecvStream, max uint64) {
 	// Don't issue credit for stream 0 during the handshake.
 	if s.Id() == 0 && c.state != StateEstablished {
@@ -1465,11 +1478,28 @@ func (c *Connection) issueStreamCredit(s RecvStream, max uint64) {
 		if !ok {
 			return true
 		}
-		return !(inner.StreamId == s.Id())
+		return inner.StreamId != s.Id()
 	})
 
 	_ = c.sendFrame(newMaxStreamData(s.Id(), max))
 	c.log(logTypeFlowControl, "Issuing stream credit for stream %d, now %v", s.Id(), max)
+}
+
+func (c *Connection) updateStreamBlocked(s sendStreamPrivate) {
+	c.outputProtectedQ = filterFrames(c.outputProtectedQ, func(f *frame) bool {
+		inner, ok := f.f.(*streamBlockedFrame)
+		if !ok {
+			return true
+		}
+		return inner.StreamId != s.Id()
+	})
+	fc := s.flowControl()
+	if fc.remaining() > 0 {
+		return
+	}
+	f := newStreamBlockedFrame(s.Id(), fc.used)
+	_ = c.sendFrame(f)
+	c.log(logTypeFlowControl, "sending %v", f)
 }
 
 func (c *Connection) issueStreamIdCredit(t streamType) {
@@ -1547,6 +1577,7 @@ func (c *Connection) processUnprotected(hdr *packetHeader, packetNumber uint64, 
 
 		case *maxDataFrame:
 			c.sendFlowControl.update(inner.MaximumData)
+			c.updateBlocked()
 
 		case *blockedFrame:
 			c.log(logTypeFlowControl, "peer is blocked at %v", inner.Offset)
@@ -1558,6 +1589,7 @@ func (c *Connection) processUnprotected(hdr *packetHeader, packetNumber uint64, 
 				return ErrorProtocolViolation
 			}
 			s.processMaxStreamData(inner.MaximumStreamData)
+			c.updateStreamBlocked(s)
 
 		case *streamBlockedFrame:
 			s := c.ensureRecvStream(inner.StreamId)

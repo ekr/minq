@@ -109,6 +109,7 @@ type sendStreamPrivateMethods interface {
 	outstandingQueuedBytes() int
 	processMaxStreamData(uint64)
 	outputWritable() []streamChunk
+	flowControl() flowControl
 }
 
 type recvStreamMethods interface {
@@ -277,6 +278,10 @@ func (s *sendStreamBase) outstandingQueuedBytes() int {
 		n += len(ch.data)
 	}
 	return n
+}
+
+func (s *sendStreamBase) flowControl() flowControl {
+	return s.fc
 }
 
 // Push out all the frames permitted by flow control.
@@ -503,6 +508,10 @@ func (s *sendStream) Write(data []byte) (int, error) {
 
 	n, err := s.write(data, &s.c.sendFlowControl)
 	if err != nil {
+		if err == ErrorWouldBlock {
+			s.c.updateStreamBlocked(s)
+			s.c.updateBlocked()
+		}
 		return n, err
 	}
 
