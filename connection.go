@@ -1429,10 +1429,10 @@ func filterFrames(in []frame, f frameFilterFunc) []frame {
 	return out
 }
 
-func (c *Connection) issueCredit(amount int) {
+func (c *Connection) issueCredit(force bool) {
 	c.log(logTypeFlowControl, "connection flow control credit %v", &c.recvFlowControl)
 	// Always ensure that there is at least half an initial *stream* flow control window available.
-	if c.recvFlowControl.remaining() > (kInitialMaxStreamData / 2) {
+	if !force && c.recvFlowControl.remaining() > (kInitialMaxStreamData/2) {
 		return
 	}
 
@@ -1548,12 +1548,24 @@ func (c *Connection) processUnprotected(hdr *packetHeader, packetNumber uint64, 
 		case *maxDataFrame:
 			c.sendFlowControl.update(inner.MaximumData)
 
+		case *blockedFrame:
+			c.log(logTypeFlowControl, "peer is blocked at %v", inner.Offset)
+			c.issueCredit(true)
+
 		case *maxStreamDataFrame:
 			s := c.ensureSendStream(inner.StreamId)
 			if s == nil {
 				return ErrorProtocolViolation
 			}
 			s.processMaxStreamData(inner.MaximumStreamData)
+
+		case *streamBlockedFrame:
+			s := c.ensureRecvStream(inner.StreamId)
+			if s == nil {
+				return ErrorProtocolViolation
+			}
+			c.log(logTypeFlowControl, "peer stream %d is blocked at %v", s.Id(), inner.Offset)
+			s.creditMaxStreamData(true)
 
 		case *maxStreamIdFrame:
 			switch streamTypeFromId(inner.MaximumStreamId, c.role) {
@@ -1572,13 +1584,6 @@ func (c *Connection) processUnprotected(hdr *packetHeader, packetNumber uint64, 
 				return err
 			}
 			nonAck = false
-
-		case *streamBlockedFrame:
-			s := c.ensureRecvStream(inner.StreamId)
-			if s == nil {
-				return ErrorProtocolViolation
-			}
-			c.log(logTypeFlowControl, "stream %d is blocked", s.Id())
 
 		case *streamFrame:
 			c.log(logTypeStream, "Received on stream %v", inner)

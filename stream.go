@@ -122,6 +122,7 @@ type recvStreamPrivateMethods interface {
 	handleReset(offset uint64) error
 	clearReadable() bool
 	newFrameData(uint64, bool, []byte, *flowControl) error
+	creditMaxStreamData(bool)
 }
 
 // SendStream can send.
@@ -551,9 +552,9 @@ func (s *recvStream) Id() uint64 {
 	return s.id
 }
 
-func (s *recvStream) creditMaxStreamData() {
+func (s *recvStream) creditMaxStreamData(force bool) {
 	s.log(logTypeFlowControl, "credit flow control %v", &s.fc)
-	if s.fc.remaining() < kInitialMaxStreamData/2 {
+	if force || s.fc.remaining() < kInitialMaxStreamData/2 {
 		s.fc.max = s.readOffset + kInitialMaxData
 		s.log(logTypeFlowControl, "increased flow control to %v", &s.fc)
 		s.c.issueStreamCredit(s, s.fc.max)
@@ -572,9 +573,9 @@ func (s *recvStream) Read(b []byte) (int, error) {
 	}
 	s.c.amountRead += uint64(n)
 	// Now issue credit for stream flow control, ...
-	s.creditMaxStreamData()
+	s.creditMaxStreamData(false)
 	// ..., connection flow control, ...
-	s.c.issueCredit(n)
+	s.c.issueCredit(false)
 	// and streams.
 	if s.state == RecvStreamStateDataRead {
 		s.c.issueStreamIdCredit(streamTypeFromId(s.id, s.c.role))
