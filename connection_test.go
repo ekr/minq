@@ -430,7 +430,7 @@ func TestSendReceiveRetransmit(t *testing.T) {
 	assertByteEquals(t, []byte(testString), b)
 
 	// Write data S->C
-	for i, _ := range b {
+	for i := range b {
 		b[i] ^= 0xff
 	}
 	ss.Write(b)
@@ -875,4 +875,58 @@ func TestStreamIdBlocked(t *testing.T) {
 	}
 	assertEquals(t, nil, pair.client.CreateSendStream())
 	// TODO: check that both sides send STREAM_ID_BLOCKED
+}
+
+func TestConnectionLevelFlowControl(t *testing.T) {
+	pair := newCsPair(t)
+	pair.handshake(t)
+
+	writeBuf := make([]byte, 1024)
+	for i := range writeBuf {
+		writeBuf[i] = byte(i & 0xff)
+	}
+
+	cstreams := make([]SendStream, int(kConcurrentStreamsUni))
+	outstanding := make([]int, int(kConcurrentStreamsUni))
+	for i := range cstreams {
+		s := pair.client.CreateSendStream()
+		cstreams[i] = s
+		var err error
+		for err == nil {
+			// This is a truly messed up compiler bug.  You can't use
+			//     n, err := s.Write(writeBuf)
+			// because go will assume that you want a new `err`, but
+			// that isn't used.  In other words, it chooses name
+			// shadowing over reuse here.
+			var n int
+			n, err = s.Write(writeBuf)
+			outstanding[i] += n
+		}
+	}
+
+	// At this point, the client has exhausted its connection flow control credit.
+	// Let it send frames and have the server read some more.
+	inputAll(pair.server)
+
+	// Read a little bit from the server side.
+	readBuf := make([]byte, len(writeBuf))
+	sstream := pair.server.GetRecvStream(cstreams[0].Id())
+	for outstanding[0] > 0 {
+		n, err := sstream.Read(readBuf)
+		assertNotError(t, err, "if we wrote it, it should be read")
+		assertEquals(t, n, len(writeBuf))
+		assertByteEquals(t, readBuf, writeBuf[:n])
+		outstanding[0] -= n
+	}
+
+	// Now let the MAX_DATA frame propagate and check that we can write again.
+	pair.server.sendQueued(false)
+	inputAll(pair.client)
+
+	// Use the last stream, which shouldn't have written anything.
+	last := len(outstanding) - 1
+	assertEquals(t, outstanding[last], 0)
+	n, err := cstreams[last].Write(writeBuf)
+	assertNotError(t, err, "should write successfully")
+	assertEquals(t, n, len(writeBuf))
 }

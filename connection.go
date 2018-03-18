@@ -132,6 +132,7 @@ type Connection struct {
 	recvd              *recvdPackets
 	sendFlowControl    flowControl
 	recvFlowControl    flowControl
+	amountRead         uint64
 	sentAcks           map[uint64]ackRanges
 	lastInput          time.Time
 	idleTimeout        time.Duration
@@ -173,6 +174,7 @@ func NewConnection(trans Transport, role Role, tls *TlsConfig, handler Connectio
 		recvd:              nil,
 		sendFlowControl:    flowControl{0, 0},
 		recvFlowControl:    flowControl{kInitialMaxData, 0},
+		amountRead:         0,
 		sentAcks:           make(map[uint64]ackRanges, 0),
 		lastInput:          time.Now(),
 		idleTimeout:        time.Second * 5, // a pretty short time
@@ -1001,7 +1003,7 @@ func (c *Connection) input(p []byte) error {
 	}
 
 	typ := hdr.getHeaderType()
-	c.log(logTypeFlowControl, "EKR: Received packet %x len=%d", hdr.PacketNumber, len(p))
+	c.log(logTypeTrace, "Received packet %x len=%d", hdr.PacketNumber, len(p))
 	c.log(logTypeConnection, "Packet header %v, %d", hdr, typ)
 
 	if isLongHeader(&hdr) && hdr.Version == 0 {
@@ -1174,8 +1176,9 @@ func (c *Connection) processClientInitial(hdr *packetHeader, payload []byte) err
 		_, err = c.sendPacketRaw(packetTypeRetry, hdr.ConnectionID, hdr.PacketNumber, kQuicVersion, sf.encoded, false)
 		return err
 	}
-
-	c.stream0.recvStreamPrivate.(*recvStream).fc.used = uint64(len(sf.Data))
+	recv0 := c.stream0.recvStreamPrivate.(*recvStream)
+	recv0.fc.used = uint64(len(sf.Data))
+	recv0.readOffset = uint64(len(sf.Data))
 	c.setTransportParameters()
 
 	err = c.sendOnStream0(sflt)
@@ -1223,7 +1226,7 @@ func (c *Connection) processCleartext(hdr *packetHeader, payload []byte, naf *bo
 
 		case *streamFrame:
 			// If this is duplicate data and if so early abort.
-			if inner.Offset+uint64(len(inner.Data)) <= c.stream0.recvStreamPrivate.(*recvStream).fc.used {
+			if inner.Offset+uint64(len(inner.Data)) <= c.stream0.recvStreamPrivate.(*recvStream).readOffset {
 				continue
 			}
 
@@ -1262,10 +1265,9 @@ func (c *Connection) processCleartext(hdr *packetHeader, payload []byte, naf *bo
 				return nonFatalError("Received cleartext with stream id != 0")
 			}
 
-			fc := c.recvFlowControl
-			c.recvFlowControl.max += uint64(len(inner.Data))
-			err = c.stream0.newFrameData(inner.Offset, inner.hasFin(), inner.Data)
-			c.recvFlowControl = fc
+			// Use fake flow control for the handshake.
+			fc := flowControl{^uint64(0), 0}
+			err = c.stream0.newFrameData(inner.Offset, inner.hasFin(), inner.Data, &fc)
 			if err != nil {
 				return err
 			}
@@ -1428,12 +1430,14 @@ func filterFrames(in []frame, f frameFilterFunc) []frame {
 }
 
 func (c *Connection) issueCredit(amount int) {
-	remaining := c.recvFlowControl.max - c.recvFlowControl.used
-	if remaining > kInitialMaxData/2 {
+	c.log(logTypeFlowControl, "connection flow control credit %v", &c.recvFlowControl)
+	// Always ensure that there is at least half an initial *stream* flow control window available.
+	if c.recvFlowControl.remaining() > (kInitialMaxStreamData / 2) {
 		return
 	}
 
-	c.recvFlowControl.credit(kInitialMaxData)
+	c.log(logTypeFlowControl, "connection flow control credit %v", &c.recvFlowControl)
+	c.recvFlowControl.max = c.amountRead + kInitialMaxData
 	// Remove other MAX_STREAM_DATA frames so we don't retransmit them. This violates
 	// the current spec, but offline we all agree it's silly. See:
 	// https://github.com/quicwg/base-drafts/issues/806
@@ -1443,8 +1447,8 @@ func (c *Connection) issueCredit(amount int) {
 	})
 
 	_ = c.sendFrame(newMaxData(c.recvFlowControl.max))
-	c.log(logTypeFlowControl, "Issuing more credit for connection, new offset=%d",
-		c.recvFlowControl.max)
+	c.log(logTypeFlowControl, "connection flow control now %v",
+		&c.recvFlowControl)
 }
 
 func (c *Connection) issueStreamCredit(s RecvStream, max uint64) {
@@ -1465,7 +1469,7 @@ func (c *Connection) issueStreamCredit(s RecvStream, max uint64) {
 	})
 
 	_ = c.sendFrame(newMaxStreamData(s.Id(), max))
-	c.log(logTypeFlowControl, "Issuing more stream credit for stream %d new offset=%d", s.Id(), max)
+	c.log(logTypeFlowControl, "Issuing stream credit for stream %d, now %v", s.Id(), max)
 }
 
 func (c *Connection) issueStreamIdCredit(t streamType) {
@@ -1583,7 +1587,7 @@ func (c *Connection) processUnprotected(hdr *packetHeader, packetNumber uint64, 
 				return ErrorProtocolViolation
 			}
 
-			err = s.newFrameData(inner.Offset, inner.hasFin(), inner.Data)
+			err = s.newFrameData(inner.Offset, inner.hasFin(), inner.Data, &c.recvFlowControl)
 			if err != nil {
 				return err
 			}
