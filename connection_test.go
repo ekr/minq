@@ -877,19 +877,15 @@ func TestStreamIdBlocked(t *testing.T) {
 	// TODO: check that both sides send STREAM_ID_BLOCKED
 }
 
-func TestConnectionLevelFlowControl(t *testing.T) {
-	pair := newCsPair(t)
-	pair.handshake(t)
-
+func fillConnectionCongestionWindow(c *Connection) ([]SendStream, []int, []byte) {
 	writeBuf := make([]byte, 1024)
 	for i := range writeBuf {
 		writeBuf[i] = byte(i & 0xff)
 	}
-
 	cstreams := make([]SendStream, int(kConcurrentStreamsUni))
 	outstanding := make([]int, int(kConcurrentStreamsUni))
 	for i := range cstreams {
-		s := pair.client.CreateSendStream()
+		s := c.CreateSendStream()
 		cstreams[i] = s
 		var err error
 		for err == nil {
@@ -903,6 +899,16 @@ func TestConnectionLevelFlowControl(t *testing.T) {
 			outstanding[i] += n
 		}
 	}
+	return cstreams, outstanding, writeBuf
+}
+
+func TestConnectionLevelFlowControl(t *testing.T) {
+	pair := newCsPair(t)
+	pair.handshake(t)
+
+	cstreams,
+		outstanding,
+		writeBuf := fillConnectionCongestionWindow(pair.client)
 
 	// At this point, the client has exhausted its connection flow control credit.
 	// Let it send frames and have the server read some more.
@@ -918,6 +924,31 @@ func TestConnectionLevelFlowControl(t *testing.T) {
 		assertByteEquals(t, readBuf, writeBuf[:n])
 		outstanding[0] -= n
 	}
+
+	// Now let the MAX_DATA frame propagate and check that we can write again.
+	pair.server.sendQueued(false)
+	inputAll(pair.client)
+
+	// Use the last stream, which shouldn't have written anything.
+	last := len(outstanding) - 1
+	assertEquals(t, outstanding[last], 0)
+	n, err := cstreams[last].Write(writeBuf)
+	assertNotError(t, err, "should write successfully")
+	assertEquals(t, n, len(writeBuf))
+}
+
+func TestConnectionLevelFlowControlRst(t *testing.T) {
+	pair := newCsPair(t)
+	pair.handshake(t)
+
+	cstreams,
+		outstanding,
+		writeBuf := fillConnectionCongestionWindow(pair.client)
+
+	// Connection flow control should be exhausted now.
+	// Now reset one of those streams.
+	cstreams[0].Reset(kQuicErrorNoError)
+	inputAll(pair.server)
 
 	// Now let the MAX_DATA frame propagate and check that we can write again.
 	pair.server.sendQueued(false)
