@@ -448,24 +448,6 @@ func (s *recvStreamBase) read(b []byte) (int, error) {
 	return read, nil
 }
 
-func (s *recvStreamBase) handleReset(offset uint64) error {
-	switch s.state {
-	case RecvStreamStateRecv:
-		s.fc.used = offset
-	case RecvStreamStateDataRecvd, RecvStreamStateResetRead:
-		panic("we don't use this state")
-	case RecvStreamStateSizeKnown, RecvStreamStateDataRead:
-		if offset != s.fc.used {
-			return ErrorProtocolViolation
-		}
-	default:
-		panic("unknown state")
-	}
-	s.setRecvState(RecvStreamStateResetRecvd)
-	s.chunks = nil
-	return nil
-}
-
 // SendStream is a unidirectional stream for sending.
 type sendStream struct {
 	c  *Connection
@@ -559,6 +541,31 @@ func (s *recvStream) creditMaxStreamData(force bool) {
 		s.log(logTypeFlowControl, "increased flow control to %v", &s.fc)
 		s.c.issueStreamCredit(s, s.fc.max)
 	}
+}
+
+func (s *recvStream) handleReset(offset uint64) error {
+	switch s.state {
+	case RecvStreamStateRecv:
+		s.fc.used = offset
+	case RecvStreamStateDataRecvd, RecvStreamStateResetRead:
+		panic("we don't use this state")
+	case RecvStreamStateSizeKnown, RecvStreamStateDataRead:
+		if offset != s.fc.used {
+			return ErrorProtocolViolation
+		}
+	default:
+		panic("unknown state")
+	}
+
+	s.setRecvState(RecvStreamStateResetRecvd)
+	s.chunks = nil
+
+	// Pretend that we read this much data.
+	s.c.amountRead += s.fc.used - s.readOffset
+	s.readOffset = s.fc.used
+	s.c.issueCredit(false)
+
+	return nil
 }
 
 // Read implements io.Reader.
