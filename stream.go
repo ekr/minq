@@ -20,6 +20,28 @@ const (
 	SendStreamStateResetRecvd  = SendStreamState(6) // Not tracked
 )
 
+// String produces a nice string from a SendStreamState.
+func (s SendStreamState) String() string {
+	switch s {
+	case SendStreamStateOpen:
+		return "SendStreamStateOpen"
+	case SendStreamStateSend:
+		return "SendStreamStateSend"
+	case SendStreamStateCloseQueued:
+		return "SendStreamStateCloseQueued"
+	case SendStreamStateDataSent:
+		return "SendStreamStateDataSent"
+	case SendStreamStateResetSent:
+		return "SendStreamStateResetSent"
+	case SendStreamStateDataRecvd:
+		return "SendStreamStateDataRecvd"
+	case SendStreamStateResetRecvd:
+		return "SendStreamStateResetRecvd"
+	default:
+		panic("Unknown SendStreamState")
+	}
+}
+
 // RecvStreamState is the state of a RecvStream
 type RecvStreamState uint8
 
@@ -32,6 +54,26 @@ const (
 	RecvStreamStateDataRead   = RecvStreamState(4)
 	RecvStreamStateResetRead  = RecvStreamState(5) // Not tracked
 )
+
+// String produces a nice string from a RecvStreamState.
+func (s RecvStreamState) String() string {
+	switch s {
+	case RecvStreamStateRecv:
+		return "RecvStreamStateRecv"
+	case RecvStreamStateSizeKnown:
+		return "RecvStreamStateSizeKnown"
+	case RecvStreamStateDataRecvd:
+		return "RecvStreamStateDataRecvd"
+	case RecvStreamStateResetRecvd:
+		return "RecvStreamStateResetRecvd"
+	case RecvStreamStateDataRead:
+		return "RecvStreamStateDataRead"
+	case RecvStreamStateResetRead:
+		return "RecvStreamStateResetRead"
+	default:
+		panic("Unknown RecvStreamState")
+	}
+}
 
 // The structure here is a little convoluted.
 //
