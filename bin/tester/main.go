@@ -4,9 +4,10 @@ import (
 	"encoding/hex"
 	"flag"
 	"fmt"
-	"github.com/ekr/minq"
 	"io/ioutil"
 	"strings"
+
+	"github.com/ekr/minq"
 )
 
 var infile string
@@ -60,8 +61,7 @@ func main() {
 
 	strans := &stdoutTransport{}
 	config := minq.NewTlsConfig(serverName)
-	conn := minq.NewConnection(strans, minq.RoleServer,
-		&config, &connHandler{})
+	conn := minq.NewConnection(strans, minq.RoleServer, &config, nil)
 	err = conn.Input(in)
 	if err != nil {
 		fmt.Println("Couldn't process input: ", err)
