@@ -296,6 +296,7 @@ func (c *Connection) ensureRemoteBidi(id uint64) hasIdentity {
 		return newStream(c, x, kInitialMaxStreamData, msd)
 	}, func(s hasIdentity) {
 		if c.handler != nil {
+			c.log(logTypeStream, "Created Stream %v", s.Id())
 			c.handler.NewStream(s.(Stream))
 		}
 	})
@@ -336,6 +337,7 @@ func (c *Connection) ensureRecvStream(id uint64) recvStreamPrivate {
 			return newRecvStream(c, x, kInitialMaxStreamData)
 		}, func(s hasIdentity) {
 			if c.handler != nil {
+				c.log(logTypeStream, "Created RecvStream %v", s.Id())
 				c.handler.NewRecvStream(s.(RecvStream))
 			}
 		})
@@ -811,7 +813,7 @@ func (c *Connection) sendQueuedFrames(pt uint8, protected bool, bareAcks bool) (
 	spaceInPacket := c.mtu - aeadOverhead - kLongHeaderLength // TODO(ekr@rtfm.com): check header type
 	spaceInCongestionWindow -= (aeadOverhead + kLongHeaderLength)
 
-	for i, _ := range *queue {
+	for i := range *queue {
 		f := &((*queue)[i])
 		// c.log(logTypeStream, "Examining frame=%v", f)
 
@@ -822,9 +824,9 @@ func (c *Connection) sendQueuedFrames(pt uint8, protected bool, bareAcks bool) (
 
 		cAge := now.Sub(f.time)
 		if f.needsTransmit {
-			c.log(logTypeStream, "Frame %f requires transmission", f.String())
+			c.log(logTypeStream, "Frame %v requires transmission", f)
 		} else if cAge < txAge {
-			c.log(logTypeStream, "Skipping frame %f because sent too recently", f.String())
+			c.log(logTypeStream, "Skipping frame %v because sent too recently", f)
 			continue
 		}
 
@@ -834,7 +836,7 @@ func (c *Connection) sendQueuedFrames(pt uint8, protected bool, bareAcks bool) (
 			break
 		}
 
-		c.log(logTypeStream, "Sending frame %s, age = %v", f.String(), cAge)
+		c.log(logTypeStream, "Sending frame %v, age = %v", f, cAge)
 		f.time = now
 		f.needsTransmit = false
 
@@ -1548,7 +1550,7 @@ func (c *Connection) processUnprotected(hdr *packetHeader, packetNumber uint64, 
 			c.log(logTypeFlowControl, "stream %d is blocked", s.Id())
 
 		case *streamFrame:
-			c.log(logTypeTrace, "Received on stream %v %x", inner.StreamId, inner.Data)
+			c.log(logTypeStream, "Received on stream %v", inner)
 			s := c.ensureRecvStream(inner.StreamId)
 			if s == nil {
 				return ErrorProtocolViolation
@@ -1818,6 +1820,7 @@ func (c *Connection) CreateStream() Stream {
 		return newStream(c, id, kInitialMaxStreamData, recvMax)
 	})
 	if s != nil {
+		c.log(logTypeStream, "Created Stream %v", s.Id())
 		return s.(Stream)
 	}
 	nextStreamId := c.localBidiStreams.id(len(c.localBidiStreams.streams))
@@ -1833,6 +1836,7 @@ func (c *Connection) CreateSendStream() SendStream {
 		return newSendStream(c, id, recvMax)
 	})
 	if s != nil {
+		c.log(logTypeStream, "Created SendStream %v", s.Id())
 		return s.(SendStream)
 	}
 	return nil
