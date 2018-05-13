@@ -139,10 +139,9 @@ func (s *streamCommon) insertSortedChunk(offset uint64, last bool, payload []byt
 	c := streamChunk{offset, last, dup(payload)}
 	s.log(logTypeStream, "insert %v, current offset=%v", c, s.offset)
 	s.log(logTypeTrace, "payload %v", hex.EncodeToString(payload))
-	nchunks := len(s.chunks)
 
 	// First check if we can append the new slice at the end
-	if l := nchunks; l == 0 || offset > s.chunks[l-1].offset {
+	if nchunks := len(s.chunks); nchunks == 0 || offset > s.chunks[nchunks-1].offset {
 		s.chunks = append(s.chunks, c)
 	} else {
 		// Otherwise find out where it should go
@@ -160,7 +159,7 @@ func (s *streamCommon) insertSortedChunk(offset uint64, last bool, payload []byt
 		tmp = append(tmp, s.chunks[i:]...)
 		s.chunks = tmp
 	}
-	s.log(logTypeStream, "Stream now has %v chunks", nchunks)
+	s.log(logTypeStream, "Stream now has %v chunks", len(s.chunks))
 }
 
 type sendStreamBase struct {
@@ -192,6 +191,10 @@ func (s *sendStreamBase) write(data []byte) error {
 	switch s.state {
 	case SendStreamStateOpen:
 		s.setSendState(SendStreamStateSend)
+		// Allow a zero-octet write on a stream that hasn't been opened.
+		if len(data) == 0 {
+			return s.queue(data)
+		}
 	case SendStreamStateSend:
 		// OK to send
 	default:
@@ -313,6 +316,9 @@ func (s *recvStreamBase) newFrameData(offset uint64, last bool, payload []byte) 
 			// We shouldn't be increasing lastReceived in any other state.
 			return ErrorProtocolViolation
 		}
+	} else if end <= s.offset {
+		// No new data here.
+		return nil
 	}
 	s.lastReceived = end
 	if s.state != RecvStreamStateRecv && s.state != RecvStreamStateSizeKnown {
