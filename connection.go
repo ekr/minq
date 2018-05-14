@@ -200,7 +200,6 @@ func NewConnection(trans Transport, role Role, tls *TlsConfig, handler Connectio
 	c.tls.setTransportParametersHandler(c.tpHandler)
 
 	c.recvd = newRecvdPackets(c.log)
-
 	var clientStreams *streamSet
 	var err error
 	if role == RoleClient {

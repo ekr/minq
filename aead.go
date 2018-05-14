@@ -50,7 +50,7 @@ func (a *aeadWrapper) Seal(dst []byte, nonce []byte, plaintext []byte, aad []byt
 
 func (a *aeadWrapper) Open(dst []byte, nonce []byte, ciphertext []byte, aad []byte) ([]byte, error) {
 	logf(logTypeAead, "AES unprotecting aad len=%d, ciphertext len=%d", len(aad), len(ciphertext))
-	logf(logTypeTrace, "AES input %x", ciphertext)
+	logf(logTypeTrace, "AES input %x %x", aad, ciphertext)
 	ret, err := a.cipher.Open(dst, a.fmtNonce(nonce), ciphertext, aad)
 	if err != nil {
 		return nil, err
