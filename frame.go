@@ -26,7 +26,9 @@ const (
 	kFrameTypeStreamIdBlocked = frameType(0xa)
 	kFrameTypeNewConnectionId = frameType(0xb)
 	kFrameTypeStopSending     = frameType(0xc)
-	kFrameTypeAck             = frameType(0xe)
+	kFrameTypeAck             = frameType(0xd)
+	kFrameTypePathChallenge   = frameType(0xe)
+	kFrameTypePathResponse    = frameType(0xf)
 	kFrameTypeStream          = frameType(0x10)
 	kFrameTypeStreamMax       = frameType(0x17)
 )
@@ -39,8 +41,8 @@ const (
 
 const (
 	// Assume maximal sizes for these.
-	kMaxAckHeaderLength     = 17
-	kMaxAckBlockEntryLength = 8
+	kMaxAckHeaderLength     = 33
+	kMaxAckBlockEntryLength = 16
 	kMaxAckGap              = 255
 	kMaxAckBlocks           = 255
 )
@@ -122,6 +124,10 @@ func decodeFrame(data []byte) (uintptr, *frame, error) {
 		inner = &stopSendingFrame{}
 	case t == uint8(kFrameTypeAck):
 		inner = &ackFrame{}
+	case t == uint8(kFrameTypePathChallenge):
+		inner = &pathChallengeFrame{}
+	case t == uint8(kFrameTypePathResponse):
+		inner = &pathResponseFrame{}
 	case t >= uint8(kFrameTypeStream) && t <= uint8(kFrameTypeStreamMax):
 		inner = &streamFrame{}
 	default:
@@ -296,7 +302,6 @@ func (f maxStreamIdFrame) getType() frameType {
 // PING
 type pingFrame struct {
 	Type frameType
-	Data []byte `tls:"head=1"`
 }
 
 func (f pingFrame) String() string {
@@ -435,23 +440,23 @@ func newAckFrame(recvd *recvdPackets, rs ackRanges, left int) (*frame, int, erro
 
 	left -= kMaxAckHeaderLength
 
-	// FIRST, fill in the basic info of the ACK frame
-	var f ackFrame
-	f.Type = kFrameTypeAck | 0xa // 32 bit inner fields.
-	f.LargestAcknowledged = rs[0].lastPacket
-	f.FirstAckBlock = rs[0].count - 1
-	last := f.LargestAcknowledged - f.FirstAckBlock
-	f.AckBlockCount = 0
-	addedRanges := 1
-
-	/* TODO(ekr@rtfm.com): Adapt to new encoding
-	largestAckData, ok := recvd.packets[f.LargestAcknowledged]
+	last := rs[0].lastPacket
+	largestAckData, ok := recvd.packets[last]
 	// Should always be there. Packets only get removed after being set to ack2,
 	// which means we should not be acking it again.
 	assert(ok)
-	ackDelayMicros := float32(time.Since(largestAckData.t).Nanoseconds()) / 1e3
-	f.AckDelay = 0
-	*/
+
+	// FIRST, fill in the basic info of the ACK frame
+	var f ackFrame
+	f.Type = kFrameTypeAck
+	f.LargestAcknowledged = last
+	f.AckDelay = uint64(time.Since(largestAckData.t).Nanoseconds()) / 1000
+	f.AckBlockCount = 0
+	f.FirstAckBlock = rs[0].count - 1
+
+	// ...and account for the first block.
+	last -= f.FirstAckBlock
+	addedRanges := 1
 
 	// SECOND, add the remaining ACK blocks that fit and that we have
 	for (left > 0) && (addedRanges < len(rs)) {
@@ -466,14 +471,56 @@ func newAckFrame(recvd *recvdPackets, rs ackRanges, left int) (*frame, int, erro
 
 		last = rs[addedRanges].lastPacket - rs[addedRanges].count
 
-		f.AckBlockCount += 1
+		f.AckBlockCount++
 		f.AckBlockSection = append(f.AckBlockSection, b)
-		addedRanges += 1
+		addedRanges++
 		left -= kMaxAckBlockEntryLength // Assume worst-case.
 	}
 
 	ret := newFrame(0, &f)
 	return &ret, addedRanges, nil
+}
+
+// PATH_CHALLENGE
+type pathChallengeFrame struct {
+	Type frameType
+	Data [8]byte
+}
+
+func (f pathChallengeFrame) String() string {
+	return "PATH_CHALLENGE"
+}
+
+func (f pathChallengeFrame) getType() frameType {
+	return kFrameTypePathChallenge
+}
+
+func newPathChallengeFrame(data []byte) frame {
+	payload := &pathChallengeFrame{Type: kFrameTypePathChallenge}
+	assert(len(data) == len(payload.Data))
+	copy(payload.Data[:], data)
+	return newFrame(0, payload)
+}
+
+// PATH_RESPONSE
+type pathResponseFrame struct {
+	Type frameType
+	Data [8]byte
+}
+
+func (f pathResponseFrame) String() string {
+	return "PATH_RESPONSE"
+}
+
+func (f pathResponseFrame) getType() frameType {
+	return kFrameTypePathResponse
+}
+
+func newPathResponseFrame(data []byte) frame {
+	payload := &pathResponseFrame{Type: kFrameTypePathResponse}
+	assert(len(data) == len(payload.Data))
+	copy(payload.Data[:], data)
+	return newFrame(0, payload)
 }
 
 // STREAM

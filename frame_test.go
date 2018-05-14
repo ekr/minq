@@ -21,7 +21,6 @@ func testEncodeDecodeEncode(t *testing.T, f frame) {
 	assertByteEquals(t, f.encoded, f2.encoded)
 
 	fmt.Printf("%+v\n", f2)
-
 }
 
 func TestStreamFrame(t *testing.T) {
@@ -37,7 +36,7 @@ func TestAckFrameOneRange(t *testing.T) {
 	recvd.init(ar[0].lastPacket)
 	recvd.packetSetReceived(ar[0].lastPacket, false, false)
 
-	f, _, err := newAckFrame(recvd, ar, 21)
+	f, _, err := newAckFrame(recvd, ar, 33)
 	assertNotError(t, err, "Couldn't make ack frame")
 
 	testEncodeDecodeEncode(t, *f)
@@ -50,18 +49,15 @@ func TestAckFrameTwoRanges(t *testing.T) {
 	recvd.init(ar[0].lastPacket)
 	recvd.packetSetReceived(ar[0].lastPacket, false, false)
 
-	f, _, err := newAckFrame(recvd, ar, 26)
+	f, _, err := newAckFrame(recvd, ar, 49)
 	assertNotError(t, err, "Couldn't make ack frame")
 
 	testEncodeDecodeEncode(t, *f)
 }
 
-/*
-func TestQuantAckFrame(t *testing.T) {
-	af := "a8676c3690000002000000000000000000000000000000000000000000000000000000000000000000c30000f4003a1703010035c1a1e4d0c42db1f0bff054dd80d5de9601745ad482162823bd322452e5e73c0ed01808f020ed5dc8d6a308b9595799ffccb4948834"
-	afb, _ := hex.DecodeString(af)
-	n, _, err := decodeFrame(afb)
-	assertNotError(t, err, "Couldn't decode ack frame")
-	fmt.Println(n)
+func TestFixedSizedData(t *testing.T) {
+	f := newPathChallengeFrame([]byte{1, 2, 3, 4, 5, 6, 7, 8})
+	testEncodeDecodeEncode(t, f)
+	f = newPathResponseFrame([]byte{10, 9, 8, 7, 6, 5, 4, 3})
+	testEncodeDecodeEncode(t, f)
 }
-*/
