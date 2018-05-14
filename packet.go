@@ -2,6 +2,7 @@ package minq
 
 import (
 	"bytes"
+	"encoding/hex"
 	"fmt"
 )
 
@@ -14,28 +15,27 @@ Long header
 +-+-+-+-+-+-+-+-+
 |1|   Type (7)  |
 +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-|                                                               |
-+                       Connection ID (64)                      +
-|                                                               |
-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 |                         Version (32)                          |
 +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-|                       Packet Number (32)                      |
+|DCIL(4)|SCIL(4)|
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|               Destination Connection ID (0/32..144)         ...
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                 Source Connection ID (0/32..144)            ...
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                       Payload Length (i)                    ...
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                     Packet Number (8/16/32)                   |
 +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 |                          Payload (*)                        ...
 +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 
-
-Short Header
-
  0                   1                   2                   3
- 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 11
+ 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
 +-+-+-+-+-+-+-+-+
-|0|C|K| Type (5)|
+|0|K|1|1|0|R R R|
 +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-|                                                               |
-+                     [Connection ID (64)]                      +
-|                                                               |
+|                Destination Connection ID (0..144)           ...
 +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 |                      Packet Number (8/16/32)                ...
 +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
@@ -44,41 +44,93 @@ Short Header
 */
 
 const (
-	packetFlagLongHeader = 0x80
-	packetFlagC          = 0x40
-	packetFlagK          = 0x20
+	packetFlagLongHeader  = byte(0x80)
+	packetFlagK           = byte(0x40)
+	packetFlagShortHeader = byte(0x30)
 )
+
+// This packet type differs considerably from the spec.  It includes both
+// long and short headers in the same value space.  Long headers are from
+// 0-0x7f (inclusive); short headers are always represented as 0xff.
+type packetType byte
 
 const (
-	packetTypeInitial        = 0x7f
-	packetTypeRetry          = 0x7e
-	packetTypeHandshake      = 0x7d
-	packetType0RTTProtected  = 0x7c
-	packetTypeProtectedShort = 0xff // Not a real type
+	packetTypeInitial        = packetType(0x7f)
+	packetTypeRetry          = packetType(0x7e)
+	packetTypeHandshake      = packetType(0x7d)
+	packetType0RTTProtected  = packetType(0x7c)
+	packetTypeProtectedShort = packetType(0xff) // Not a real type
 )
 
-type ConnectionId uint64
-type version uint32
-
-// The PDU definition for the header.
-// These types are capitalized so that |codec| can use the,
-type packetHeader struct {
-	Type         byte
-	ConnectionID ConnectionId
-	Version      VersionNumber
-	PacketNumber uint64 // Never more than 32 bits on the wire.
+func (pt packetType) isLongHeader() bool {
+	return pt&packetType(packetFlagLongHeader) != 0
 }
 
-func (p *packetHeader) String() string {
+func (pt packetType) isProtected() bool {
+	if !pt.isLongHeader() {
+		return true
+	}
+
+	switch pt & 0x7f {
+	case packetTypeInitial, packetTypeHandshake, packetTypeRetry:
+		return false
+	}
+	return true
+}
+
+// ConnectionId identifies the connection that a packet belongs to.
+type ConnectionId []byte
+
+// String stringifies a connection ID in the natural way.
+func (c ConnectionId) String() string {
+	return hex.EncodeToString(c)
+}
+
+// EncodeLength produces the length encoding used in the long packet header.
+func (c ConnectionId) EncodeLength() byte {
+	if len(c) == 0 {
+		return 0
+	}
+	assert(len(c) >= 4 && len(c) <= 18)
+	return byte(len(c) - 3)
+}
+
+// The PDU definition for the header.
+// These types are capitalized so that |codec| can use them.
+type packetHeader struct {
+	// Type is the on-the-wire form of the packet type.
+	// Consult getHeaderType if you want a value that corresponds to the
+	// definition of packetType.
+	Type                    packetType
+	ConnectionIDLengths     byte
+	DestinationConnectionID ConnectionId
+	SourceConnectionID      ConnectionId
+	Version                 VersionNumber
+	PayloadLength           uint64 `tls:"varint"`
+	PacketNumber            uint64 // Never more than 32 bits on the wire.
+
+	// In order to decode a short header, the length of the connection
+	// ID must be set in |shortCidLength| before decoding.
+	shortCidLength uintptr
+}
+
+func (p packetHeader) String() string {
 	ht := "SHORT"
-	if isLongHeader(p) {
+	if p.Type.isLongHeader() {
 		ht = "LONG"
 	}
 	prot := "CLEAR"
-	if p.isProtected() {
+	if p.Type.isProtected() {
 		prot = "ENC"
 	}
-	return fmt.Sprintf("%s %s PT=%x", ht, prot, p.getHeaderType())
+	return fmt.Sprintf("%s %s PT=%x PN=%x", ht, prot, p.getHeaderType(), p.PacketNumber)
+}
+
+func (p *packetHeader) getHeaderType() packetType {
+	if p.Type.isLongHeader() {
+		return p.Type & 0x7f
+	}
+	return packetTypeProtectedShort
 }
 
 type packet struct {
@@ -86,77 +138,88 @@ type packet struct {
 	payload []byte
 }
 
-// Functions to support encoding and decoding.
-func isSet(b byte, flag byte) bool {
-	return (b & flag) != 0
+// This reads from p.ConnectionIDLengths.
+func (p packetHeader) ConnectionIDLengths__length() uintptr {
+	if p.Type.isLongHeader() {
+		return 1
+	}
+	return 0
 }
 
-func isLongHeader(p *packetHeader) bool {
-	return isSet(p.Type, packetFlagLongHeader)
+func (p packetHeader) DestinationConnectionID__length() uintptr {
+	if !p.Type.isLongHeader() {
+		return p.shortCidLength
+	}
+	l := p.ConnectionIDLengths >> 4
+	if l != 0 {
+		l += 3
+	}
+	return uintptr(l)
 }
 
-func (p *packetHeader) isProtected() bool {
-	if !isLongHeader(p) {
-		return true
+func (p packetHeader) SourceConnectionID__length() uintptr {
+	if !p.Type.isLongHeader() {
+		return 0
 	}
-
-	switch p.Type & 0x7f {
-	case packetTypeInitial, packetTypeHandshake, packetTypeRetry:
-		return false
+	l := p.ConnectionIDLengths & 0xf
+	if l != 0 {
+		l += 3
 	}
-	return true
+	return uintptr(l)
 }
 
-func (p *packetHeader) hasConnId() bool {
-	if isLongHeader(p) {
-		return true
+func (p packetHeader) PayloadLength__length() uintptr {
+	if p.Type.isLongHeader() {
+		return codecDefaultSize
 	}
-	if (p.Type & packetFlagC) == 0 {
-		return true
-	}
-	return false
-}
-
-func (p *packetHeader) getHeaderType() byte {
-	if isLongHeader(p) {
-		return p.Type & 0x7f
-	}
-	return packetTypeProtectedShort
-}
-
-func (p packetHeader) ConnectionID__length() uintptr {
-	if isLongHeader(&p) || !isSet(p.Type, packetFlagC) {
-		return 8
-	}
-	return codecDefaultSize
+	return 0
 }
 
 func (p packetHeader) PacketNumber__length() uintptr {
 	logf(logTypeTrace, "PacketNumber__length() Type=%v", p.Type)
-	if isLongHeader(&p) {
+	if p.Type.isLongHeader() {
 		return 4
 	}
 
-	switch p.Type & 0x3f {
-	case 0x1f:
+	switch p.Type & 0x3 {
+	case 0:
 		return 1
-	case 0x1e:
+	case 1:
 		return 2
-	case 0x1d:
+	case 2:
 		return 4
 	default:
 		return 4 // TODO(ekr@rtfm.com): This is actually currently an error.
 	}
 }
 func (p packetHeader) Version__length() uintptr {
-	if isLongHeader(&p) {
+	if p.Type.isLongHeader() {
 		return 4
 	}
 	return 0
 }
 
-func (p *packetHeader) setLongHeaderType(typ byte) {
-	p.Type = packetFlagLongHeader | typ
+func newPacket(pt packetType, destCid ConnectionId, srcCid ConnectionId, ver VersionNumber, pn uint64, payload []byte) *packet {
+	if pt == packetTypeProtectedShort {
+		// Only support writing the 32-bit packet number.
+		pt = packetType(0x2 | packetFlagShortHeader)
+		srcCid = nil
+	} else {
+		pt = pt | packetType(packetFlagLongHeader)
+	}
+	lengths := (destCid.EncodeLength() << 4) | srcCid.EncodeLength()
+	return &packet{
+		packetHeader: packetHeader{
+			Type:                    pt,
+			ConnectionIDLengths:     lengths,
+			DestinationConnectionID: destCid,
+			SourceConnectionID:      srcCid,
+			Version:                 ver,
+			PayloadLength:           uint64(len(payload)),
+			PacketNumber:            pn,
+		},
+		payload: payload,
+	}
 }
 
 type versionNegotiationPacket struct {

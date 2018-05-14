@@ -19,7 +19,7 @@ type Server struct {
 	transFactory TransportFactory
 	tls          *TlsConfig
 	addrTable    map[string]*Connection
-	idTable      map[ConnectionId]*Connection
+	idTable      map[string]*Connection
 }
 
 // Interface for the handler object which the Server will call
@@ -34,10 +34,10 @@ func (s *Server) SetHandler(h ServerHandler) {
 	s.handler = h
 }
 
-// Pass an incoming packet to the Server.
+// Input passes an incoming packet to the Server.
 func (s *Server) Input(addr *net.UDPAddr, data []byte) (*Connection, error) {
 	logf(logTypeServer, "Received packet from %v", addr)
-	var hdr packetHeader
+	hdr := packetHeader{shortCidLength: 8}
 	newConn := false
 
 	_, err := decode(&hdr, data)
@@ -47,9 +47,9 @@ func (s *Server) Input(addr *net.UDPAddr, data []byte) (*Connection, error) {
 
 	var conn *Connection
 
-	if hdr.hasConnId() {
-		logf(logTypeServer, "Received conn id %v", hdr.ConnectionID)
-		conn = s.idTable[hdr.ConnectionID]
+	if len(hdr.DestinationConnectionID) > 0 {
+		logf(logTypeServer, "Received conn id %v", hdr.DestinationConnectionID)
+		conn = s.idTable[hdr.DestinationConnectionID.String()]
 		if conn != nil {
 			logf(logTypeServer, "Found by conn id")
 		}
@@ -66,16 +66,15 @@ func (s *Server) Input(addr *net.UDPAddr, data []byte) (*Connection, error) {
 			return nil, err
 		}
 		conn = NewConnection(trans, RoleServer, s.tls, nil)
-		conn.clientConnId = hdr.ConnectionID
 		newConn = true
-		s.idTable[conn.serverConnId] = conn
+		s.idTable[conn.serverConnectionId.String()] = conn
 		s.addrTable[addr.String()] = conn
 	}
 
 	err = conn.Input(data)
 	if isFatalError(err) {
-		logf(logTypeServer, "Fatal Error %v killing connection %.16x", err, conn.serverConnId)
-		delete(s.idTable, conn.serverConnId)
+		logf(logTypeServer, "Fatal Error %v killing connection %v", err, conn)
+		delete(s.idTable, conn.serverConnectionId.String())
 		delete(s.addrTable, addr.String())
 		return nil, nil
 	}
@@ -92,8 +91,8 @@ func (s *Server) CheckTimer() error {
 	for _, conn := range s.idTable {
 		_, err := conn.CheckTimer()
 		if isFatalError(err) {
-			logf(logTypeServer, "Fatal Error %v killing connection %.16x", err, conn.serverConnId)
-			delete(s.idTable, conn.serverConnId)
+			logf(logTypeServer, "Fatal Error %v killing connection %v", err, conn)
+			delete(s.idTable, conn.serverConnectionId.String())
 			// TODO(ekr@rtfm.com): Delete this from the addr table.
 		}
 	}
@@ -112,7 +111,7 @@ func NewServer(factory TransportFactory, tls *TlsConfig, handler ServerHandler) 
 		factory,
 		tls,
 		make(map[string]*Connection),
-		make(map[ConnectionId]*Connection),
+		make(map[string]*Connection),
 	}
 	s.tls.init()
 	return &s
