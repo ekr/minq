@@ -889,11 +889,6 @@ func fillConnectionCongestionWindow(c *Connection) ([]SendStream, []int, []byte)
 		cstreams[i] = s
 		var err error
 		for err == nil {
-			// This is a truly messed up compiler bug.  You can't use
-			//     n, err := s.Write(writeBuf)
-			// because go will assume that you want a new `err`, but
-			// that isn't used.  In other words, it chooses name
-			// shadowing over reuse here.
 			var n int
 			n, err = s.Write(writeBuf)
 			outstanding[i] += n
@@ -929,6 +924,8 @@ func TestConnectionLevelFlowControl(t *testing.T) {
 	pair.server.sendQueued(false)
 	inputAll(pair.client)
 
+	assertX(t, (uint64(kConcurrentStreamsUni-1)*kInitialMaxStreamData) > kInitialMaxData,
+		"should be able to fill connection flow control without using the last stream")
 	// Use the last stream, which shouldn't have written anything.
 	last := len(outstanding) - 1
 	assertEquals(t, outstanding[last], 0)

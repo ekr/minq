@@ -123,7 +123,7 @@ type recvStreamPrivateMethods interface {
 	handleReset(offset uint64) error
 	clearReadable() bool
 	newFrameData(uint64, bool, []byte, *flowControl) error
-	creditMaxStreamData(bool)
+	updateMaxStreamData(bool)
 }
 
 // SendStream can send.
@@ -242,7 +242,7 @@ func (s *sendStreamBase) write(data []byte, connectionFlowControl *flowControl) 
 		s.setSendState(SendStreamStateSend)
 		// Allow a zero-octet write on a stream that hasn't been opened.
 		if len(data) == 0 {
-			return s.queue(data)
+			return s.queue(data, connectionFlowControl)
 		}
 	case SendStreamStateSend:
 		// OK to send
@@ -284,7 +284,7 @@ func (s *sendStreamBase) flowControl() flowControl {
 	return s.fc
 }
 
-// Push out all the frames permitted by flow control.
+// Push out all pending frames.  Set the stream state if the end of the stream is available.
 func (s *sendStreamBase) outputWritable() []streamChunk {
 	s.log(logTypeStream, "outputWritable, current max offset=%d)", s.fc.max)
 	for _, ch := range s.chunks {
@@ -294,7 +294,7 @@ func (s *sendStreamBase) outputWritable() []streamChunk {
 	}
 
 	out := s.chunks
-	s.chunks = s.chunks[0:0]
+	s.chunks = nil
 	return out
 }
 
@@ -369,7 +369,7 @@ func (s *recvStreamBase) newFrameData(offset uint64, last bool, payload []byte,
 			// We didn't have that much available.
 			return ErrorFlowControlError
 		}
-	} else if end <= s.offset {
+	} else if end <= s.readOffset {
 		// No new data here.
 		return nil
 	}
@@ -562,7 +562,9 @@ func (s *recvStream) Id() uint64 {
 	return s.id
 }
 
-func (s *recvStream) creditMaxStreamData(force bool) {
+// updateMaxStreamData checks the current flow control limit and sends
+// MAX_STREAM_DATA as necessary.
+func (s *recvStream) updateMaxStreamData(force bool) {
 	s.log(logTypeFlowControl, "credit flow control %v", &s.fc)
 	if force || s.fc.remaining() < kInitialMaxStreamData/2 {
 		s.fc.max = s.readOffset + kInitialMaxData
@@ -583,10 +585,10 @@ func (s *recvStream) Read(b []byte) (int, error) {
 	}
 	s.c.amountRead += uint64(n)
 	// Now issue credit for stream flow control, ...
-	s.creditMaxStreamData(false)
+	s.updateMaxStreamData(false)
 	// ..., connection flow control, ...
 	s.c.issueCredit(false)
-	// and streams.
+	// ..., and streams.
 	if s.state == RecvStreamStateDataRead {
 		s.c.issueStreamIdCredit(streamTypeFromId(s.id, s.c.role))
 	}

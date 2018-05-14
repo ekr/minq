@@ -644,6 +644,12 @@ func (c *Connection) sendFramesInPacket(pt uint8, tosend []frame) error {
 	return nil
 }
 
+// sendOnStream0 is used prior to the handshake completing.  Stream 0 is exempt
+// from flow control during the handshake, so this method updates the flow
+// control for the stream to ensure that writes always succeed.  The limit is
+// reset after writing, which means that flow control for stream 0 can have the
+// amount sent (used) higher than the limit (max).  Don't use this method after
+// the handshake completes (i.e., for sending NewSessionTicket).
 func (c *Connection) sendOnStream0(data []byte) error {
 	c.log(logTypeConnection, "sending %v bytes on stream 0", len(data))
 	fc := c.sendFlowControl
@@ -1438,9 +1444,6 @@ func (c *Connection) issueCredit(force bool) {
 
 	c.log(logTypeFlowControl, "connection flow control credit %v", &c.recvFlowControl)
 	c.recvFlowControl.max = c.amountRead + kInitialMaxData
-	// Remove other MAX_STREAM_DATA frames so we don't retransmit them. This violates
-	// the current spec, but offline we all agree it's silly. See:
-	// https://github.com/quicwg/base-drafts/issues/806
 	c.outputProtectedQ = filterFrames(c.outputProtectedQ, func(f *frame) bool {
 		_, ok := f.f.(*maxDataFrame)
 		return !ok
@@ -1581,6 +1584,11 @@ func (c *Connection) processUnprotected(hdr *packetHeader, packetNumber uint64, 
 
 		case *blockedFrame:
 			c.log(logTypeFlowControl, "peer is blocked at %v", inner.Offset)
+			// We don't strictly have to issue credit here, but receiving
+			// BLOCKED is a potential sign that a MAX_DATA frame was lost.
+			// It's also potentially a sign that the amount we're crediting is
+			// too little, but we aren't tuning this yet.
+			// Instead, aggressively send more credit.
 			c.issueCredit(true)
 
 		case *maxStreamDataFrame:
@@ -1597,7 +1605,8 @@ func (c *Connection) processUnprotected(hdr *packetHeader, packetNumber uint64, 
 				return ErrorProtocolViolation
 			}
 			c.log(logTypeFlowControl, "peer stream %d is blocked at %v", s.Id(), inner.Offset)
-			s.creditMaxStreamData(true)
+			// Aggressively send credit.  See the comment on BLOCKED above.
+			s.updateMaxStreamData(true)
 
 		case *maxStreamIdFrame:
 			switch streamTypeFromId(inner.MaximumStreamId, c.role) {
