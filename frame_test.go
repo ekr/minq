@@ -21,7 +21,6 @@ func testEncodeDecodeEncode(t *testing.T, f frame) {
 	assertByteEquals(t, f.encoded, f2.encoded)
 
 	fmt.Printf("%+v\n", f2)
-
 }
 
 func TestStreamFrame(t *testing.T) {
@@ -54,4 +53,11 @@ func TestAckFrameTwoRanges(t *testing.T) {
 	assertNotError(t, err, "Couldn't make ack frame")
 
 	testEncodeDecodeEncode(t, *f)
+}
+
+func TestFixedSizedData(t *testing.T) {
+	f := newPathChallengeFrame([]byte{1, 2, 3, 4, 5, 6, 7, 8})
+	testEncodeDecodeEncode(t, f)
+	f = newPathResponseFrame([]byte{10, 9, 8, 7, 6, 5, 4, 3})
+	testEncodeDecodeEncode(t, f)
 }

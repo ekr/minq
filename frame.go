@@ -27,6 +27,8 @@ const (
 	kFrameTypeNewConnectionId = frameType(0xb)
 	kFrameTypeStopSending     = frameType(0xc)
 	kFrameTypeAck             = frameType(0xd)
+	kFrameTypePathChallenge   = frameType(0xe)
+	kFrameTypePathResponse    = frameType(0xf)
 	kFrameTypeStream          = frameType(0x10)
 	kFrameTypeStreamMax       = frameType(0x17)
 )
@@ -122,6 +124,10 @@ func decodeFrame(data []byte) (uintptr, *frame, error) {
 		inner = &stopSendingFrame{}
 	case t == uint8(kFrameTypeAck):
 		inner = &ackFrame{}
+	case t == uint8(kFrameTypePathChallenge):
+		inner = &pathChallengeFrame{}
+	case t == uint8(kFrameTypePathResponse):
+		inner = &pathResponseFrame{}
 	case t >= uint8(kFrameTypeStream) && t <= uint8(kFrameTypeStreamMax):
 		inner = &streamFrame{}
 	default:
@@ -473,6 +479,48 @@ func newAckFrame(recvd *recvdPackets, rs ackRanges, left int) (*frame, int, erro
 
 	ret := newFrame(0, &f)
 	return &ret, addedRanges, nil
+}
+
+// PATH_CHALLENGE
+type pathChallengeFrame struct {
+	Type frameType
+	Data [8]byte
+}
+
+func (f pathChallengeFrame) String() string {
+	return "PATH_CHALLENGE"
+}
+
+func (f pathChallengeFrame) getType() frameType {
+	return kFrameTypePathChallenge
+}
+
+func newPathChallengeFrame(data []byte) frame {
+	payload := &pathChallengeFrame{Type: kFrameTypePathChallenge}
+	assert(len(data) == len(payload.Data))
+	copy(payload.Data[:], data)
+	return newFrame(0, payload)
+}
+
+// PATH_RESPONSE
+type pathResponseFrame struct {
+	Type frameType
+	Data [8]byte
+}
+
+func (f pathResponseFrame) String() string {
+	return "PATH_RESPONSE"
+}
+
+func (f pathResponseFrame) getType() frameType {
+	return kFrameTypePathResponse
+}
+
+func newPathResponseFrame(data []byte) frame {
+	payload := &pathResponseFrame{Type: kFrameTypePathResponse}
+	assert(len(data) == len(payload.Data))
+	copy(payload.Data[:], data)
+	return newFrame(0, payload)
 }
 
 // STREAM
