@@ -450,7 +450,7 @@ func (c *Connection) determineAead(pt packetType) cipher.AEAD {
 	return aead
 }
 
-func (c *Connection) sendPacketRaw(pt packetType, connId ConnectionId, pn uint64, version VersionNumber, payload []byte, containsOnlyAcks bool) ([]byte, error) {
+func (c *Connection) sendPacketRaw(pt packetType, version VersionNumber, pn uint64, payload []byte, containsOnlyAcks bool) ([]byte, error) {
 	c.log(logTypeConnection, "Sending packet PT=%v PN=%x: %s", pt, pn, dumpPacket(payload))
 	left := c.mtu // track how much space is left for payload
 
