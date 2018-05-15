@@ -297,6 +297,16 @@ func (state State) String() string {
 	}
 }
 
+// ClientId returns the current identity, as dictated by the client.
+func (c *Connection) ClientId() ConnectionId {
+	return c.clientConnectionId
+}
+
+// ServerId returns the current identity, as dictated by the server.
+func (c *Connection) ServerId() ConnectionId {
+	return c.serverConnectionId
+}
+
 func (c *Connection) ensureRemoteBidi(id uint64) hasIdentity {
 	return c.remoteBidiStreams.ensure(id, func(x uint64) hasIdentity {
 		msd := uint64(c.tpHandler.peerParams.maxStreamsData)
