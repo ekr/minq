@@ -545,7 +545,7 @@ func TestVersionNegotiationPacket(t *testing.T) {
 	// Check the error.
 	assertEquals(t, hdr.Version, VersionNumber(0))
 	assertByteEquals(t, hdr.DestinationConnectionID, client.clientConnectionId)
-	assertByteEquals(t, hdr.SourceConnectionID, client.initialConnectionId)
+	assertByteEquals(t, hdr.SourceConnectionID, client.serverConnectionId)
 }
 
 func TestCantMakeRemoteStreams(t *testing.T) {

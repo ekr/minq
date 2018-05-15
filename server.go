@@ -37,7 +37,7 @@ func (s *Server) SetHandler(h ServerHandler) {
 // Input passes an incoming packet to the Server.
 func (s *Server) Input(addr *net.UDPAddr, data []byte) (*Connection, error) {
 	logf(logTypeServer, "Received packet from %v", addr)
-	hdr := packetHeader{shortCidLength: 8}
+	hdr := packetHeader{shortCidLength: kCidDefaultLength}
 	newConn := false
 
 	_, err := decode(&hdr, data)

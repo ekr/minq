@@ -108,82 +108,80 @@ The application provides a handler object which the Connection
 calls to notify it of various events.
 */
 type Connection struct {
-	handler             ConnectionHandler
-	role                Role
-	state               State
-	version             VersionNumber
-	initialConnectionId ConnectionId
-	clientConnectionId  ConnectionId
-	serverConnectionId  ConnectionId
-	transport           Transport
-	tls                 *tlsConn
-	writeClear          *cryptoState
-	readClear           *cryptoState
-	writeProtected      *cryptoState
-	readProtected       *cryptoState
-	nextSendPacket      uint64
-	mtu                 int
-	stream0             *stream
-	localBidiStreams    *streamSet
-	remoteBidiStreams   *streamSet
-	localUniStreams     *streamSet
-	remoteUniStreams    *streamSet
-	outputClearQ        []frame // For stream 0
-	outputProtectedQ    []frame // For stream >= 0
-	clientInitial       []byte
-	recvd               *recvdPackets
-	flowControl         flowControl
-	sentAcks            map[uint64]ackRanges
-	lastInput           time.Time
-	idleTimeout         time.Duration
-	tpHandler           *transportParametersHandler
-	log                 loggingFunction
-	retransmitTime      time.Duration
-	congestion          CongestionController
-	lastSendQueuedTime  time.Time
-	closingEnd          time.Time
-	closePacket         []byte
+	handler            ConnectionHandler
+	role               Role
+	state              State
+	version            VersionNumber
+	clientConnectionId ConnectionId
+	serverConnectionId ConnectionId
+	transport          Transport
+	tls                *tlsConn
+	writeClear         *cryptoState
+	readClear          *cryptoState
+	writeProtected     *cryptoState
+	readProtected      *cryptoState
+	nextSendPacket     uint64
+	mtu                int
+	stream0            *stream
+	localBidiStreams   *streamSet
+	remoteBidiStreams  *streamSet
+	localUniStreams    *streamSet
+	remoteUniStreams   *streamSet
+	outputClearQ       []frame // For stream 0
+	outputProtectedQ   []frame // For stream >= 0
+	clientInitial      []byte
+	recvd              *recvdPackets
+	flowControl        flowControl
+	sentAcks           map[uint64]ackRanges
+	lastInput          time.Time
+	idleTimeout        time.Duration
+	tpHandler          *transportParametersHandler
+	log                loggingFunction
+	retransmitTime     time.Duration
+	congestion         CongestionController
+	lastSendQueuedTime time.Time
+	closingEnd         time.Time
+	closePacket        []byte
 }
 
 // Create a new QUIC connection. Should only be used with role=RoleClient,
 // though we use it with RoleServer internally.
 func NewConnection(trans Transport, role Role, tls *TlsConfig, handler ConnectionHandler) *Connection {
 	c := &Connection{
-		handler:             handler,
-		role:                role,
-		state:               StateInit,
-		version:             kQuicVersion,
-		initialConnectionId: nil,
-		clientConnectionId:  nil,
-		serverConnectionId:  nil,
-		transport:           trans,
-		tls:                 newTlsConn(tls, role),
-		writeClear:          nil,
-		readClear:           nil,
-		writeProtected:      nil,
-		readProtected:       nil,
-		nextSendPacket:      uint64(0),
-		mtu:                 kInitialMTU,
-		stream0:             nil,
-		localBidiStreams:    newStreamSet(streamTypeBidirectionalLocal, role, 1),
-		remoteBidiStreams:   newStreamSet(streamTypeBidirectionalRemote, role, kConcurrentStreamsBidi),
-		localUniStreams:     newStreamSet(streamTypeUnidirectionalLocal, role, 0),
-		remoteUniStreams:    newStreamSet(streamTypeUnidirectionalRemote, role, kConcurrentStreamsUni),
-		outputClearQ:        nil,
-		outputProtectedQ:    nil,
-		clientInitial:       nil,
-		recvd:               nil,
-		flowControl:         flowControl{0, 0},
-		sentAcks:            make(map[uint64]ackRanges, 0),
-		lastInput:           time.Now(),
-		idleTimeout:         time.Second * 5, // a pretty short time
-		tpHandler:           nil,
-		log:                 nil,
-		retransmitTime:      kDefaultInitialRtt,
-		congestion:          nil,
-		lastSendQueuedTime:  time.Now(),
-		closingEnd:          time.Time{}, // Zero time
-		closePacket:         nil,
+		handler:            handler,
+		role:               role,
+		state:              StateInit,
+		version:            kQuicVersion,
+		clientConnectionId: nil,
+		serverConnectionId: nil,
+		transport:          trans,
+		tls:                newTlsConn(tls, role),
+		writeClear:         nil,
+		readClear:          nil,
+		writeProtected:     nil,
+		readProtected:      nil,
+		nextSendPacket:     uint64(0),
+		mtu:                kInitialMTU,
+		stream0:            nil,
+		localBidiStreams:   newStreamSet(streamTypeBidirectionalLocal, role, 1),
+		remoteBidiStreams:  newStreamSet(streamTypeBidirectionalRemote, role, kConcurrentStreamsBidi),
+		localUniStreams:    newStreamSet(streamTypeUnidirectionalLocal, role, 0),
+		remoteUniStreams:   newStreamSet(streamTypeUnidirectionalRemote, role, kConcurrentStreamsUni),
+		outputClearQ:       nil,
+		outputProtectedQ:   nil,
+		clientInitial:      nil,
+		recvd:              nil,
+		flowControl:        flowControl{0, 0},
+		sentAcks:           make(map[uint64]ackRanges, 0),
+		lastInput:          time.Now(),
+		idleTimeout:        time.Second * 5, // a pretty short time
+		tpHandler:          nil,
+		log:                nil,
+		retransmitTime:     kDefaultInitialRtt,
+		congestion:         nil,
+		lastSendQueuedTime: time.Now(),
+		closingEnd:         time.Time{}, // Zero time
+		closePacket:        nil,
 	}
 
 	c.log = newConnectionLogger(c)
@@ -198,24 +196,28 @@ func NewConnection(trans Transport, role Role, tls *TlsConfig, handler Connectio
 	c.tls.setTransportParametersHandler(c.tpHandler)
 
 	c.recvd = newRecvdPackets(c.log)
-	cid, err := c.randomConnectionId(8) // TODO configure this
-	if err != nil {
-		return nil
-	}
+
 	var clientStreams *streamSet
+	var err error
 	if role == RoleClient {
-		c.initialConnectionId, err = c.randomConnectionId(8)
+		c.serverConnectionId, err = c.randomConnectionId(8)
 		if err != nil {
 			return nil
 		}
-		c.clientConnectionId = cid
-		err = c.setupAeadMasking()
+		c.clientConnectionId, err = c.randomConnectionId(kCidDefaultLength)
+		if err != nil {
+			return nil
+		}
+		err = c.setupAeadMasking(c.serverConnectionId)
 		if err != nil {
 			return nil
 		}
 		clientStreams = c.localBidiStreams
 	} else {
-		c.serverConnectionId = cid
+		c.serverConnectionId, err = c.randomConnectionId(kCidDefaultLength)
+		if err != nil {
+			return nil
+		}
 		c.setState(StateWaitClientInitial)
 		clientStreams = c.remoteBidiStreams
 	}
@@ -458,11 +460,7 @@ func (c *Connection) sendPacketRaw(pt packetType, connId ConnectionId, pn uint64
 	var destCid ConnectionId
 	var srcCid ConnectionId
 	if c.role == RoleClient {
-		if c.serverConnectionId != nil {
-			destCid = c.serverConnectionId
-		} else {
-			destCid = c.initialConnectionId
-		}
+		destCid = c.serverConnectionId
 		srcCid = c.clientConnectionId
 	} else {
 		srcCid = c.serverConnectionId
@@ -681,11 +679,7 @@ func (c *Connection) packetOverhead(pt packetType) int {
 		overhead += 5
 	}
 	if c.role == RoleClient {
-		if c.serverConnectionId == nil {
-			overhead += len(c.initialConnectionId)
-		} else {
-			overhead += len(c.serverConnectionId)
-		}
+		overhead += len(c.serverConnectionId)
 	} else {
 		overhead += len(c.clientConnectionId)
 	}
@@ -877,7 +871,7 @@ func (c *Connection) input(p []byte) error {
 
 	c.lastInput = time.Now()
 
-	hdr := packetHeader{shortCidLength: 8}
+	hdr := packetHeader{shortCidLength: kCidDefaultLength}
 
 	c.log(logTypeTrace, "Receiving packet len=%v %v", len(p), hex.EncodeToString(p))
 	hdrlen, err := decode(&hdr, p)
@@ -920,12 +914,15 @@ func (c *Connection) input(p []byte) error {
 			c.log(logTypeConnection, "Received unexpected packet before client initial")
 			return ErrorDestroyConnection
 		}
-		c.initialConnectionId = hdr.DestinationConnectionID
-		c.clientConnectionId = hdr.SourceConnectionID
-		err := c.setupAeadMasking()
+		err := c.setupAeadMasking(hdr.DestinationConnectionID)
 		if err != nil {
 			return err
 		}
+		c.serverConnectionId, err = c.randomConnectionId(kCidDefaultLength)
+		if err != nil {
+			return err
+		}
+		c.clientConnectionId = hdr.SourceConnectionID
 	}
 
 	aead := c.readClear.aead
@@ -1687,7 +1684,7 @@ func (c *Connection) setTransportParameters() {
 	c.localUniStreams.nstreams = c.tpHandler.peerParams.maxStreamsUni
 }
 
-func (c *Connection) setupAeadMasking() (err error) {
+func (c *Connection) setupAeadMasking(cid ConnectionId) (err error) {
 	params := mint.CipherSuiteParams{
 		Suite:  mint.TLS_AES_128_GCM_SHA256,
 		Cipher: nil,
@@ -1704,11 +1701,11 @@ func (c *Connection) setupAeadMasking() (err error) {
 		sendLabel = serverCtSecretLabel
 		recvLabel = clientCtSecretLabel
 	}
-	c.writeClear, err = generateCleartextKeys(c.initialConnectionId, sendLabel, &params)
+	c.writeClear, err = generateCleartextKeys(cid, sendLabel, &params)
 	if err != nil {
 		return
 	}
-	c.readClear, err = generateCleartextKeys(c.initialConnectionId, recvLabel, &params)
+	c.readClear, err = generateCleartextKeys(cid, recvLabel, &params)
 	if err != nil {
 		return
 	}
@@ -1884,11 +1881,6 @@ func (c *Connection) isClosed() bool {
 // Get the current state of a connection.
 func (c *Connection) GetState() State {
 	return c.state
-}
-
-// ClientId returns the randomized initial connection ID chosen by the client.
-func (c *Connection) ClientId() ConnectionId {
-	return c.initialConnectionId
 }
 
 func (c *Connection) handleError(e error) error {

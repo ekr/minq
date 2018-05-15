@@ -78,6 +78,10 @@ func (pt packetType) isProtected() bool {
 	return true
 }
 
+// kCidDefaultLength is the length of connection ID we generate.
+// TODO: make this configurable.
+const kCidDefaultLength = 8
+
 // ConnectionId identifies the connection that a packet belongs to.
 type ConnectionId []byte
 
