@@ -67,20 +67,24 @@ func (s *Server) Input(addr *net.UDPAddr, data []byte) (*Connection, error) {
 		}
 		conn = NewConnection(trans, RoleServer, s.tls, nil)
 		newConn = true
-		s.idTable[conn.serverConnectionId.String()] = conn
-		s.addrTable[addr.String()] = conn
 	}
 
 	err = conn.Input(data)
 	if isFatalError(err) {
 		logf(logTypeServer, "Fatal Error %v killing connection %v", err, conn)
-		delete(s.idTable, conn.serverConnectionId.String())
-		delete(s.addrTable, addr.String())
 		return nil, nil
 	}
 
-	if newConn && s.handler != nil {
-		s.handler.NewConnection(conn)
+	if newConn {
+		// Wait until handling the first packet before the connection is added
+		// to the table.  Firstly, to avoid having to remove it if there is an
+		// error, but also because the server-chosen connection ID isn't set
+		// until after the Initial is handled.
+		s.idTable[conn.serverConnectionId.String()] = conn
+		s.addrTable[addr.String()] = conn
+		if s.handler != nil {
+			s.handler.NewConnection(conn)
+		}
 	}
 
 	return conn, nil

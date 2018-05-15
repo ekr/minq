@@ -110,18 +110,19 @@ func TestServerIdleTimeout(t *testing.T) {
 	assertEquals(t, 1, n)
 	assertNotError(t, err, "Couldn't send client initial")
 
-	_, err = serverInputAll(t, sTrans, server, *u)
+	sconn, err := serverInputAll(t, sTrans, server, *u)
 	assertNotError(t, err, "Couldn't consume client initial")
+	assertNotNil(t, sconn, "no server connection")
 
 	assertEquals(t, 1, server.ConnectionCount())
 
-	// Now wait 6 seconds to make sure that the connection
-	// gets garbage collected.
-
-	time.Sleep(time.Second * 6)
+	// This pokes into internal state of the server to avoid having to include
+	// sleep calls in tests.  Don't do this at home kids.
+	// Wind the timer on the connection back to short-circuit the idle timeout.
+	sconn.lastInput = sconn.lastInput.Add(-1 - sconn.idleTimeout)
 	server.CheckTimer()
 	// A second nap to allow for draining period.
-	time.Sleep(time.Second)
+	sconn.closingEnd = sconn.closingEnd.Add(-1 - time.Second)
 	server.CheckTimer()
 
 	assertEquals(t, 0, server.ConnectionCount())
