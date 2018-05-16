@@ -44,7 +44,7 @@ func (c *conn) checkTimer() {
 	}
 }
 
-var conns = make(map[minq.ConnectionId]*conn)
+var conns = make(map[string]*conn)
 
 // An feed through server.
 type feedthroughServerHandler struct {
@@ -54,7 +54,7 @@ type feedthroughServerHandler struct {
 func (h *feedthroughServerHandler) NewConnection(c *minq.Connection) {
 	log.Println("New connection")
 	c.SetHandler(&feedthroughConnHandler{echo, 0})
-	conns[c.Id()] = &conn{c, time.Now()}
+	conns[c.ServerId().String()] = &conn{c, time.Now()}
 }
 
 type feedthroughConnHandler struct {
@@ -98,7 +98,7 @@ func (h *feedthroughConnHandler) StreamReadable(s minq.RecvStream) {
 
 		if echo {
 			// Flip the case so we can distinguish echo
-			for i, _ := range b {
+			for i := range b {
 				if b[i] > 0x40 {
 					b[i] ^= 0x20
 				}
@@ -116,7 +116,7 @@ type httpServerHandler struct {
 func (h *httpServerHandler) NewConnection(c *minq.Connection) {
 	log.Println("New connection")
 	c.SetHandler(&httpConnHandler{make(map[uint64]*httpStream, 0)})
-	conns[c.Id()] = &conn{c, time.Now()}
+	conns[c.ServerId().String()] = &conn{c, time.Now()}
 }
 
 type httpStream struct {

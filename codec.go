@@ -35,6 +35,27 @@ func uintEncodeInt(buf *bytes.Buffer, val uint64, size uintptr) {
 	}
 }
 
+// isVarint determines if the field is a varint.  This reads the mint/syntax tag
+// for the field, but only supports a simple "varint".
+func isVarint(f reflect.StructField) bool {
+	return f.Tag.Get("tls") == "varint"
+}
+
+func varintEncode(buf *bytes.Buffer, v uint64) {
+	switch {
+	case v < (uint64(1) << 6):
+		uintEncodeInt(buf, v, 1)
+	case v < (uint64(1) << 14):
+		uintEncodeInt(buf, v|(1<<14), 2)
+	case v < (uint64(1) << 30):
+		uintEncodeInt(buf, v|(2<<30), 4)
+	case v < (uint64(1) << 62):
+		uintEncodeInt(buf, v|(3<<62), 8)
+	default:
+		panic("varint value is too large")
+	}
+}
+
 func arrayEncode(buf *bytes.Buffer, v reflect.Value) error {
 	b := v.Bytes()
 	logf(logTypeCodec, "Encoding array length=%d", len(b))
@@ -137,14 +158,19 @@ func encode(i interface{}) (ret []byte, err error) {
 
 		switch field.Kind() {
 		case reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+			if isVarint(tipe) {
+				varintEncode(&buf, field.Uint())
+				res = nil
+				break
+			}
 			// Call the length overrider to tell us if we shoud be using a shorter
 			// encoding.
 			encodingSize := uintptr(codecDefaultSize)
 			lFunc, getLength := reflected.Type().MethodByName(tipe.Name + "__length")
 			logf(logTypeCodec, "Looking for length overrider for type %v", tipe.Name)
 			if getLength {
-				length_result := lFunc.Func.Call([]reflect.Value{reflect.ValueOf(i).Elem()})
-				encodingSize = uintptr(length_result[0].Uint())
+				lengthResult := lFunc.Func.Call([]reflect.Value{reflect.ValueOf(i).Elem()})
+				encodingSize = uintptr(lengthResult[0].Uint())
 				logf(logTypeCodec, "Overriden length to %v", encodingSize)
 			}
 			res = uintEncode(&buf, field, encodingSize)
@@ -195,6 +221,27 @@ func uintDecode(r io.Reader, v reflect.Value, encodingSize uintptr) (uintptr, er
 	v.SetUint(tmp)
 
 	return size, nil
+}
+
+func varintDecode(r io.Reader, v reflect.Value) (uintptr, error) {
+	p := make([]byte, 8)
+	_, err := r.Read(p[:1])
+	if err != nil {
+		return 0, err
+	}
+
+	value := uint64(p[0] & 0x3f)
+	extra := uintptr(1<<(p[0]>>6)) - 1
+	if extra > 0 {
+		tail, err := uintDecodeInt(r, extra)
+		if err != nil {
+			return 0, err
+		}
+		value = (value << (8 * extra)) | tail
+	}
+
+	v.SetUint(value)
+	return 1 + extra, nil
 }
 
 func encodeArgs(args ...interface{}) []byte {
@@ -262,14 +309,18 @@ func decode(i interface{}, data []byte) (uintptr, error) {
 		encodingSize := uintptr(codecDefaultSize)
 		lFunc, getLength := reflected.Type().MethodByName(tipe.Name + "__length")
 		if getLength {
-			length_result := lFunc.Func.Call([]reflect.Value{reflect.ValueOf(i).Elem()})
-			encodingSize = uintptr(length_result[0].Uint())
+			lengthResult := lFunc.Func.Call([]reflect.Value{reflect.ValueOf(i).Elem()})
+			encodingSize = uintptr(lengthResult[0].Uint())
 			logf(logTypeCodec, "Length overrider for %s returns %v", tipe.Name, encodingSize)
 		}
 
 		switch field.Kind() {
 		case reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-			br, res = uintDecode(buf, field, encodingSize)
+			if isVarint(tipe) {
+				br, res = varintDecode(buf, field)
+			} else {
+				br, res = uintDecode(buf, field, encodingSize)
+			}
 		case reflect.Array, reflect.Slice:
 			if encodingSize == codecDefaultSize {
 				encodingSize = uintptr(buf.Len())

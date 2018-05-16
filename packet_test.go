@@ -6,44 +6,44 @@ import (
 	"testing"
 )
 
-var kTestpacketHeader = packetHeader{
-	0,
-	0x0123456789abcdef,
-	0xdeadbeef,
-	0xff000001,
-}
+var (
+	testCid7    = ConnectionId([]byte{7, 7, 7, 7, 7, 7, 7})
+	testCid4    = ConnectionId([]byte{4, 4, 4, 4})
+	testVersion = VersionNumber(0xdeadbeef)
+	testPn      = uint64(0xff000001)
+)
 
 // Packet header tests.
-func packetHeaderEDE(t *testing.T, p *packetHeader) {
-	var p2 packetHeader
+func packetHeaderEDE(t *testing.T, p *packetHeader, cidLen uintptr) {
 	res, err := encode(p)
 	assertNotError(t, err, "Could not encode")
+	fmt.Println("Encoded = ", hex.EncodeToString(res))
 
-	fmt.Println("Result = ", hex.EncodeToString(res))
-
+	var p2 packetHeader
+	p2.shortCidLength = cidLen
 	_, err = decode(&p2, res)
 	assertNotError(t, err, "Could not decode")
+	fmt.Println("Decoded = ", p2)
 
 	res2, err := encode(&p2)
 	assertNotError(t, err, "Could not re-encode")
-	fmt.Println("Result2 = ", hex.EncodeToString(res2))
+	fmt.Println("Encoded2 =", hex.EncodeToString(res2))
 	assertByteEquals(t, res, res2)
 }
 
 func TestLongHeader(t *testing.T) {
-	p := kTestpacketHeader
-
-	p.setLongHeaderType(packetTypeInitial)
-
-	packetHeaderEDE(t, &p)
+	p := newPacket(packetTypeInitial, testCid7, testCid4, testVersion,
+		testPn, make([]byte, 65))
+	packetHeaderEDE(t, &p.packetHeader, 0)
 }
 
 func TestShortHeader(t *testing.T) {
-	p := kTestpacketHeader
+	p := newPacket(packetTypeProtectedShort, testCid7, testCid4, testVersion,
+		testPn, make([]byte, 65))
 
-	p.Type = 0x1e
-
-	packetHeaderEDE(t, &p)
+	// We have to provide assistance to the decoder for short headers.
+	// Otherwise, it can't know long the destination connection ID is.
+	packetHeaderEDE(t, &p.packetHeader, uintptr(len(p.DestinationConnectionID)))
 }
 
 /*

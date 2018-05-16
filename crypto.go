@@ -12,7 +12,15 @@ type cryptoState struct {
 	aead   cipher.AEAD
 }
 
-const kQuicVersionSalt = "afc824ec5fc77eca1e9d36f37fb2d46518c36639"
+func infallibleHexDecode(s string) []byte {
+	b, err := hex.DecodeString(s)
+	if err != nil {
+		panic("didn't hex decode " + s)
+	}
+	return b
+}
+
+var kQuicVersionSalt = infallibleHexDecode("9c108f98520a5c5c32968e950e8a2c5fe06d6c38")
 
 const clientCtSecretLabel = "client hs"
 const serverCtSecretLabel = "server hs"
@@ -37,14 +45,8 @@ func newCryptoStateInner(secret []byte, cs *mint.CipherSuiteParams) (*cryptoStat
 	return &st, nil
 }
 
-func newCryptoStateFromSecret(secret []byte, label string, cs *mint.CipherSuiteParams) (*cryptoState, error) {
-	var err error
-
-	salt, err := hex.DecodeString(kQuicVersionSalt)
-	if err != nil {
-		panic("Bogus value")
-	}
-	extracted := mint.HkdfExtract(cs.Hash, salt, secret)
+func generateCleartextKeys(secret []byte, label string, cs *mint.CipherSuiteParams) (*cryptoState, error) {
+	extracted := mint.HkdfExtract(cs.Hash, kQuicVersionSalt, secret)
 	inner := QhkdfExpandLabel(cs.Hash, extracted, label, []byte{}, cs.Hash.Size())
 	return newCryptoStateInner(inner, cs)
 }

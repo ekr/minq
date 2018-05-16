@@ -544,7 +544,8 @@ func TestVersionNegotiationPacket(t *testing.T) {
 	assertNotError(t, err, "Couldn't decode VN")
 	// Check the error.
 	assertEquals(t, hdr.Version, VersionNumber(0))
-	assertEquals(t, hdr.ConnectionID, client.clientConnId)
+	assertByteEquals(t, hdr.DestinationConnectionID, client.clientConnectionId)
+	assertByteEquals(t, hdr.SourceConnectionID, client.serverConnectionId)
 }
 
 func TestCantMakeRemoteStreams(t *testing.T) {
