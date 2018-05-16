@@ -17,15 +17,15 @@ const (
 type TransportParameterId uint16
 
 const (
-	kTpIdInitialMaxStreamsData  = TransportParameterId(0x0000)
-	kTpIdInitialMaxData         = TransportParameterId(0x0001)
-	kTpIdInitialMaxStreamIdBidi = TransportParameterId(0x0002)
-	kTpIdIdleTimeout            = TransportParameterId(0x0003)
-	kTpIdOmitConnectionId       = TransportParameterId(0x0004)
-	kTpIdMaxPacketSize          = TransportParameterId(0x0005)
-	kTpIdStatelessResetToken    = TransportParameterId(0x0006)
-	kTpIdAckDelayExponent       = TransportParameterId(0x0007)
-	kTpIdInitialMaxStreamIdUni  = TransportParameterId(0x0008)
+	kTpIdInitialMaxStreamsData = TransportParameterId(0x0000)
+	kTpIdInitialMaxData        = TransportParameterId(0x0001)
+	kTpIdInitialMaxBidiStreams = TransportParameterId(0x0002)
+	kTpIdIdleTimeout           = TransportParameterId(0x0003)
+	kTpIdOmitConnectionId      = TransportParameterId(0x0004)
+	kTpIdMaxPacketSize         = TransportParameterId(0x0005)
+	kTpIdStatelessResetToken   = TransportParameterId(0x0006)
+	kTpIdAckDelayExponent      = TransportParameterId(0x0007)
+	kTpIdInitialMaxUniStreams  = TransportParameterId(0x0008)
 )
 
 const (
@@ -46,9 +46,9 @@ var (
 	kTransportParameterDefaults = []tpDef{
 		{kTpIdInitialMaxStreamsData, uint32(kInitialMaxStreamData), 4},
 		{kTpIdInitialMaxData, uint32(kInitialMaxData), 4},
-		{kTpIdInitialMaxStreamIdBidi, 0, 2},
+		{kTpIdInitialMaxBidiStreams, uint32(kConcurrentStreamsBidi), 2},
 		{kTpIdIdleTimeout, 5, 2},
-		{kTpIdInitialMaxStreamIdUni, 0, 2},
+		{kTpIdInitialMaxUniStreams, uint32(kConcurrentStreamsUni), 2},
 	}
 )
 
@@ -129,21 +129,9 @@ func (tp *TransportParameterList) addOpaqueParameter(id TransportParameterId, b 
 	return nil
 }
 
-func (tp *TransportParameterList) createCommonTransportParameters(streamAdd uint32) error {
+func (tp *TransportParameterList) createCommonTransportParameters() error {
 	for _, p := range kTransportParameterDefaults {
-		v := p.val
-		// Stream IDs are annoying.
-		switch p.parameter {
-		case kTpIdInitialMaxStreamIdBidi:
-			v = uint32(kConcurrentStreamsBidi-1)*4 + streamAdd
-			if (v & 3) == 0 {
-				// All hail stream 0.
-				v += 4
-			}
-		case kTpIdInitialMaxStreamIdUni:
-			v = uint32(kConcurrentStreamsUni-1)*4 + 2 + streamAdd
-		}
-		err := tp.addUintParameter(p.parameter, v, p.size)
+		err := tp.addUintParameter(p.parameter, p.val, p.size)
 		if err != nil {
 			return err
 		}
@@ -285,32 +273,29 @@ func (h *transportParametersHandler) Receive(hs mint.HandshakeType, el *mint.Ext
 		return err
 	}
 
-	maxStream, err := params.getUintParameter(kTpIdInitialMaxStreamIdBidi, 2)
-	if err == ErrorMissingValue {
-		maxStream = 0
-	} else {
-		if err != nil {
-			return err
-		}
-		if (uint64(maxStream) & 3) != streamTypeBidirectionalLocal.suffix(h.role) {
-			return ErrorInvalidEncoding
-		}
+	maxStream, err := params.getUintParameter(kTpIdInitialMaxBidiStreams, 2)
+	switch err {
+	case nil:
+		tp.maxStreamsBidi = int(maxStream)
+	case ErrorMissingValue:
+		tp.maxStreamsBidi = 0
+	default:
+		return err
+	}
+	if h.role == RoleClient {
+		tp.maxStreamsBidi++ // Allow for stream 0.
 	}
 
-	tp.maxStreamsBidi = (int(maxStream) >> 2) + 1
-	maxStream, err = params.getUintParameter(kTpIdInitialMaxStreamIdUni, 2)
-	if err == ErrorMissingValue {
-		maxStream = 0
-	} else {
-		if err != nil {
-			return err
-		}
-		if (uint64(maxStream) & 3) != streamTypeUnidirectionalLocal.suffix(h.role) {
-			return ErrorInvalidEncoding
-		}
+	maxStream, err = params.getUintParameter(kTpIdInitialMaxUniStreams, 2)
+	switch err {
+	case nil:
+		tp.maxStreamsUni = int(maxStream)
+	case ErrorMissingValue:
+		tp.maxStreamsUni = 0
+	default:
+		return err
 	}
 
-	tp.maxStreamsUni = (int(maxStream) >> 2) + 1
 	var tmp uint32
 	tmp, err = params.getUintParameter(kTpIdIdleTimeout, 2)
 	if err != nil {
@@ -319,13 +304,13 @@ func (h *transportParametersHandler) Receive(hs mint.HandshakeType, el *mint.Ext
 	tp.idleTimeout = uint16(tmp)
 
 	tmp, err = params.getUintParameter(kTpIdAckDelayExponent, 1)
-	if err != nil {
-		if err != ErrorMissingValue {
-			return err
-		}
-		tp.ackDelayExp = kTpDefaultAckDelayExponent
-	} else {
+	switch err {
+	case nil:
 		tp.ackDelayExp = uint8(tmp)
+	case ErrorMissingValue:
+		tp.ackDelayExp = kTpDefaultAckDelayExponent
+	default:
+		return err
 	}
 
 	h.peerParams = &tp
@@ -339,7 +324,7 @@ func (h *transportParametersHandler) createClientHelloTransportParameters() ([]b
 		nil,
 	}
 
-	err := chtp.Parameters.createCommonTransportParameters(1)
+	err := chtp.Parameters.createCommonTransportParameters()
 	if err != nil {
 		return nil, err
 	}
@@ -360,7 +345,7 @@ func (h *transportParametersHandler) createEncryptedExtensionsTransportParameter
 		nil,
 	}
 
-	err := eetp.Parameters.createCommonTransportParameters(0)
+	err := eetp.Parameters.createCommonTransportParameters()
 	if err != nil {
 		return nil, err
 	}
