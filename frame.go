@@ -253,6 +253,10 @@ func (f maxDataFrame) getType() frameType {
 	return kFrameTypeMaxData
 }
 
+func newMaxData(m uint64) frame {
+	return newFrame(0, &maxDataFrame{kFrameTypeMaxData, m})
+}
+
 // MAX_STREAM_DATA
 type maxStreamDataFrame struct {
 	Type              frameType
@@ -326,6 +330,10 @@ func (f blockedFrame) getType() frameType {
 	return kFrameTypeBlocked
 }
 
+func newBlockedFrame(offset uint64) frame {
+	return newFrame(0, &blockedFrame{kFrameTypeBlocked, offset})
+}
+
 // STREAM_BLOCKED
 type streamBlockedFrame struct {
 	Type     frameType
@@ -339,6 +347,10 @@ func (f streamBlockedFrame) String() string {
 
 func (f streamBlockedFrame) getType() frameType {
 	return kFrameTypeStreamBlocked
+}
+
+func newStreamBlockedFrame(id uint64, offset uint64) frame {
+	return newFrame(0, &streamBlockedFrame{kFrameTypeStreamBlocked, id, offset})
 }
 
 // STREAM_ID_BLOCKED

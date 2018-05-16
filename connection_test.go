@@ -374,7 +374,7 @@ func TestSendReceiveBigData(t *testing.T) {
 	pair.handshake(t)
 	buf := make([]byte, 100000)
 
-	for i, _ := range buf {
+	for i := range buf {
 		buf[i] = byte(i & 0xff)
 	}
 
@@ -383,12 +383,16 @@ func TestSendReceiveBigData(t *testing.T) {
 
 	// Write data C->S
 	cs := pair.client.CreateStream()
-	cs.Write(buf)
-	cs.Close()
-
+	remaining := buf
 	for !handler.done {
-		inputAll(pair.server)
-		inputAll(pair.client)
+		if len(remaining) > 0 {
+			n, err := cs.Write(remaining)
+			assertNotError(t, err, "write should work")
+			remaining = remaining[n:]
+			if len(remaining) == 0 {
+				cs.Close()
+			}
+		}
 		inputAll(pair.server)
 		inputAll(pair.client)
 	}
@@ -426,7 +430,7 @@ func TestSendReceiveRetransmit(t *testing.T) {
 	assertByteEquals(t, []byte(testString), b)
 
 	// Write data S->C
-	for i, _ := range b {
+	for i := range b {
 		b[i] ^= 0xff
 	}
 	ss.Write(b)
@@ -872,4 +876,86 @@ func TestStreamIdBlocked(t *testing.T) {
 	}
 	assertEquals(t, nil, pair.client.CreateSendStream())
 	// TODO: check that both sides send STREAM_ID_BLOCKED
+}
+
+func fillConnectionCongestionWindow(c *Connection) ([]SendStream, []int, []byte) {
+	writeBuf := make([]byte, 1024)
+	for i := range writeBuf {
+		writeBuf[i] = byte(i & 0xff)
+	}
+	cstreams := make([]SendStream, int(kConcurrentStreamsUni))
+	outstanding := make([]int, int(kConcurrentStreamsUni))
+	for i := range cstreams {
+		s := c.CreateSendStream()
+		cstreams[i] = s
+		var err error
+		for err == nil {
+			var n int
+			n, err = s.Write(writeBuf)
+			outstanding[i] += n
+		}
+	}
+	return cstreams, outstanding, writeBuf
+}
+
+func TestConnectionLevelFlowControl(t *testing.T) {
+	pair := newCsPair(t)
+	pair.handshake(t)
+
+	cstreams,
+		outstanding,
+		writeBuf := fillConnectionCongestionWindow(pair.client)
+
+	// At this point, the client has exhausted its connection flow control credit.
+	// Let it send frames and have the server read some more.
+	inputAll(pair.server)
+
+	// Read a little bit from the server side.
+	readBuf := make([]byte, len(writeBuf))
+	sstream := pair.server.GetRecvStream(cstreams[0].Id())
+	for outstanding[0] > 0 {
+		n, err := sstream.Read(readBuf)
+		assertNotError(t, err, "if we wrote it, it should be read")
+		assertEquals(t, n, len(writeBuf))
+		assertByteEquals(t, readBuf, writeBuf[:n])
+		outstanding[0] -= n
+	}
+
+	// Now let the MAX_DATA frame propagate and check that we can write again.
+	pair.server.sendQueued(false)
+	inputAll(pair.client)
+
+	assertX(t, (uint64(kConcurrentStreamsUni-1)*kInitialMaxStreamData) > kInitialMaxData,
+		"should be able to fill connection flow control without using the last stream")
+	// Use the last stream, which shouldn't have written anything.
+	last := len(outstanding) - 1
+	assertEquals(t, outstanding[last], 0)
+	n, err := cstreams[last].Write(writeBuf)
+	assertNotError(t, err, "should write successfully")
+	assertEquals(t, n, len(writeBuf))
+}
+
+func TestConnectionLevelFlowControlRst(t *testing.T) {
+	pair := newCsPair(t)
+	pair.handshake(t)
+
+	cstreams,
+		outstanding,
+		writeBuf := fillConnectionCongestionWindow(pair.client)
+
+	// Connection flow control should be exhausted now.
+	// Now reset one of those streams.
+	cstreams[0].Reset(kQuicErrorNoError)
+	inputAll(pair.server)
+
+	// Now let the MAX_DATA frame propagate and check that we can write again.
+	pair.server.sendQueued(false)
+	inputAll(pair.client)
+
+	// Use the last stream, which shouldn't have written anything.
+	last := len(outstanding) - 1
+	assertEquals(t, outstanding[last], 0)
+	n, err := cstreams[last].Write(writeBuf)
+	assertNotError(t, err, "should write successfully")
+	assertEquals(t, n, len(writeBuf))
 }

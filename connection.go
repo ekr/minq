@@ -131,7 +131,9 @@ type Connection struct {
 	outputProtectedQ   []frame // For stream >= 0
 	clientInitial      []byte
 	recvd              *recvdPackets
-	flowControl        flowControl
+	sendFlowControl    flowControl
+	recvFlowControl    flowControl
+	amountRead         uint64
 	sentAcks           map[uint64]ackRanges
 	lastInput          time.Time
 	idleTimeout        time.Duration
@@ -171,7 +173,9 @@ func NewConnection(trans Transport, role Role, tls *TlsConfig, handler Connectio
 		outputProtectedQ:   nil,
 		clientInitial:      nil,
 		recvd:              nil,
-		flowControl:        flowControl{0, 0},
+		sendFlowControl:    flowControl{0, 0},
+		recvFlowControl:    flowControl{kInitialMaxData, 0},
+		amountRead:         0,
 		sentAcks:           make(map[uint64]ackRanges, 0),
 		lastInput:          time.Now(),
 		idleTimeout:        time.Second * 5, // a pretty short time
@@ -424,7 +428,7 @@ func (c *Connection) sendClientInitial() error {
 	// Enqueue the frame for transmission.
 	queued = append(queued, f)
 
-	c.stream0.sendStreamPrivate.(*sendStream).offset = uint64(len(c.clientInitial))
+	c.stream0.sendStreamPrivate.(*sendStream).fc.used = uint64(len(c.clientInitial))
 
 	for i := 0; i < topad; i++ {
 		queued = append(queued, newPaddingFrame(0))
@@ -536,9 +540,19 @@ func (c *Connection) sendPacket(pt packetType, tosend []frame, containsOnlyAcks 
 	return c.sendPacketRaw(pt, c.version, pn, payload, containsOnlyAcks)
 }
 
+// sendOnStream0 is used prior to the handshake completing.  Stream 0 is exempt
+// from flow control during the handshake, so this method updates the flow
+// control for the stream to ensure that writes always succeed.  The limit is
+// reset after writing, which means that flow control for stream 0 can have the
+// amount sent (used) higher than the limit (max).  Don't use this method after
+// the handshake completes (i.e., for sending NewSessionTicket).
 func (c *Connection) sendOnStream0(data []byte) error {
 	c.log(logTypeConnection, "sending %v bytes on stream 0", len(data))
+	fc := c.sendFlowControl
+	c.sendFlowControl.max += uint64(len(data))
 	_, err := c.stream0.Write(data)
+	c.sendFlowControl = fc
+	assert(err != ErrorWouldBlock)
 	return err
 }
 
@@ -641,8 +655,7 @@ func (c *Connection) enqueueStreamFrames(s sendStreamPrivate, q *[]frame) {
 	if s == nil {
 		return
 	}
-	chunks, _ := s.outputWritable()
-	for _, ch := range chunks {
+	for _, ch := range s.outputWritable() {
 		f := newStreamFrame(s.Id(), ch.offset, ch.data, ch.last)
 		c.queueFrame(q, f)
 	}
@@ -912,7 +925,7 @@ func (c *Connection) input(p []byte) error {
 	}
 
 	typ := hdr.getHeaderType()
-	c.log(logTypeFlowControl, "EKR: Received packet %x len=%d", hdr.PacketNumber, len(p))
+	c.log(logTypeTrace, "Received packet %x len=%d", hdr.PacketNumber, len(p))
 	c.log(logTypeConnection, "Packet header %v, %d", hdr, typ)
 
 	if hdr.Type.isLongHeader() && hdr.Version == 0 {
@@ -1087,8 +1100,9 @@ func (c *Connection) processClientInitial(hdr *packetHeader, payload []byte) err
 		_, err = c.sendPacketRaw(packetTypeRetry, kQuicVersion, hdr.PacketNumber, sf.encoded, false)
 		return err
 	}
-
-	c.stream0.recvStreamPrivate.(*recvStream).offset = uint64(len(sf.Data))
+	recv0 := c.stream0.recvStreamPrivate.(*recvStream)
+	recv0.fc.used = uint64(len(sf.Data))
+	recv0.readOffset = uint64(len(sf.Data))
 	c.setTransportParameters()
 
 	err = c.sendOnStream0(sflt)
@@ -1136,7 +1150,7 @@ func (c *Connection) processCleartext(hdr *packetHeader, payload []byte, naf *bo
 
 		case *streamFrame:
 			// If this is duplicate data and if so early abort.
-			if inner.Offset+uint64(len(inner.Data)) <= c.stream0.recvStreamPrivate.(*recvStream).offset {
+			if inner.Offset+uint64(len(inner.Data)) <= c.stream0.recvStreamPrivate.(*recvStream).readOffset {
 				continue
 			}
 
@@ -1155,7 +1169,7 @@ func (c *Connection) processCleartext(hdr *packetHeader, payload []byte, naf *bo
 				// 1. Remove the clientInitial packet.
 				// 2. Set the outgoing stream offset accordingly
 				if len(c.clientInitial) > 0 {
-					c.stream0.sendStreamPrivate.(*sendStream).offset = uint64(len(c.clientInitial))
+					c.stream0.sendStreamPrivate.(*sendStream).fc.used = uint64(len(c.clientInitial))
 					c.clientInitial = nil
 				}
 				// Set the server's connection ID now.
@@ -1178,7 +1192,9 @@ func (c *Connection) processCleartext(hdr *packetHeader, payload []byte, naf *bo
 				return nonFatalError("Received cleartext with stream id != 0")
 			}
 
-			err = c.newFrameData(c.stream0, inner)
+			// Use fake flow control for the handshake.
+			fc := flowControl{^uint64(0), 0}
+			err = c.stream0.newFrameData(inner.Offset, inner.hasFin(), inner.Data, &fc)
 			if err != nil {
 				return err
 			}
@@ -1186,7 +1202,6 @@ func (c *Connection) processCleartext(hdr *packetHeader, payload []byte, naf *bo
 			if err != nil && err != ErrorWouldBlock {
 				return err
 			}
-			// c.issueStreamCredit(c.streams[0], len(available))
 			out, err := c.tls.handshake(available)
 			if err != nil {
 				return err
@@ -1360,6 +1375,38 @@ func filterFrames(in []frame, f frameFilterFunc) []frame {
 	return out
 }
 
+func (c *Connection) issueCredit(force bool) {
+	c.log(logTypeFlowControl, "connection flow control credit %v", &c.recvFlowControl)
+	// Always ensure that there is at least half an initial *stream* flow control window available.
+	if !force && c.recvFlowControl.remaining() > (kInitialMaxStreamData/2) {
+		return
+	}
+
+	c.log(logTypeFlowControl, "connection flow control credit %v", &c.recvFlowControl)
+	c.recvFlowControl.max = c.amountRead + kInitialMaxData
+	c.outputProtectedQ = filterFrames(c.outputProtectedQ, func(f *frame) bool {
+		_, ok := f.f.(*maxDataFrame)
+		return !ok
+	})
+
+	_ = c.sendFrame(newMaxData(c.recvFlowControl.max))
+	c.log(logTypeFlowControl, "connection flow control now %v",
+		&c.recvFlowControl)
+}
+
+func (c *Connection) updateBlocked() {
+	c.outputProtectedQ = filterFrames(c.outputProtectedQ, func(f *frame) bool {
+		_, ok := f.f.(*blockedFrame)
+		return !ok
+	})
+	if c.sendFlowControl.remaining() > 0 {
+		return
+	}
+	f := newBlockedFrame(c.sendFlowControl.used)
+	_ = c.sendFrame(f)
+	c.log(logTypeFlowControl, "sending %v", f)
+}
+
 func (c *Connection) issueStreamCredit(s RecvStream, max uint64) {
 	// Don't issue credit for stream 0 during the handshake.
 	if s.Id() == 0 && c.state != StateEstablished {
@@ -1374,11 +1421,28 @@ func (c *Connection) issueStreamCredit(s RecvStream, max uint64) {
 		if !ok {
 			return true
 		}
-		return !(inner.StreamId == s.Id())
+		return inner.StreamId != s.Id()
 	})
 
 	_ = c.sendFrame(newMaxStreamData(s.Id(), max))
-	c.log(logTypeFlowControl, "Issuing more stream credit for stream %d new offset=%d", s.Id(), max)
+	c.log(logTypeFlowControl, "Issuing stream credit for stream %d, now %v", s.Id(), max)
+}
+
+func (c *Connection) updateStreamBlocked(s sendStreamPrivate) {
+	c.outputProtectedQ = filterFrames(c.outputProtectedQ, func(f *frame) bool {
+		inner, ok := f.f.(*streamBlockedFrame)
+		if !ok {
+			return true
+		}
+		return inner.StreamId != s.Id()
+	})
+	fc := s.flowControl()
+	if fc.remaining() > 0 {
+		return
+	}
+	f := newStreamBlockedFrame(s.Id(), fc.used)
+	_ = c.sendFrame(f)
+	c.log(logTypeFlowControl, "sending %v", f)
 }
 
 func (c *Connection) issueStreamIdCredit(t streamType) {
@@ -1455,7 +1519,17 @@ func (c *Connection) processUnprotected(hdr *packetHeader, packetNumber uint64, 
 			return nil
 
 		case *maxDataFrame:
-			c.flowControl.update(inner.MaximumData)
+			c.sendFlowControl.update(inner.MaximumData)
+			c.updateBlocked()
+
+		case *blockedFrame:
+			c.log(logTypeFlowControl, "peer is blocked at %v", inner.Offset)
+			// We don't strictly have to issue credit here, but receiving
+			// BLOCKED is a potential sign that a MAX_DATA frame was lost.
+			// It's also potentially a sign that the amount we're crediting is
+			// too little, but we aren't tuning this yet.
+			// Instead, aggressively send more credit.
+			c.issueCredit(true)
 
 		case *maxStreamDataFrame:
 			s := c.ensureSendStream(inner.StreamId)
@@ -1463,6 +1537,16 @@ func (c *Connection) processUnprotected(hdr *packetHeader, packetNumber uint64, 
 				return ErrorProtocolViolation
 			}
 			s.processMaxStreamData(inner.MaximumStreamData)
+			c.updateStreamBlocked(s)
+
+		case *streamBlockedFrame:
+			s := c.ensureRecvStream(inner.StreamId)
+			if s == nil {
+				return ErrorProtocolViolation
+			}
+			c.log(logTypeFlowControl, "peer stream %d is blocked at %v", s.Id(), inner.Offset)
+			// Aggressively send credit.  See the comment on BLOCKED above.
+			s.updateMaxStreamData(true)
 
 		case *maxStreamIdFrame:
 			switch streamTypeFromId(inner.MaximumStreamId, c.role) {
@@ -1482,13 +1566,6 @@ func (c *Connection) processUnprotected(hdr *packetHeader, packetNumber uint64, 
 			}
 			nonAck = false
 
-		case *streamBlockedFrame:
-			s := c.ensureRecvStream(inner.StreamId)
-			if s == nil {
-				return ErrorProtocolViolation
-			}
-			c.log(logTypeFlowControl, "stream %d is blocked", s.Id())
-
 		case *streamFrame:
 			c.log(logTypeStream, "Received on stream %v", inner)
 			s := c.ensureRecvStream(inner.StreamId)
@@ -1496,7 +1573,7 @@ func (c *Connection) processUnprotected(hdr *packetHeader, packetNumber uint64, 
 				return ErrorProtocolViolation
 			}
 
-			err = c.newFrameData(s, inner)
+			err = s.newFrameData(inner.Offset, inner.hasFin(), inner.Data, &c.recvFlowControl)
 			if err != nil {
 				return err
 			}
@@ -1521,18 +1598,6 @@ func (c *Connection) processUnprotected(hdr *packetHeader, packetNumber uint64, 
 		}
 	}
 
-	return nil
-}
-
-func (c *Connection) newFrameData(s recvStreamPrivate, inner *streamFrame) error {
-	err := s.newFrameData(inner.Offset, inner.hasFin(), inner.Data)
-	if err != nil {
-		return err
-	}
-	max, credit := s.creditMaxStreamData()
-	if credit {
-		c.issueStreamCredit(s, max)
-	}
 	return nil
 }
 
@@ -1687,9 +1752,9 @@ func (c *Connection) setTransportParameters() {
 	// TODO(ekr@rtfm.com): Process the others..
 
 	// Cut stream 0 flow control down to something reasonable.
-	c.stream0.sendStreamPrivate.(*sendStream).maxStreamData = uint64(c.tpHandler.peerParams.maxStreamsData)
+	c.stream0.sendStreamPrivate.(*sendStream).fc.max = uint64(c.tpHandler.peerParams.maxStreamsData)
 
-	c.flowControl.update(uint64(c.tpHandler.peerParams.maxData))
+	c.sendFlowControl.update(uint64(c.tpHandler.peerParams.maxData))
 	c.localBidiStreams.nstreams = c.tpHandler.peerParams.maxStreamsBidi
 	c.localUniStreams.nstreams = c.tpHandler.peerParams.maxStreamsUni
 }

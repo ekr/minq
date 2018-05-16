@@ -108,7 +108,8 @@ type sendStreamPrivateMethods interface {
 	setSendState(SendStreamState)
 	outstandingQueuedBytes() int
 	processMaxStreamData(uint64)
-	outputWritable() ([]streamChunk, bool)
+	outputWritable() []streamChunk
+	flowControl() flowControl
 }
 
 type recvStreamMethods interface {
@@ -121,8 +122,8 @@ type recvStreamPrivateMethods interface {
 	setRecvState(RecvStreamState)
 	handleReset(offset uint64) error
 	clearReadable() bool
-	newFrameData(uint64, bool, []byte) error
-	creditMaxStreamData() (uint64, bool)
+	newFrameData(uint64, bool, []byte, *flowControl) error
+	updateMaxStreamData(bool)
 }
 
 // SendStream can send.
@@ -171,15 +172,15 @@ func (sc streamChunk) String() string {
 }
 
 type streamCommon struct {
-	log           loggingFunction
-	offset        uint64
-	chunks        []streamChunk
-	maxStreamData uint64
+	log        loggingFunction
+	chunks     []streamChunk
+	fc         flowControl
+	readOffset uint64
 }
 
 func (s *streamCommon) insertSortedChunk(offset uint64, last bool, payload []byte) {
 	c := streamChunk{offset, last, dup(payload)}
-	s.log(logTypeStream, "insert %v, current offset=%v", c, s.offset)
+	s.log(logTypeStream, "insert %v, current offset=%v", c, s.fc.used)
 	s.log(logTypeTrace, "payload %v", hex.EncodeToString(payload))
 
 	// First check if we can append the new slice at the end
@@ -206,8 +207,7 @@ func (s *streamCommon) insertSortedChunk(offset uint64, last bool, payload []byt
 
 type sendStreamBase struct {
 	streamCommon
-	state   SendStreamState
-	blocked bool // Have we returned blocked
+	state SendStreamState
 }
 
 func (s *sendStreamBase) setSendState(state SendStreamState) {
@@ -222,40 +222,54 @@ func (s *sendStreamBase) SendState() SendStreamState {
 	return s.state
 }
 
-func (s *sendStreamBase) queue(payload []byte) error {
-	s.log(logTypeStream, "queueing %v bytes", len(payload))
-	s.insertSortedChunk(s.offset, false, payload)
-	s.offset += uint64(len(payload))
-	return nil
+func (s *sendStreamBase) queue(payload []byte, cfc *flowControl) (int, error) {
+	s.log(logTypeStream, "queueing %v bytes, flow control %v %v", len(payload), &s.fc, cfc)
+	offset := s.fc.used
+	allowed := s.fc.take(cfc, uint64(len(payload)))
+	s.log(logTypeFlowControl, "flow control consumed %v %v", &s.fc, cfc)
+	if allowed == 0 {
+		s.log(logTypeFlowControl, "blocked write")
+		return 0, ErrorWouldBlock
+	}
+	payload = payload[:allowed]
+	s.insertSortedChunk(offset, false, payload)
+	return int(allowed), nil
 }
 
-func (s *sendStreamBase) write(data []byte) error {
+func (s *sendStreamBase) write(data []byte, connectionFlowControl *flowControl) (int, error) {
 	switch s.state {
 	case SendStreamStateOpen:
 		s.setSendState(SendStreamStateSend)
 		// Allow a zero-octet write on a stream that hasn't been opened.
 		if len(data) == 0 {
-			return s.queue(data)
+			return s.queue(data, connectionFlowControl)
 		}
 	case SendStreamStateSend:
 		// OK to send
 	default:
-		return ErrorStreamIsClosed
+		return 0, ErrorStreamIsClosed
 	}
+	written := 0
 	for len(data) > 0 {
 		tocpy := 1024
 		if tocpy > len(data) {
 			tocpy = len(data)
 		}
-		err := s.queue(data[:tocpy])
-		if err != nil {
-			return err
+		n, err := s.queue(data[:tocpy], connectionFlowControl)
+		if (err == ErrorWouldBlock) && (written > 0) {
+			s.log(logTypeFlowControl, "write flow control blocked at offset %d", s.fc.used)
+			break
 		}
+		if err != nil {
+			return written, err
+		}
+		written += n
 
 		data = data[tocpy:]
 	}
 
-	return nil
+	s.log(logTypeTrace, "wrote %d bytes", written)
+	return written, nil
 }
 
 func (s *sendStreamBase) outstandingQueuedBytes() int {
@@ -266,46 +280,32 @@ func (s *sendStreamBase) outstandingQueuedBytes() int {
 	return n
 }
 
-// Push out all the frames permitted by flow control.
-func (s *sendStreamBase) outputWritable() ([]streamChunk, bool) {
-	s.log(logTypeStream, "outputWritable, current max offset=%d)", s.maxStreamData)
-	out := make([]streamChunk, 0)
-	blocked := false
-	for len(s.chunks) > 0 {
-		ch := s.chunks[0]
-		if ch.offset+uint64(len(ch.data)) > s.maxStreamData {
-			blocked = true
-			s.log(logTypeFlowControl, "stream blocked at maxStreamData=%d, chunk(offset=%d, len=%d)", s.maxStreamData, ch.offset, len(ch.data))
-			break
-		}
-		out = append(out, ch)
-		s.chunks = s.chunks[1:]
+func (s *sendStreamBase) flowControl() flowControl {
+	return s.fc
+}
+
+// Push out all pending frames.  Set the stream state if the end of the stream is available.
+func (s *sendStreamBase) outputWritable() []streamChunk {
+	s.log(logTypeStream, "outputWritable, current max offset=%d)", s.fc.max)
+	for _, ch := range s.chunks {
 		if ch.last {
 			s.setSendState(SendStreamStateDataSent)
 		}
 	}
 
-	if s.blocked {
-		// Don't return blocked > once
-		blocked = false
-	} else {
-		s.blocked = blocked
-	}
-	return out, blocked
+	out := s.chunks
+	s.chunks = nil
+	return out
 }
 
 func (s *sendStreamBase) processMaxStreamData(offset uint64) {
-	if offset < s.maxStreamData {
-		return
-	}
-	s.log(logTypeFlowControl, "max send offset set to %d", offset)
-	s.maxStreamData = offset
+	s.fc.update(offset)
 }
 
 func (s *sendStreamBase) close() {
 	switch s.state {
 	case SendStreamStateOpen, SendStreamStateSend:
-		s.insertSortedChunk(s.offset, true, nil)
+		s.insertSortedChunk(s.fc.used, true, nil)
 		s.setSendState(SendStreamStateCloseQueued)
 	default:
 		// NOOP
@@ -314,9 +314,8 @@ func (s *sendStreamBase) close() {
 
 type recvStreamBase struct {
 	streamCommon
-	state        RecvStreamState
-	lastReceived uint64
-	readable     bool
+	state    RecvStreamState
+	readable bool
 }
 
 func (s *recvStreamBase) setRecvState(state RecvStreamState) {
@@ -339,37 +338,48 @@ func (s *recvStreamBase) clearReadable() bool {
 }
 
 // Add data to a stream. Return true if this is readable now.
-func (s *recvStreamBase) newFrameData(offset uint64, last bool, payload []byte) error {
-	s.log(logTypeStream, "New data offset=%d, len=%d", offset, len(payload))
+func (s *recvStreamBase) newFrameData(offset uint64, last bool, payload []byte,
+	cfc *flowControl) error {
+	s.log(logTypeStream, "new data offset=%d, len=%d", offset, len(payload))
+	s.log(logTypeFlowControl, "new data flow control %v %v", &s.fc, cfc)
 
 	end := offset + uint64(len(payload))
-	if s.maxStreamData < s.lastReceived {
-		return ErrorFrameFormatError
+	if end < s.readOffset {
+		// The application already read this data.
+		return nil
 	}
 	if last {
-		if end < s.lastReceived {
-			return ErrorProtocolViolation
+		if end < s.fc.used {
+			// The end can't be less than what we've received already.
+			return ErrorFlowControlError
 		}
 		if s.state == RecvStreamStateRecv {
 			s.setRecvState(RecvStreamStateSizeKnown)
 		}
-	} else if end > s.lastReceived {
+	} else if end > s.fc.used {
 		if s.state != RecvStreamStateRecv {
-			// We shouldn't be increasing lastReceived in any other state.
-			return ErrorProtocolViolation
+			// We shouldn't be increasing used in any other state.
+			return ErrorFlowControlError
 		}
-	} else if end <= s.offset {
+
+		increase := end - s.fc.used
+		taken := s.fc.take(cfc, increase)
+		s.log(logTypeFlowControl, "taken flow control %d, now %v %v", taken, &s.fc, cfc)
+		if taken < increase {
+			// We didn't have that much available.
+			return ErrorFlowControlError
+		}
+	} else if end <= s.readOffset {
 		// No new data here.
 		return nil
 	}
-	s.lastReceived = end
 	if s.state != RecvStreamStateRecv && s.state != RecvStreamStateSizeKnown {
-		// We shouldn't be increasing lastReceived in RecvStreamStateSizeKnown.
+		// We shouldn't be receiving in other states.
 		return nil
 	}
 
 	s.insertSortedChunk(offset, last, payload)
-	if s.chunks[0].offset <= s.offset {
+	if s.chunks[0].offset <= s.readOffset {
 		s.readable = true
 	}
 
@@ -379,7 +389,8 @@ func (s *recvStreamBase) newFrameData(offset uint64, last bool, payload []byte) 
 // Read from a stream into a buffer. Up to |len(b)| bytes will be read,
 // and the number of bytes returned is in |n|.
 func (s *recvStreamBase) read(b []byte) (int, error) {
-	s.log(logTypeStream, "Reading len = %v current chunks=%v", len(b), len(s.chunks))
+	s.log(logTypeStream, "Reading len=%v read offset=%v available chunks=%v",
+		len(b), s.readOffset, len(s.chunks))
 
 	read := 0
 
@@ -389,14 +400,14 @@ func (s *recvStreamBase) read(b []byte) (int, error) {
 		}
 
 		chunk := s.chunks[0]
-
+		s.log(logTypeTrace, "next chunk %v", chunk)
 		// We have a gap.
-		if chunk.offset > s.offset {
+		if chunk.offset > s.readOffset {
 			break
 		}
 
 		// Remove leading bytes
-		remove := s.offset - chunk.offset
+		remove := s.readOffset - chunk.offset
 		if remove > uint64(len(chunk.data)) {
 			// Nothing left.
 			s.chunks = s.chunks[1:]
@@ -408,9 +419,10 @@ func (s *recvStreamBase) read(b []byte) (int, error) {
 
 		// Now figure out how much we can read
 		n := copy(b, chunk.data)
+		s.log(logTypeTrace, "read %v at offset %v", n, s.readOffset)
 		chunk.data = chunk.data[n:]
 		chunk.offset += uint64(n)
-		s.offset += uint64(n)
+		s.readOffset += uint64(n)
 		b = b[n:]
 		read += n
 
@@ -444,37 +456,20 @@ func (s *recvStreamBase) read(b []byte) (int, error) {
 func (s *recvStreamBase) handleReset(offset uint64) error {
 	switch s.state {
 	case RecvStreamStateRecv:
-		s.lastReceived = offset
+		s.fc.used = offset
 	case RecvStreamStateDataRecvd, RecvStreamStateResetRead:
 		panic("we don't use this state")
 	case RecvStreamStateSizeKnown, RecvStreamStateDataRead:
-		if offset != s.lastReceived {
+		if offset != s.fc.used {
 			return ErrorProtocolViolation
 		}
 	default:
 		panic("unknown state")
 	}
+
 	s.setRecvState(RecvStreamStateResetRecvd)
 	s.chunks = nil
 	return nil
-}
-
-func (s *recvStreamBase) creditMaxStreamData() (uint64, bool) {
-	remaining := s.maxStreamData - s.lastReceived
-	s.log(logTypeFlowControl, "%d bytes of credit remaining, lastReceived=%d",
-		remaining, s.lastReceived)
-	credit := false
-	if remaining < kInitialMaxStreamData/2 {
-		credit = true
-
-		max := ^uint64(0)
-		if max-s.maxStreamData > kInitialMaxStreamData {
-			max = s.maxStreamData + kInitialMaxStreamData
-		}
-		s.maxStreamData = max
-	}
-
-	return s.maxStreamData, credit
 }
 
 // SendStream is a unidirectional stream for sending.
@@ -492,11 +487,10 @@ func newSendStream(c *Connection, id uint64, initialMax uint64) sendStreamPrivat
 		c: c, id: id,
 		sendStreamBase: sendStreamBase{
 			streamCommon: streamCommon{
-				log:           newStreamLogger(id, "send", c.log),
-				maxStreamData: initialMax,
+				log: newStreamLogger(id, "send", c.log),
+				fc:  flowControl{initialMax, 0},
 			},
-			state:   SendStreamStateOpen,
-			blocked: false,
+			state: SendStreamStateOpen,
 		},
 	}
 }
@@ -512,13 +506,17 @@ func (s *sendStream) Write(data []byte) (int, error) {
 		return 0, ErrorConnIsClosed
 	}
 
-	err := s.write(data)
+	n, err := s.write(data, &s.c.sendFlowControl)
 	if err != nil {
-		return 0, err
+		if err == ErrorWouldBlock {
+			s.c.updateStreamBlocked(s)
+			s.c.updateBlocked()
+		}
+		return n, err
 	}
 
 	s.c.sendQueued(false)
-	return len(data), nil
+	return n, nil
 }
 
 // Close makes the stream end cleanly.
@@ -531,7 +529,7 @@ func (s *sendStream) Close() error {
 // Reset abandons writing on the stream.
 func (s *sendStream) Reset(code ErrorCode) error {
 	s.setSendState(SendStreamStateResetSent)
-	f := newRstStreamFrame(s.id, code, s.offset)
+	f := newRstStreamFrame(s.id, code, s.fc.used)
 	return s.c.sendFrame(f)
 }
 
@@ -550,8 +548,8 @@ func newRecvStream(c *Connection, id uint64, maxStreamData uint64) recvStreamPri
 		c: c, id: id,
 		recvStreamBase: recvStreamBase{
 			streamCommon: streamCommon{
-				log:           newStreamLogger(id, "recv", c.log),
-				maxStreamData: maxStreamData,
+				log: newStreamLogger(id, "recv", c.log),
+				fc:  flowControl{maxStreamData, 0},
 			},
 			state:    RecvStreamStateRecv,
 			readable: false,
@@ -564,6 +562,17 @@ func (s *recvStream) Id() uint64 {
 	return s.id
 }
 
+// updateMaxStreamData checks the current flow control limit and sends
+// MAX_STREAM_DATA as necessary.
+func (s *recvStream) updateMaxStreamData(force bool) {
+	s.log(logTypeFlowControl, "credit flow control %v", &s.fc)
+	if force || s.fc.remaining() < kInitialMaxStreamData/2 {
+		s.fc.max = s.readOffset + kInitialMaxData
+		s.log(logTypeFlowControl, "increased flow control to %v", &s.fc)
+		s.c.issueStreamCredit(s, s.fc.max)
+	}
+}
+
 // Read implements io.Reader.
 func (s *recvStream) Read(b []byte) (int, error) {
 	if s.c.isClosed() {
@@ -574,10 +583,29 @@ func (s *recvStream) Read(b []byte) (int, error) {
 	if err != nil {
 		return 0, err
 	}
+	s.c.amountRead += uint64(n)
+	// Now issue credit for stream flow control, ...
+	s.updateMaxStreamData(false)
+	// ..., connection flow control, ...
+	s.c.issueCredit(false)
+	// ..., and streams.
 	if s.state == RecvStreamStateDataRead {
 		s.c.issueStreamIdCredit(streamTypeFromId(s.id, s.c.role))
 	}
 	return n, nil
+}
+
+func (s *recvStream) handleReset(offset uint64) error {
+	err := s.recvStreamBase.handleReset(offset)
+	if err != nil {
+		return err
+	}
+	// Pretend that we read this much data.
+	s.c.amountRead += s.fc.used - s.readOffset
+	s.readOffset = s.fc.used
+	s.c.issueCredit(false)
+
+	return nil
 }
 
 // StopSending requests a reset.
@@ -689,6 +717,10 @@ type flowControl struct {
 	used uint64
 }
 
+func (fc *flowControl) String() string {
+	return fmt.Sprintf("%d/%d", fc.used, fc.max)
+}
+
 func (fc *flowControl) update(max uint64) {
 	if max > fc.max {
 		fc.max = max
@@ -696,17 +728,19 @@ func (fc *flowControl) update(max uint64) {
 }
 
 func (fc *flowControl) take(other *flowControl, amount uint64) uint64 {
-	taken := fc.available()
-	if taken > other.available() {
-		taken = other.available()
+	taken := fc.remaining()
+	if taken > other.remaining() {
+		taken = other.remaining()
 	}
 	if taken > amount {
 		taken = amount
 	}
+	fc.used += taken
+	other.used += taken
 	return taken
 }
 
-func (fc *flowControl) available() uint64 {
+func (fc *flowControl) remaining() uint64 {
 	return fc.max - fc.used
 }
 

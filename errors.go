@@ -93,6 +93,7 @@ var ErrorMissingValue = fatalError("Expected value is missing")
 var ErrorInvalidEncoding = fatalError("Invalid encoding")
 var ErrorProtocolViolation = fatalError("Protocol violation")
 var ErrorFrameFormatError = fatalError("Frame format error")
+var ErrorFlowControlError = fatalError("Flow control error")
 
 // Protocol errors
 type ErrorCode uint16

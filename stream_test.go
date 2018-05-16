@@ -47,21 +47,22 @@ func newTestStreamFixture(t *testing.T) *testStreamFixture {
 		logf(tag, fullFormat, args...)
 	}
 
+	fc := flowControl{2048, 0}
 	return &testStreamFixture{
 		t:    t,
 		name: name,
 		log:  log,
-		r:    &recvStreamBase{streamCommon: streamCommon{log: log, maxStreamData: 2048}},
-		w:    &sendStreamBase{streamCommon: streamCommon{log: log, maxStreamData: 2048}},
+		r:    &recvStreamBase{streamCommon: streamCommon{log: log, fc: fc}},
+		w:    &sendStreamBase{streamCommon: streamCommon{log: log, fc: fc}},
 		b:    nil,
 	}
 }
 
 func TestStreamInputOneChunk(t *testing.T) {
 	f := newTestStreamFixture(t)
-	err := f.r.newFrameData(0, false, kTestString1)
+	err := f.r.newFrameData(0, false, kTestString1, &flowControl{2048, 0})
 	assertNotError(t, err, "Data should be accepted")
-	assertEquals(t, f.r.lastReceived, uint64(len(kTestString1)))
+	assertEquals(t, f.r.fc.used, uint64(len(kTestString1)))
 	assertEquals(t, RecvStreamStateRecv, f.r.state)
 	f.read()
 	assertByteEquals(t, f.b, kTestString1)
@@ -69,22 +70,22 @@ func TestStreamInputOneChunk(t *testing.T) {
 
 func TestStreamInputTwoChunks(t *testing.T) {
 	f := newTestStreamFixture(t)
-	err := f.r.newFrameData(0, false, kTestString1)
+	err := f.r.newFrameData(0, false, kTestString1, &flowControl{2048, 0})
 	assertNotError(t, err, "Data should be accepted")
-	assertEquals(t, f.r.lastReceived, uint64(len(kTestString1)))
+	assertEquals(t, f.r.fc.used, uint64(len(kTestString1)))
 	f.read()
 	assertByteEquals(t, f.b, kTestString1)
-	err = f.r.newFrameData(uint64(len(kTestString1)), false, kTestString2)
-	assertEquals(t, f.r.lastReceived, uint64(len(kTestString1)+len(kTestString2)))
+	err = f.r.newFrameData(uint64(len(kTestString1)), false, kTestString2, &flowControl{2048, 0})
+	assertEquals(t, f.r.fc.used, uint64(len(kTestString1)+len(kTestString2)))
 	f.read()
 	assertByteEquals(t, f.b, kTestString2)
 }
 
 func TestStreamInputCoalesceChunks(t *testing.T) {
 	f := newTestStreamFixture(t)
-	err := f.r.newFrameData(0, false, kTestString1[:2])
+	err := f.r.newFrameData(0, false, kTestString1[:2], &flowControl{2048, 0})
 	assertNotError(t, err, "data should be accepted")
-	err = f.r.newFrameData(2, false, kTestString1[2:])
+	err = f.r.newFrameData(2, false, kTestString1[2:], &flowControl{2048, 0})
 	assertNotError(t, err, "data should be accepted")
 	f.read()
 	assertByteEquals(t, f.b, kTestString1)
@@ -92,9 +93,9 @@ func TestStreamInputCoalesceChunks(t *testing.T) {
 
 func TestStreamInputChunksOverlap(t *testing.T) {
 	f := newTestStreamFixture(t)
-	err := f.r.newFrameData(0, false, kTestString1[:2])
+	err := f.r.newFrameData(0, false, kTestString1[:2], &flowControl{2048, 0})
 	assertNotError(t, err, "data should be accepted")
-	err = f.r.newFrameData(0, false, kTestString1)
+	err = f.r.newFrameData(0, false, kTestString1, &flowControl{2048, 0})
 	assertNotError(t, err, "data should be accepted")
 	f.read()
 	assertByteEquals(t, f.b, kTestString1)
@@ -102,12 +103,12 @@ func TestStreamInputChunksOverlap(t *testing.T) {
 
 func TestStreamInputTwoChunksWrongOrder(t *testing.T) {
 	f := newTestStreamFixture(t)
-	err := f.r.newFrameData(2, false, kTestString1[2:])
+	err := f.r.newFrameData(2, false, kTestString1[2:], &flowControl{2048, 0})
 	assertNotError(t, err, "data should be accepted")
 	assertX(t, !f.r.readable, "Stream not should be readable")
-	assertEquals(t, f.r.lastReceived, uint64(len(kTestString1)))
+	assertEquals(t, f.r.fc.used, uint64(len(kTestString1)))
 	f.readExpectError(ErrorWouldBlock)
-	err = f.r.newFrameData(0, false, kTestString1[:2])
+	err = f.r.newFrameData(0, false, kTestString1[:2], &flowControl{2048, 0})
 	assertNotError(t, err, "data should be accepted")
 	f.read()
 	assertByteEquals(t, f.b, kTestString1)
@@ -115,26 +116,26 @@ func TestStreamInputTwoChunksWrongOrder(t *testing.T) {
 
 func TestStreamInputChunk1FinChunk2(t *testing.T) {
 	f := newTestStreamFixture(t)
-	err := f.r.newFrameData(0, true, kTestString1)
+	err := f.r.newFrameData(0, true, kTestString1, &flowControl{2048, 0})
 	assertNotError(t, err, "data should be accepted")
 	assertEquals(t, RecvStreamStateSizeKnown, f.r.state)
 	f.read()
 	assertByteEquals(t, f.b, kTestString1)
 	assertEquals(t, RecvStreamStateDataRead, f.r.state)
-	err = f.r.newFrameData(uint64(len(kTestString1)), false, kTestString2)
-	assertEquals(t, err, ErrorProtocolViolation)
+	err = f.r.newFrameData(uint64(len(kTestString1)), false, kTestString2, &flowControl{2048, 0})
+	assertEquals(t, err, ErrorFlowControlError)
 	assertX(t, !f.r.readable, "Stream not be readable")
 	f.readExpectError(io.EOF)
 }
 
 func TestStreamInputShortFinChunkAfterFin(t *testing.T) {
 	f := newTestStreamFixture(t)
-	err := f.r.newFrameData(0, true, kTestString1)
+	err := f.r.newFrameData(0, true, kTestString1, &flowControl{2048, 0})
 	assertNotError(t, err, "data should be accepted")
 	assertEquals(t, RecvStreamStateSizeKnown, f.r.state)
 	f.read()
-	err = f.r.newFrameData(0, true, kTestString1[:2])
-	assertEquals(t, err, ErrorProtocolViolation)
+	err = f.r.newFrameData(0, true, kTestString1[:2], &flowControl{2048, 0})
+	assertNotError(t, err, "overlapping data can be discarded")
 }
 
 func TestStreamReadReset(t *testing.T) {
@@ -154,7 +155,7 @@ func TestStreamIncreaseFlowControl(t *testing.T) {
 	f := newTestStreamFixture(t)
 	f.w.processMaxStreamData(2050)
 	f.w.processMaxStreamData(2000)
-	assertEquals(t, uint64(2050), f.w.maxStreamData)
+	assertEquals(t, uint64(2050), f.w.fc.max)
 }
 
 func countChunkLens(chunks []streamChunk) int {
@@ -168,19 +169,27 @@ func countChunkLens(chunks []streamChunk) int {
 func TestStreamBlockRelease(t *testing.T) {
 	f := newTestStreamFixture(t)
 	b := make([]byte, 5000)
-	err := f.w.write(b)
+	connFc := &flowControl{uint64(len(b)), 0}
+	n, err := f.w.write(b, connFc)
 	assertEquals(t, nil, err)
-	chunks, blocked := f.w.outputWritable()
-	assertX(t, blocked, "Output is blocked")
+	chunks := f.w.outputWritable()
 	assertEquals(t, 2048, countChunkLens(chunks))
+	assertEquals(t, 2048, n)
+	assertEquals(t, uint64(2048), connFc.used)
 	// Calling output writable again returns 0 chunks
-	// and not blocked (so we don't complain twice).
-	chunks, blocked = f.w.outputWritable()
-	assertX(t, !blocked, "Output is blocked")
+	chunks = f.w.outputWritable()
 	assertEquals(t, 0, countChunkLens(chunks))
+
+	// Writing again blocks
+	_, err = f.w.write(b[n:], connFc)
+	assertEquals(t, ErrorWouldBlock, err)
+
 	// Increasing the limit should let us write.
 	f.w.processMaxStreamData(8192)
-	chunks, blocked = f.w.outputWritable()
-	assertX(t, !blocked, "Output is not blocked")
+	n, err = f.w.write(b[n:], connFc)
+	assertNotError(t, err, "Writing works")
+	assertEquals(t, 2952, n)
+	assertEquals(t, connFc.max, connFc.used)
+	chunks = f.w.outputWritable()
 	assertEquals(t, 2952, countChunkLens(chunks))
 }
