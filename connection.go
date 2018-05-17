@@ -1675,8 +1675,11 @@ func (c *Connection) processAckFrame(f *ackFrame, protected bool) error {
 	start := (end - f.FirstAckBlock)
 
 	// Decode ACK Delay
-	ackDelayMicros := QuicFloat16(f.AckDelay).Float32()
-	ackDelay := time.Duration(ackDelayMicros * 1e3)
+	ackExp := kTpDefaultAckDelayExponent
+	if c.tpHandler.peerParams != nil {
+		ackExp = c.tpHandler.peerParams.ackDelayExp
+	}
+	ackDelay := time.Microsecond * time.Duration(f.AckDelay<<ackExp)
 
 	// Process the First ACK Block
 	c.log(logTypeAck, "processing ACK range %x-%x", start, end)

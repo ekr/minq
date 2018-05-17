@@ -29,7 +29,7 @@ const (
 )
 
 const (
-	kTpDefaultAckDelayExponent = 3
+	kTpDefaultAckDelayExponent = byte(3)
 )
 
 type tpDef struct {
@@ -319,12 +319,14 @@ func (h *transportParametersHandler) Receive(hs mint.HandshakeType, el *mint.Ext
 	tp.idleTimeout = uint16(tmp)
 
 	tmp, err = params.getUintParameter(kTpIdAckDelayExponent, 1)
-	if err == ErrorMissingValue {
-		tmp = kTpDefaultAckDelayExponent
-	} else if err != nil {
-		return err
+	if err != nil {
+		if err != ErrorMissingValue {
+			return err
+		}
+		tp.ackDelayExp = kTpDefaultAckDelayExponent
+	} else {
+		tp.ackDelayExp = uint8(tmp)
 	}
-	tp.ackDelayExp = uint8(tmp)
 
 	h.peerParams = &tp
 
