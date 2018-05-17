@@ -203,7 +203,7 @@ func (p packetHeader) Version__length() uintptr {
 	return 0
 }
 
-func newPacket(pt packetType, destCid ConnectionId, srcCid ConnectionId, ver VersionNumber, pn uint64, payload []byte) *packet {
+func newPacket(pt packetType, destCid ConnectionId, srcCid ConnectionId, ver VersionNumber, pn uint64, payload []byte, aeadOverhead int) *packet {
 	if pt == packetTypeProtectedShort {
 		// Only support writing the 32-bit packet number.
 		pt = packetType(0x2 | packetFlagShortHeader)
@@ -219,7 +219,7 @@ func newPacket(pt packetType, destCid ConnectionId, srcCid ConnectionId, ver Ver
 			DestinationConnectionID: destCid,
 			SourceConnectionID:      srcCid,
 			Version:                 ver,
-			PayloadLength:           uint64(len(payload)),
+			PayloadLength:           uint64(len(payload) + aeadOverhead),
 			PacketNumber:            pn,
 		},
 		payload: payload,

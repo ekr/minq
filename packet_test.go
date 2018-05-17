@@ -33,13 +33,13 @@ func packetHeaderEDE(t *testing.T, p *packetHeader, cidLen uintptr) {
 
 func TestLongHeader(t *testing.T) {
 	p := newPacket(packetTypeInitial, testCid7, testCid4, testVersion,
-		testPn, make([]byte, 65))
+		testPn, make([]byte, 65), 16)
 	packetHeaderEDE(t, &p.packetHeader, 0)
 }
 
 func TestShortHeader(t *testing.T) {
 	p := newPacket(packetTypeProtectedShort, testCid7, testCid4, testVersion,
-		testPn, make([]byte, 65))
+		testPn, make([]byte, 65), 16)
 
 	// We have to provide assistance to the decoder for short headers.
 	// Otherwise, it can't know long the destination connection ID is.
