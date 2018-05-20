@@ -4,6 +4,7 @@ package minq
 
 import (
 	"fmt"
+	"github.com/bifurcation/mint"
 	"time"
 )
 
@@ -22,6 +23,7 @@ type recvdPackets struct {
 	maxReceived  uint64
 	minNotAcked2 uint64
 	packets      map[uint64]*packetData
+	unacked      bool // Are there packets we haven't generated an ACK for
 }
 
 func newRecvdPackets(log loggingFunction) *recvdPackets {
@@ -32,6 +34,7 @@ func newRecvdPackets(log loggingFunction) *recvdPackets {
 		0,     // maxReceived
 		0,     // minNotAcked2
 		make(map[uint64]*packetData, 0), // packets
+		false, // unacked
 	}
 }
 
@@ -56,6 +59,7 @@ func (p *recvdPackets) packetNotReceived(pn uint64) bool {
 }
 
 func (p *recvdPackets) packetSetReceived(pn uint64, protected bool, nonAcks bool) {
+	p.log(logTypeAck, "Setting packet received=%x", pn)
 	if pn > p.maxReceived {
 		p.maxReceived = pn
 	}
@@ -70,6 +74,7 @@ func (p *recvdPackets) packetSetReceived(pn uint64, protected bool, nonAcks bool
 		time.Now(),
 		false,
 	}
+	p.unacked = true
 }
 
 func (p *recvdPackets) packetSetAcked2(pn uint64) {
@@ -97,8 +102,19 @@ func (r *ackRanges) String() string {
 	return rsp
 }
 
+func (p *recvdPackets) needToAck() bool {
+	return p.unacked
+}
+
 // Prepare a list of the ACK ranges, starting at the highest
-func (p *recvdPackets) prepareAckRange(protected bool, allowAckOnly bool) ackRanges {
+func (p *recvdPackets) prepareAckRange(epoch mint.Epoch, allowAckOnly bool) ackRanges {
+	p.log(logTypeAck, "Prepare ACK range epoch=%d", epoch)
+	// Don't ACK if there's nothing new to ACK
+	if !p.unacked {
+		p.log(logTypeAck, "Nothing new to ACK")
+		return nil
+	}
+
 	var last uint64
 	var pn uint64
 	inrange := false
@@ -118,10 +134,8 @@ func (p *recvdPackets) prepareAckRange(protected bool, allowAckOnly bool) ackRan
 		// If we don't know about the packet, or if the ack has been
 		// acked, we don't need to ack it.
 		if ok && !pk.acked2 {
-			if protected || !pk.protected {
-				needs_ack = true
-				newMinNotAcked2 = pn
-			}
+			needs_ack = true
+			newMinNotAcked2 = pn
 		}
 
 		if ok && pk.acked2 {
@@ -164,5 +178,7 @@ func (p *recvdPackets) prepareAckRange(protected bool, allowAckOnly bool) ackRan
 		p.log(logTypeAck, "No non-ack packets and this ack is not ack-only capable")
 		return nil
 	}
+
+	p.unacked = false
 	return ranges
 }
