@@ -363,8 +363,11 @@ func (s *recvStreamBase) newFrameData(offset uint64, last bool, payload []byte,
 		}
 
 		increase := end - s.fc.used
-		taken := s.fc.take(cfc, increase)
-		s.log(logTypeFlowControl, "taken flow control %d, now %v %v", taken, &s.fc, cfc)
+		taken := increase
+		if !s.fc.unlimited {
+			taken := s.fc.take(cfc, increase)
+			s.log(logTypeFlowControl, "taken flow control %d, now %v %v", taken, &s.fc, cfc)
+		}
 		if taken < increase {
 			// We didn't have that much available.
 			return ErrorFlowControlError
@@ -456,6 +459,7 @@ func (s *recvStreamBase) read(b []byte) (int, error) {
 			return 0, ErrorStreamIsClosed
 		}
 	}
+	s.log(logTypeStream, "Returning %v bytes chunks=%v", read, len(s.chunks))
 	return read, nil
 }
 
@@ -494,7 +498,7 @@ func newSendStream(c *Connection, id uint64, initialMax uint64) sendStreamPrivat
 		sendStreamBase: sendStreamBase{
 			streamCommon: streamCommon{
 				log: newStreamLogger(id, "send", c.log),
-				fc:  flowControl{initialMax, 0},
+				fc:  newFlowControl(initialMax),
 			},
 			state: SendStreamStateOpen,
 		},
@@ -555,7 +559,7 @@ func newRecvStream(c *Connection, id uint64, maxStreamData uint64) recvStreamPri
 		recvStreamBase: recvStreamBase{
 			streamCommon: streamCommon{
 				log: newStreamLogger(id, "recv", c.log),
-				fc:  flowControl{maxStreamData, 0},
+				fc:  newFlowControl(maxStreamData),
 			},
 			state:    RecvStreamStateRecv,
 			readable: false,
@@ -719,11 +723,23 @@ func (ss *streamSet) id(index int) uint64 {
 }
 
 type flowControl struct {
-	max  uint64
-	used uint64
+	unlimited bool
+	max       uint64
+	used      uint64
+}
+
+func newFlowControl(initialMax uint64) flowControl {
+	fc := flowControl{false, initialMax, 0}
+	if initialMax == ^uint64(0) {
+		fc.unlimited = true
+	}
+	return fc
 }
 
 func (fc *flowControl) String() string {
+	if fc.unlimited {
+		return ("Unlimited")
+	}
 	return fmt.Sprintf("%d/%d", fc.used, fc.max)
 }
 
@@ -734,15 +750,23 @@ func (fc *flowControl) update(max uint64) {
 }
 
 func (fc *flowControl) take(other *flowControl, amount uint64) uint64 {
-	taken := fc.remaining()
-	if taken > other.remaining() {
-		taken = other.remaining()
+	taken := uint64(0)
+	if !fc.unlimited {
+		taken = fc.remaining()
+		if taken > other.remaining() {
+			taken = other.remaining()
+		}
+	} else {
+		taken = ^uint64(0)
 	}
 	if taken > amount {
 		taken = amount
 	}
+
 	fc.used += taken
-	other.used += taken
+	if other != nil {
+		other.used += taken
+	}
 	return taken
 }
 

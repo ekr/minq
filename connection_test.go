@@ -1,8 +1,6 @@
 package minq
 
 import (
-	"errors"
-	"fmt"
 	"io"
 	"io/ioutil"
 	"testing"
@@ -148,7 +146,7 @@ func newCsPair(t *testing.T) *csPair {
 }
 
 func (pair *csPair) handshake(t *testing.T) {
-	err := pair.client.sendClientInitial()
+	_, err := pair.client.CheckTimer()
 	assertNotError(t, err, "Couldn't send client initial packet")
 
 	for pair.client.state != StateEstablished || pair.server.state != StateEstablished {
@@ -166,8 +164,8 @@ func TestSendCI(t *testing.T) {
 	client := NewConnection(cTrans, RoleClient, testTlsConfig(), nil)
 	assertNotNil(t, client, "Couldn't make client")
 
-	err := client.sendClientInitial()
-	assertNotError(t, err, "Couldn't send client initial packet")
+	_, err := client.CheckTimer()
+	assertNotError(t, err, "Couldn't check timer")
 }
 
 func TestSendReceiveCIOnly(t *testing.T) {
@@ -179,8 +177,8 @@ func TestSendReceiveCIOnly(t *testing.T) {
 	server := NewConnection(sTrans, RoleServer, testTlsConfig(), nil)
 	assertNotNil(t, server, "Couldn't make server")
 
-	err := client.sendClientInitial()
-	assertNotError(t, err, "Couldn't send client initial packet")
+	_, err := client.CheckTimer()
+	assertNotError(t, err, "Couldn't check timer")
 
 	err = inputAll(server)
 
@@ -196,13 +194,15 @@ func TestSendReceiveDupCI(t *testing.T) {
 	server := NewConnection(sTrans, RoleServer, testTlsConfig(), nil)
 	assertNotNil(t, server, "Couldn't make server")
 
-	err := client.sendClientInitial()
+	n, err := client.CheckTimer()
 	assertNotError(t, err, "Couldn't send client initial packet")
 
 	err = inputAll(server)
 	assertNotError(t, err, "Error processing CI")
 
-	n, err := client.CheckTimer()
+	time.Sleep(kDefaultInitialRtt + 10*time.Millisecond)
+
+	n, err = client.CheckTimer()
 	assertNotError(t, err, "Couldn't check timer on client")
 	assertEquals(t, n, 1)
 
@@ -219,42 +219,27 @@ func TestSendReceiveCISI(t *testing.T) {
 	server := NewConnection(sTrans, RoleServer, testTlsConfig(), nil)
 	assertNotNil(t, server, "Couldn't make server")
 
-	err := client.sendClientInitial()
-	assertNotError(t, err, "Couldn't send client initial packet")
+	_, err := client.CheckTimer()
+	assertNotError(t, err, "Couldn't check timer")
 
 	err = inputAll(server)
 	assertNotError(t, err, "Error processing CI")
 
 	err = inputAll(client)
-	assertNotError(t, err, "Error processing SH")
+	assertNotError(t, err, "Error processing SH...SFIN")
 
 	err = inputAll(server)
 	assertNotError(t, err, "Error processing CFIN")
-
-	fmt.Println("Handshake should be complete")
 
 	err = inputAll(client)
 	assertNotError(t, err, "Error processing NST")
 
-	err = inputAll(server)
-	assertNotError(t, err, "Error processing CFIN")
-
-	fmt.Println("Checking client state")
 	assertEquals(t, client.state, StateEstablished)
-	fmt.Println("Checking server state")
 	assertEquals(t, server.state, StateEstablished)
-
-	// All the server's and client's data should be acked.
-	n := server.outstandingQueuedBytes()
-	assertEquals(t, 0, n)
-
-	// But the client still has-unacked-data
-	n = client.outstandingQueuedBytes()
-	assertEquals(t, 0, n)
 
 	// Run the client's checkTimer, which shouldn't do
 	// anything because you don't ACK acks.
-	n, err = client.CheckTimer()
+	n, err := client.CheckTimer()
 	assertNotError(t, err, "Couldn't run client timer")
 	assertEquals(t, 0, n)
 
@@ -328,15 +313,25 @@ func TestSendReceiveData(t *testing.T) {
 	pair.server.CheckTimer()
 	err := inputAll(pair.client)
 
+	// Things should now be quiescent
+	n, err := pair.client.CheckTimer()
+	assertNotError(t, err, "Checking timer should do nothing")
+	assertEquals(t, 0, n)
+
+	n, err = pair.server.CheckTimer()
+	assertNotError(t, err, "Checking timer should do nothing")
+	assertEquals(t, 0, n)
+
 	// Write data C->S
 	cs := pair.client.CreateStream()
+	assertEquals(t, uint64(0), cs.Id())
 	assertNotNil(t, cs, "Failed to create a stream")
 	cs.Write(testString)
 
 	// Read data C->S
 	err = inputAll(pair.server)
 	assertNotError(t, err, "Couldn't read input packets")
-	ss := pair.server.GetStream(4)
+	ss := pair.server.GetStream(0)
 	b, err := ioutil.ReadAll(ss)
 	assertEquals(t, ErrorWouldBlock, err)
 	assertNotNil(t, b, "Read data from server")
@@ -357,8 +352,8 @@ func TestSendReceiveData(t *testing.T) {
 
 	// Check that we only create streams in one direction
 	cs = pair.client.CreateStream()
-	assertEquals(t, uint64(8), cs.Id())
-	assertNotNil(t, pair.client.GetStream(8), "Stream 8 should exist")
+	assertEquals(t, uint64(4), cs.Id())
+	assertNotNil(t, pair.client.GetStream(4), "Stream 4 should exist")
 	assertX(t, pair.client.GetStream(2) == nil, "Stream 2 should not exist")
 
 	// Close the client.
@@ -470,7 +465,7 @@ func TestSendReceiveRetransmit(t *testing.T) {
 	// Read data C->S
 	err = inputAll(pair.server)
 	assertNotError(t, err, "Couldn't read input packets")
-	ss := pair.server.GetStream(4)
+	ss := pair.server.GetStream(0)
 	b := make([]byte, 1024)
 	n, err := ss.Read(b)
 	assertNotError(t, err, "Error reading")
@@ -523,7 +518,7 @@ func TestSendReceiveStreamFin(t *testing.T) {
 	// Read data C->S
 	err = inputAll(pair.server)
 	assertNotError(t, err, "Couldn't read input packets")
-	ss := pair.server.GetStream(4)
+	ss := pair.server.GetStream(0)
 	b := make([]byte, 1024)
 	n, err = ss.Read(b)
 	assertNotError(t, err, "Couldn't read from client")
@@ -562,7 +557,7 @@ func TestSendReceiveStreamRst(t *testing.T) {
 	// Read data C->S. Should result in no data.
 	err = inputAll(pair.server)
 	assertNotError(t, err, "Couldn't read input packets")
-	ss := pair.server.GetStream(4)
+	ss := pair.server.GetStream(0)
 	b := make([]byte, 1024)
 	n, err = ss.Read(b)
 	assertEquals(t, err, ErrorStreamReset)
@@ -580,7 +575,7 @@ func TestVersionNegotiationPacket(t *testing.T) {
 	server := NewConnection(sTrans, RoleServer, testTlsConfig(), nil)
 	assertNotNil(t, server, "Couldn't make server")
 
-	err := client.sendClientInitial()
+	_, err := client.CheckTimer()
 	assertNotError(t, err, "Couldn't send client initial packet")
 
 	err = inputAll(server)
@@ -611,7 +606,7 @@ func TestCantMakeRemoteStreams(t *testing.T) {
 	assertEquals(t, nil, recv)
 }
 
-func TestStatelessRetry(t *testing.T) {
+func DISABLED_TestStatelessRetry(t *testing.T) {
 	cTrans, sTrans := newTestTransportPair(true)
 
 	client := NewConnection(cTrans, RoleClient, testTlsConfig(), nil)

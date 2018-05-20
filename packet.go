@@ -78,6 +78,23 @@ func (pt packetType) isProtected() bool {
 	return true
 }
 
+func (pt packetType) String() string {
+	switch pt {
+	case packetTypeInitial:
+		return "Initial"
+	case packetTypeRetry:
+		return "Retry"
+	case packetTypeHandshake:
+		return "Handshake"
+	case packetType0RTTProtected:
+		return "0-RTT"
+	case packetTypeProtectedShort:
+		return "1-RTT"
+	default:
+		return fmt.Sprintf("%x", uint8(pt))
+	}
+}
+
 // kCidDefaultLength is the length of connection ID we generate.
 // TODO: make this configurable.
 const kCidDefaultLength = 5
@@ -123,11 +140,7 @@ func (p packetHeader) String() string {
 	if p.Type.isLongHeader() {
 		ht = "LONG"
 	}
-	prot := "CLEAR"
-	if p.Type.isProtected() {
-		prot = "ENC"
-	}
-	return fmt.Sprintf("%s %s PT=%x PN=%x", ht, prot, p.getHeaderType(), p.PacketNumber)
+	return fmt.Sprintf("%s PT=%v PN=%x", ht, p.getHeaderType(), p.PacketNumber)
 }
 
 func (p *packetHeader) getHeaderType() packetType {
