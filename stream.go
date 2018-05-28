@@ -114,7 +114,7 @@ type sendStreamPrivateMethods interface {
 
 type recvStreamMethods interface {
 	io.Reader
-	StopSending(ErrorCode) error
+	StopSending(uint16) error
 	RecvState() RecvStreamState
 }
 
@@ -609,7 +609,7 @@ func (s *recvStream) handleReset(offset uint64) error {
 }
 
 // StopSending requests a reset.
-func (s *recvStream) StopSending(code ErrorCode) error {
+func (s *recvStream) StopSending(code uint16) error {
 	f := newStopSendingFrame(s.id, code)
 	return s.c.sendFrame(f)
 }

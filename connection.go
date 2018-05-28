@@ -1235,7 +1235,7 @@ func (c *Connection) processCleartext(hdr *packetHeader, payload []byte, naf *bo
 			}
 			nonAck = false
 
-		case *connectionCloseFrame:
+		case *connectionCloseFrame, *applicationCloseFrame:
 			c.log(logTypeConnection, "Received frame close")
 			c.setState(StateClosed)
 			return fatalError("Connection closed")
@@ -1508,13 +1508,14 @@ func (c *Connection) processUnprotected(hdr *packetHeader, packetNumber uint64, 
 				return err
 			}
 
-		case *connectionCloseFrame:
-			c.log(logTypeConnection, "Received CONNECTION_CLOSE")
+		case *connectionCloseFrame, *applicationCloseFrame:
+			c.log(logTypeConnection, "Received %v, closing", f.f.getType())
 			// Don't save the packet, we should go straight to draining.
 			// Note that we don't bother with the optional transition from draining to
 			// closing because we don't bother to decrypt packets that are received while
 			// closing.
-			c.close(kQuicErrorNoError, "received CONNECTION_CLOSE", false)
+			closeFrame := newConnectionCloseFrame(kQuicErrorNoError, "received close frame")
+			c.close(closeFrame, false)
 			// Stop processing any more frames.
 			return nil
 
@@ -1921,7 +1922,7 @@ func (c *Connection) SetHandler(h ConnectionHandler) {
 	c.handler = h
 }
 
-func (c *Connection) close(code ErrorCode, reason string, savePacket bool) error {
+func (c *Connection) close(f frame, savePacket bool) error {
 	if c.isClosed() {
 		return nil
 	}
@@ -1931,7 +1932,6 @@ func (c *Connection) close(code ErrorCode, reason string, savePacket bool) error
 
 	c.closingEnd = time.Now().Add(3 * c.congestion.rto())
 	c.setState(StateClosing)
-	f := newConnectionCloseFrame(code, reason)
 	closePacket, err := c.sendPacketNow([]frame{f}, false)
 	if err != nil {
 		return err
@@ -1945,7 +1945,14 @@ func (c *Connection) close(code ErrorCode, reason string, savePacket bool) error
 // Close a connection.
 func (c *Connection) Close() error {
 	c.log(logTypeConnection, "Close()")
-	return c.close(kQuicErrorNoError, "You don't have to go home but you can't stay here", true)
+	f := newConnectionCloseFrame(kQuicErrorNoError, "You don't have to go home but you can't stay here")
+	return c.close(f, true)
+}
+
+func (c *Connection) Error(appError uint16, reason string) error {
+	c.log(logTypeConnection, "Close()")
+	f := newApplicationCloseFrame(appError, reason)
+	return c.close(f, true)
 }
 
 func (c *Connection) isDead() bool {

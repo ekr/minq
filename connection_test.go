@@ -780,7 +780,7 @@ func TestUnidirectionalStopSending(t *testing.T) {
 	assertNotNil(t, d, "Read data from client")
 	assertByteEquals(t, d, testString)
 
-	err = sstream.StopSending(kQuicErrorNoError)
+	err = sstream.StopSending(0)
 	assertNotError(t, err, "stop sending just works")
 
 	err = inputAll(pair.client)
@@ -822,7 +822,7 @@ func TestBidirectionalStopSending(t *testing.T) {
 
 	// Now to test.  The server sends STOP_SENDING.
 	testString2 := []byte("zyxwvut")
-	err = sstream.StopSending(kQuicErrorNoError)
+	err = sstream.StopSending(0)
 	assertNotError(t, err, "stop sending just works")
 	assertEquals(t, sstream.RecvState(), RecvStreamStateRecv) // no change
 
