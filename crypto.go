@@ -22,8 +22,8 @@ func infallibleHexDecode(s string) []byte {
 
 var kQuicVersionSalt = infallibleHexDecode("9c108f98520a5c5c32968e950e8a2c5fe06d6c38")
 
-const clientCtSecretLabel = "client hs"
-const serverCtSecretLabel = "server hs"
+const clientCtSecretLabel = "client in"
+const serverCtSecretLabel = "server in"
 
 const clientPpSecretLabel = "EXPORTER-QUIC client 1rtt"
 const serverPpSecretLabel = "EXPORTER-QUIC server 1rtt"
