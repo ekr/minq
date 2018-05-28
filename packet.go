@@ -106,10 +106,10 @@ type packetHeader struct {
 	// Consult getHeaderType if you want a value that corresponds to the
 	// definition of packetType.
 	Type                    packetType
+	Version                 VersionNumber
 	ConnectionIDLengths     byte
 	DestinationConnectionID ConnectionId
 	SourceConnectionID      ConnectionId
-	Version                 VersionNumber
 	PayloadLength           uint64 `tls:"varint"`
 	PacketNumber            uint64 // Never more than 32 bits on the wire.
 
