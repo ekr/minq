@@ -100,7 +100,7 @@ type hasIdentity interface {
 
 type sendStreamMethods interface {
 	io.WriteCloser
-	Reset(ErrorCode) error
+	Reset(uint16) error
 	SendState() SendStreamState
 }
 
@@ -527,7 +527,7 @@ func (s *sendStream) Close() error {
 }
 
 // Reset abandons writing on the stream.
-func (s *sendStream) Reset(code ErrorCode) error {
+func (s *sendStream) Reset(code uint16) error {
 	s.setSendState(SendStreamStateResetSent)
 	f := newRstStreamFrame(s.id, code, s.fc.used)
 	return s.c.sendFrame(f)

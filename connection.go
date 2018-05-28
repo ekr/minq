@@ -1503,7 +1503,7 @@ func (c *Connection) processUnprotected(hdr *packetHeader, packetNumber uint64, 
 				return ErrorProtocolViolation
 			}
 
-			err = s.Reset(kQuicErrorNoError)
+			err = s.Reset(0) // STOPPING
 			if err != nil {
 				return err
 			}

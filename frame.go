@@ -187,11 +187,11 @@ func (f rstStreamFrame) getType() frameType {
 	return kFrameTypeRstStream
 }
 
-func newRstStreamFrame(streamId uint64, errorCode ErrorCode, finalOffset uint64) frame {
+func newRstStreamFrame(streamId uint64, errorCode uint16, finalOffset uint64) frame {
 	return newFrame(streamId, &rstStreamFrame{
 		kFrameTypeRstStream,
 		uint64(streamId),
-		uint16(errorCode),
+		errorCode,
 		finalOffset})
 }
 
