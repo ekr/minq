@@ -480,7 +480,7 @@ func (c *Connection) sendPacketRaw(pt packetType, version VersionNumber, pn uint
 		destCid = c.clientConnectionId
 	}
 
-	p := newPacket(pt, destCid, srcCid, version, pn, payload)
+	p := newPacket(pt, destCid, srcCid, version, pn, payload, aead.Overhead())
 	c.logPacket("Sending", &p.packetHeader, pn, payload)
 
 	// Encode the header so we know how long it is.
@@ -1275,7 +1275,7 @@ func (c *Connection) sendVersionNegotiation(hdr packetHeader) error {
 
 	c.log(logTypeConnection, "Sending version negotiation packet")
 	p := newPacket(packetType(pt[0]&0x7f), hdr.SourceConnectionID, hdr.DestinationConnectionID,
-		0, hdr.PacketNumber, payload)
+		0, hdr.PacketNumber, payload, 0)
 
 	header, err := encode(&p.packetHeader)
 	if err != nil {

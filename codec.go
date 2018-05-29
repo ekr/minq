@@ -156,13 +156,10 @@ func encode(i interface{}) (ret []byte, err error) {
 			continue
 		}
 
+		logf(logTypeCodec, "Type name %s Kind=%v", tipe.Name, field.Kind())
+
 		switch field.Kind() {
 		case reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-			if isVarint(tipe) {
-				varintEncode(&buf, field.Uint())
-				res = nil
-				break
-			}
 			// Call the length overrider to tell us if we shoud be using a shorter
 			// encoding.
 			encodingSize := uintptr(codecDefaultSize)
@@ -173,6 +170,14 @@ func encode(i interface{}) (ret []byte, err error) {
 				encodingSize = uintptr(lengthResult[0].Uint())
 				logf(logTypeCodec, "Overriden length to %v", encodingSize)
 			}
+			if isVarint(tipe) {
+				if encodingSize != 0 {
+					varintEncode(&buf, field.Uint())
+				}
+				res = nil
+				break
+			}
+
 			res = uintEncode(&buf, field, encodingSize)
 		case reflect.Array, reflect.Slice:
 			res = arrayEncode(&buf, field)
@@ -316,7 +321,7 @@ func decode(i interface{}, data []byte) (uintptr, error) {
 
 		switch field.Kind() {
 		case reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-			if isVarint(tipe) {
+			if isVarint(tipe) && encodingSize != 0 {
 				br, res = varintDecode(buf, field)
 			} else {
 				br, res = uintDecode(buf, field, encodingSize)

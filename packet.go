@@ -106,10 +106,10 @@ type packetHeader struct {
 	// Consult getHeaderType if you want a value that corresponds to the
 	// definition of packetType.
 	Type                    packetType
+	Version                 VersionNumber
 	ConnectionIDLengths     byte
 	DestinationConnectionID ConnectionId
 	SourceConnectionID      ConnectionId
-	Version                 VersionNumber
 	PayloadLength           uint64 `tls:"varint"`
 	PacketNumber            uint64 // Never more than 32 bits on the wire.
 
@@ -203,7 +203,7 @@ func (p packetHeader) Version__length() uintptr {
 	return 0
 }
 
-func newPacket(pt packetType, destCid ConnectionId, srcCid ConnectionId, ver VersionNumber, pn uint64, payload []byte) *packet {
+func newPacket(pt packetType, destCid ConnectionId, srcCid ConnectionId, ver VersionNumber, pn uint64, payload []byte, tagLen int) *packet {
 	if pt == packetTypeProtectedShort {
 		// Only support writing the 32-bit packet number.
 		pt = packetType(0x2 | packetFlagShortHeader)
@@ -219,7 +219,7 @@ func newPacket(pt packetType, destCid ConnectionId, srcCid ConnectionId, ver Ver
 			DestinationConnectionID: destCid,
 			SourceConnectionID:      srcCid,
 			Version:                 ver,
-			PayloadLength:           uint64(len(payload)),
+			PayloadLength:           uint64(len(payload) + tagLen),
 			PacketNumber:            pn,
 		},
 		payload: payload,
