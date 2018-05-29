@@ -34,8 +34,8 @@ func newCryptoStateInner(secret []byte, cs *mint.CipherSuiteParams) (*cryptoStat
 
 	st.secret = secret
 
-	k := QhkdfExpandLabel(cs.Hash, st.secret, "key", []byte{}, cs.KeyLen)
-	iv := QhkdfExpandLabel(cs.Hash, st.secret, "iv", []byte{}, cs.IvLen)
+	k := QhkdfExpandLabel(cs.Hash, st.secret, "key", cs.KeyLen)
+	iv := QhkdfExpandLabel(cs.Hash, st.secret, "iv", cs.IvLen)
 
 	st.aead, err = newWrappedAESGCM(k, iv)
 	if err != nil {
@@ -46,8 +46,9 @@ func newCryptoStateInner(secret []byte, cs *mint.CipherSuiteParams) (*cryptoStat
 }
 
 func generateCleartextKeys(secret []byte, label string, cs *mint.CipherSuiteParams) (*cryptoState, error) {
+	logf(logTypeTls, "Cleartext keys: cid=%x", secret)
 	extracted := mint.HkdfExtract(cs.Hash, kQuicVersionSalt, secret)
-	inner := QhkdfExpandLabel(cs.Hash, extracted, label, []byte{}, cs.Hash.Size())
+	inner := QhkdfExpandLabel(cs.Hash, extracted, label, cs.Hash.Size())
 	return newCryptoStateInner(inner, cs)
 }
 
@@ -67,29 +68,25 @@ func newCryptoStateFromTls(t *tlsConn, label string) (*cryptoState, error) {
 //    opaque label<9..255>;
 //    opaque hash_value<0..255>;
 // };
-func hkdfEncodeLabel(labelIn string, hashValue []byte, outLen int) []byte {
+func qhkdfEncodeLabel(labelIn string, outLen int) []byte {
 	label := "QUIC " + labelIn
 
 	labelLen := len(label)
-	hashLen := len(hashValue)
-	hkdfLabel := make([]byte, 2+1+labelLen+1+hashLen)
+	hkdfLabel := make([]byte, 2+1+labelLen)
 	hkdfLabel[0] = byte(outLen >> 8)
 	hkdfLabel[1] = byte(outLen)
 	hkdfLabel[2] = byte(labelLen)
-	copy(hkdfLabel[3:3+labelLen], []byte(label))
-	hkdfLabel[3+labelLen] = byte(hashLen)
-	copy(hkdfLabel[3+labelLen+1:], hashValue)
+	copy(hkdfLabel[3:], []byte(label))
 
 	return hkdfLabel
 }
 
-func QhkdfExpandLabel(hash crypto.Hash, secret []byte, label string, hashValue []byte, outLen int) []byte {
-	info := hkdfEncodeLabel(label, hashValue, outLen)
+func QhkdfExpandLabel(hash crypto.Hash, secret []byte, label string, outLen int) []byte {
+	info := qhkdfEncodeLabel(label, outLen)
 	derived := mint.HkdfExpand(hash, secret, info, outLen)
 
-	logf(logTypeTls, "HKDF Expand: label=[tls13 ] + '%s',requested length=%d\n", label, outLen)
+	logf(logTypeTls, "HKDF Expand: label=[QUIC ] + '%s',requested length=%d\n", label, outLen)
 	logf(logTypeTls, "PRK [%d]: %x\n", len(secret), secret)
-	logf(logTypeTls, "Hash [%d]: %x\n", len(hashValue), hashValue)
 	logf(logTypeTls, "Info [%d]: %x\n", len(info), info)
 	logf(logTypeTls, "Derived key [%d]: %x\n", len(derived), derived)
 
