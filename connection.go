@@ -724,29 +724,34 @@ func (c *Connection) suppressRetransmission(f *frame) bool {
 		}
 
 	case *blockedFrame:
-		return c.sendFlowControl.remaining() > 0
+		return c.sendFlowControl.max > inner.Offset
 
 	case *streamBlockedFrame:
 		fc := c.ensureSendStream(inner.StreamId).flowControl()
-		return fc.remaining() > 0
+		return fc.max > inner.Offset
 
 	default:
 		return false
 	}
 }
 
-func (c *Connection) maybeRemoveFromQueue(queue *[]*frame, toRemove []int, removed int) int {
-	q := *queue
-	for _, v := range toRemove {
-		i := v - removed
-		if c.suppressRetransmission(q[i]) {
-			c.log(logTypeTrace, "frame sent, removing: %v", q[i])
-			q = append(q[:i], q[i+1:]...)
-			removed++
+// maybeRemoveFromQueue is run after a packet is sent.
+// Here we assume that toRemove is in the same order as the queue.
+func (c *Connection) maybeRemoveFromQueue(queue *[]*frame, toRemove []*frame) {
+	q := make([]*frame, 0, len(*queue)-len(toRemove))
+	next := 0
+	for _, f := range *queue {
+		maybeRemove := (next < len(toRemove)) && (f == toRemove[next])
+		if maybeRemove && c.suppressRetransmission(f) {
+			c.log(logTypeTrace, "frame sent, suppressing retransmission: %v", f)
+		} else {
+			q = append(q, f)
+		}
+		if maybeRemove {
+			next++
 		}
 	}
 	*queue = q
-	return removed
 }
 
 /* Transmit all the frames permitted by connection level flow control and
@@ -781,13 +786,12 @@ func (c *Connection) sendQueuedFrames(pt packetType, protected bool, bareAcks bo
 	// Save a copy of the queue because this removes frames if they don't
 	// need be sent again.
 	originalQueue := *queue
-	removed := 0
 	congested := false
 
 	for index := 0; index < len(originalQueue); {
 		// Store frames that will be sent in the next packet
 		toSend := make([]*frame, 0)
-		toRemove := make([]int, 0)
+		toRemove := make([]*frame, 0)
 
 		spaceInPacket = c.mtu - overhead
 		spaceInCongestionWindow -= overhead
@@ -825,7 +829,7 @@ func (c *Connection) sendQueuedFrames(pt packetType, protected bool, bareAcks bo
 			c.log(logTypeFrame, "Sending frame %v, age = %v", f, cAge)
 			// add the frame to the packet
 			toSend = append(toSend, f)
-			toRemove = append(toRemove, index)
+			toRemove = append(toRemove, f)
 			spaceInPacket -= frameLength
 			spaceInCongestionWindow -= frameLength
 		}
@@ -848,7 +852,7 @@ func (c *Connection) sendQueuedFrames(pt packetType, protected bool, bareAcks bo
 			f.needsTransmit = false
 			f.pns = append(f.pns, c.nextSendPacket-1)
 		}
-		removed += c.maybeRemoveFromQueue(queue, toRemove, removed)
+		c.maybeRemoveFromQueue(queue, toRemove)
 
 		if congested {
 			break
