@@ -14,23 +14,24 @@ type frameNonSyntax interface {
 }
 
 const (
-	kFrameTypePadding         = frameType(0x0)
-	kFrameTypeRstStream       = frameType(0x1)
-	kFrameTypeConnectionClose = frameType(0x2)
-	kFrameTypeMaxData         = frameType(0x4)
-	kFrameTypeMaxStreamData   = frameType(0x5)
-	kFrameTypeMaxStreamId     = frameType(0x6)
-	kFrameTypePing            = frameType(0x7)
-	kFrameTypeBlocked         = frameType(0x8)
-	kFrameTypeStreamBlocked   = frameType(0x9)
-	kFrameTypeStreamIdBlocked = frameType(0xa)
-	kFrameTypeNewConnectionId = frameType(0xb)
-	kFrameTypeStopSending     = frameType(0xc)
-	kFrameTypeAck             = frameType(0xd)
-	kFrameTypePathChallenge   = frameType(0xe)
-	kFrameTypePathResponse    = frameType(0xf)
-	kFrameTypeStream          = frameType(0x10)
-	kFrameTypeStreamMax       = frameType(0x17)
+	kFrameTypePadding          = frameType(0x0)
+	kFrameTypeRstStream        = frameType(0x1)
+	kFrameTypeConnectionClose  = frameType(0x2)
+	kFrameTypeApplicationClose = frameType(0x3)
+	kFrameTypeMaxData          = frameType(0x4)
+	kFrameTypeMaxStreamData    = frameType(0x5)
+	kFrameTypeMaxStreamId      = frameType(0x6)
+	kFrameTypePing             = frameType(0x7)
+	kFrameTypeBlocked          = frameType(0x8)
+	kFrameTypeStreamBlocked    = frameType(0x9)
+	kFrameTypeStreamIdBlocked  = frameType(0xa)
+	kFrameTypeNewConnectionId  = frameType(0xb)
+	kFrameTypeStopSending      = frameType(0xc)
+	kFrameTypeAck              = frameType(0xd)
+	kFrameTypePathChallenge    = frameType(0xe)
+	kFrameTypePathResponse     = frameType(0xf)
+	kFrameTypeStream           = frameType(0x10)
+	kFrameTypeStreamMax        = frameType(0x17)
 )
 
 const (
@@ -104,6 +105,8 @@ func decodeFrame(data []byte) (uintptr, *frame, error) {
 		inner = &rstStreamFrame{}
 	case t == uint8(kFrameTypeConnectionClose):
 		inner = &connectionCloseFrame{}
+	case t == uint8(kFrameTypeApplicationClose):
+		inner = &applicationCloseFrame{}
 	case t == uint8(kFrameTypeMaxData):
 		inner = &maxDataFrame{}
 	case t == uint8(kFrameTypeMaxStreamData):
@@ -184,11 +187,11 @@ func (f rstStreamFrame) getType() frameType {
 	return kFrameTypeRstStream
 }
 
-func newRstStreamFrame(streamId uint64, errorCode ErrorCode, finalOffset uint64) frame {
+func newRstStreamFrame(streamId uint64, errorCode uint16, finalOffset uint64) frame {
 	return newFrame(streamId, &rstStreamFrame{
 		kFrameTypeRstStream,
 		uint64(streamId),
-		uint16(errorCode),
+		errorCode,
 		finalOffset})
 }
 
@@ -207,11 +210,11 @@ func (f stopSendingFrame) getType() frameType {
 	return kFrameTypeStopSending
 }
 
-func newStopSendingFrame(streamId uint64, errorCode ErrorCode) frame {
+func newStopSendingFrame(streamId uint64, errorCode uint16) frame {
 	return newFrame(streamId, &stopSendingFrame{
 		kFrameTypeStopSending,
 		uint64(streamId),
-		uint16(errorCode)})
+		errorCode})
 }
 
 // CONNECTION_CLOSE
@@ -230,12 +233,33 @@ func (f connectionCloseFrame) getType() frameType {
 }
 
 func newConnectionCloseFrame(errcode ErrorCode, reason string) frame {
-	str := []byte(reason)
-
 	return newFrame(0, &connectionCloseFrame{
 		kFrameTypeConnectionClose,
 		uint16(errcode),
-		[]byte(str),
+		[]byte(reason),
+	})
+}
+
+// APPLICATION_CLOSE
+type applicationCloseFrame struct {
+	Type         frameType
+	ErrorCode    uint16
+	ReasonPhrase []byte `tls:"head=varint"`
+}
+
+func (f applicationCloseFrame) String() string {
+	return fmt.Sprintf("APPLICATION_CLOSE errorCode=%x", f.ErrorCode)
+}
+
+func (f applicationCloseFrame) getType() frameType {
+	return kFrameTypeApplicationClose
+}
+
+func newApplicationCloseFrame(errcode uint16, reason string) frame {
+	return newFrame(0, &applicationCloseFrame{
+		kFrameTypeApplicationClose,
+		uint16(errcode),
+		[]byte(reason),
 	})
 }
 
