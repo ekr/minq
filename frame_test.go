@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-func testEncodeDecodeEncode(t *testing.T, f frame) {
+func testEncodeDecodeEncode(t *testing.T, f *frame) {
 	err := f.encode()
 	assertNotError(t, err, "Encode failed")
 	fmt.Printf("Encoded: [%x]\n", f.encoded)
@@ -39,7 +39,7 @@ func TestAckFrameOneRange(t *testing.T) {
 	f, _, err := newAckFrame(recvd, ar, 33)
 	assertNotError(t, err, "Couldn't make ack frame")
 
-	testEncodeDecodeEncode(t, *f)
+	testEncodeDecodeEncode(t, f)
 }
 
 func TestAckFrameTwoRanges(t *testing.T) {
@@ -52,7 +52,7 @@ func TestAckFrameTwoRanges(t *testing.T) {
 	f, _, err := newAckFrame(recvd, ar, 49)
 	assertNotError(t, err, "Couldn't make ack frame")
 
-	testEncodeDecodeEncode(t, *f)
+	testEncodeDecodeEncode(t, f)
 }
 
 func TestFixedSizedData(t *testing.T) {

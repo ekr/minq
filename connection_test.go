@@ -504,7 +504,7 @@ func TestSendReceiveStreamRst(t *testing.T) {
 	cs.Write(testString)
 
 	// Now reset the stream.
-	cs.Reset(kQuicErrorNoError)
+	cs.Reset(0)
 
 	// Verify that we cannot write.
 	n, err := cs.Write(testString)
@@ -729,7 +729,7 @@ func TestUnidirectionalStreamRst(t *testing.T) {
 	assertNotNil(t, d, "Read data from server")
 	assertByteEquals(t, d, testString)
 
-	err = sstream.Reset(kQuicErrorNoError)
+	err = sstream.Reset(77)
 	assertNotError(t, err, "reset works")
 
 	err = inputAll(client)
@@ -746,7 +746,7 @@ func TestUnidirectionalStreamRstImmediate(t *testing.T) {
 	pair.handshake(t)
 
 	sstream := pair.server.CreateSendStream()
-	err := sstream.Reset(kQuicErrorNoError)
+	err := sstream.Reset(45)
 	assertNotError(t, err, "reset works")
 
 	err = inputAll(pair.client)
@@ -945,7 +945,7 @@ func TestConnectionLevelFlowControlRst(t *testing.T) {
 
 	// Connection flow control should be exhausted now.
 	// Now reset one of those streams.
-	cstreams[0].Reset(kQuicErrorNoError)
+	cstreams[0].Reset(32)
 	inputAll(pair.server)
 
 	// Now let the MAX_DATA frame propagate and check that we can write again.

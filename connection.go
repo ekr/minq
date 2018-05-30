@@ -127,8 +127,8 @@ type Connection struct {
 	remoteBidiStreams  *streamSet
 	localUniStreams    *streamSet
 	remoteUniStreams   *streamSet
-	outputClearQ       []frame // For stream 0
-	outputProtectedQ   []frame // For stream >= 0
+	outputClearQ       []*frame // For stream 0
+	outputProtectedQ   []*frame // For stream >= 0
 	clientInitial      []byte
 	recvd              *recvdPackets
 	sendFlowControl    flowControl
@@ -396,7 +396,7 @@ func (c *Connection) forEachRecv(f func(recvStreamPrivate)) {
 }
 
 func (c *Connection) sendClientInitial() error {
-	queued := make([]frame, 0)
+	queued := make([]*frame, 0)
 	var err error
 
 	c.log(logTypeHandshake, "Sending client initial packet")
@@ -504,12 +504,12 @@ func (c *Connection) sendPacketRaw(pt packetType, version VersionNumber, pn uint
 }
 
 // Send a packet with whatever PT seems appropriate now.
-func (c *Connection) sendPacketNow(tosend []frame, containsOnlyAcks bool) ([]byte, error) {
+func (c *Connection) sendPacketNow(tosend []*frame, containsOnlyAcks bool) ([]byte, error) {
 	return c.sendPacket(packetTypeProtectedShort, tosend, containsOnlyAcks)
 }
 
 // Send a packet with a specific PT.
-func (c *Connection) sendPacket(pt packetType, tosend []frame, containsOnlyAcks bool) ([]byte, error) {
+func (c *Connection) sendPacket(pt packetType, tosend []*frame, containsOnlyAcks bool) ([]byte, error) {
 	sent := 0
 
 	payload := make([]byte, 0)
@@ -575,7 +575,7 @@ func (c *Connection) sendQueued(bareAcks bool) (int, error) {
 		return 0, nil
 	}
 
-	sent := int(0)
+	sent := 0
 
 	/*
 	 * ENQUEUE STUFF
@@ -619,7 +619,7 @@ func (c *Connection) sendQueued(bareAcks bool) (int, error) {
 }
 
 // Send a packet of stream frames, plus whatever acks fit.
-func (c *Connection) sendCombinedPacket(pt packetType, frames []frame, acks ackRanges, left int) (int, error) {
+func (c *Connection) sendCombinedPacket(pt packetType, frames []*frame, acks ackRanges, left int) (int, error) {
 	asent := int(0)
 	var err error
 
@@ -632,7 +632,7 @@ func (c *Connection) sendCombinedPacket(pt packetType, frames []frame, acks ackR
 			return 0, err
 		}
 		if af != nil {
-			frames = append(frames, *af)
+			frames = append(frames, af)
 		}
 	}
 	// Record which packets we sent ACKs in.
@@ -646,11 +646,11 @@ func (c *Connection) sendCombinedPacket(pt packetType, frames []frame, acks ackR
 	return asent, nil
 }
 
-func (c *Connection) queueFrame(q *[]frame, f frame) {
+func (c *Connection) queueFrame(q *[]*frame, f *frame) {
 	*q = append(*q, f)
 }
 
-func (c *Connection) enqueueStreamFrames(s sendStreamPrivate, q *[]frame) {
+func (c *Connection) enqueueStreamFrames(s sendStreamPrivate, q *[]*frame) {
 	if s == nil {
 		return
 	}
@@ -679,7 +679,7 @@ func (c *Connection) queueStreamFrames(protected bool) error {
 	return nil
 }
 
-func (c *Connection) sendFrame(f frame) error {
+func (c *Connection) sendFrame(f *frame) error {
 	if c.state != StateEstablished {
 		return ErrorWouldBlock
 	}
@@ -708,6 +708,47 @@ func (c *Connection) packetOverhead(pt packetType) int {
 	return overhead
 }
 
+func (c *Connection) suppressRetransmission(f *frame) bool {
+	switch inner := f.f.(type) {
+	case *paddingFrame, *pathChallengeFrame, *pathResponseFrame:
+		return true
+
+	case *streamIdBlockedFrame:
+		switch streamTypeFromId(inner.StreamId, c.role) {
+		case streamTypeBidirectionalLocal:
+			return c.localBidiStreams.nstreams > len(c.localBidiStreams.streams)
+		case streamTypeUnidirectionalLocal:
+			return c.localUniStreams.nstreams > len(c.localUniStreams.streams)
+		default:
+			panic("shouldn't be complaining about this")
+		}
+
+	case *blockedFrame:
+		return c.sendFlowControl.remaining() > 0
+
+	case *streamBlockedFrame:
+		fc := c.ensureSendStream(inner.StreamId).flowControl()
+		return fc.remaining() > 0
+
+	default:
+		return false
+	}
+}
+
+func (c *Connection) maybeRemoveFromQueue(queue *[]*frame, toRemove []int, removed int) int {
+	q := *queue
+	for _, v := range toRemove {
+		i := v - removed
+		if c.suppressRetransmission(q[i]) {
+			c.log(logTypeTrace, "frame sent, removing: %v", q[i])
+			q = append(q[:i], q[i+1:]...)
+			removed++
+		}
+	}
+	*queue = q
+	return removed
+}
+
 /* Transmit all the frames permitted by connection level flow control and
 * the congestion controller. We're going to need to be more sophisticated
 * when we actually do connection level flow control. */
@@ -721,98 +762,118 @@ func (c *Connection) sendQueuedFrames(pt packetType, protected bool, bareAcks bo
 	spaceInCongestionWindow := c.congestion.bytesAllowedToSend()
 
 	// Select the queue we will send from
-	var queue *[]frame
+	var queue *[]*frame
 	if protected {
 		queue = &c.outputProtectedQ
 	} else {
 		queue = &c.outputClearQ
 	}
 
-	// TODO(ekr@rtfm.com): Don't retransmit non-retransmittable.
-
 	/* Iterate through the queue, and append frames to packet, sending
 	 * packets when the maximum packet size is reached, or we are not
 	 * allowed to send more from the congestion controller */
 
-	// Store frames that will be sent in the next packet
-	frames := make([]frame, 0)
 	// Calculate available space in the next packet.
 	overhead := c.packetOverhead(pt)
 	spaceInPacket := c.mtu - overhead
 	spaceInCongestionWindow -= overhead
 
-	for i := range *queue {
-		f := &((*queue)[i])
-		// c.log(logTypeStream, "Examining frame=%v", f)
+	// Save a copy of the queue because this removes frames if they don't
+	// need be sent again.
+	originalQueue := *queue
+	removed := 0
+	congested := false
 
-		frameLength, err := f.length()
-		if err != nil {
-			return 0, err
+	for index := 0; index < len(originalQueue); {
+		// Store frames that will be sent in the next packet
+		toSend := make([]*frame, 0)
+		toRemove := make([]int, 0)
+
+		spaceInPacket = c.mtu - overhead
+		spaceInCongestionWindow -= overhead
+		c.log(logTypeStream, "Building packet with %d and %d octets left",
+			spaceInPacket, spaceInCongestionWindow)
+
+		for ; index < len(originalQueue); index++ {
+			f := originalQueue[index]
+
+			frameLength, err := f.length()
+			if err != nil {
+				return sent, err
+			}
+
+			cAge := now.Sub(f.time)
+			if f.needsTransmit {
+				c.log(logTypeStream, "Frame %v requires transmission", f)
+			} else if cAge < txAge {
+				c.log(logTypeStream, "Skipping frame %v because sent too recently", f)
+				continue
+			}
+
+			// if there is no more space in the congestion window, this frame
+			// can't be sent.
+			if spaceInCongestionWindow < frameLength {
+				congested = true
+				break
+			}
+			// if there is no more space for the next frame in the packet,
+			// send what we have and start forming a new packet
+			if spaceInPacket < frameLength {
+				break
+			}
+
+			c.log(logTypeFrame, "Sending frame %v, age = %v", f, cAge)
+			// add the frame to the packet
+			toSend = append(toSend, f)
+			toRemove = append(toRemove, index)
+			spaceInPacket -= frameLength
+			spaceInCongestionWindow -= frameLength
 		}
 
-		cAge := now.Sub(f.time)
-		if f.needsTransmit {
-			c.log(logTypeStream, "Frame %v requires transmission", f)
-		} else if cAge < txAge {
-			c.log(logTypeStream, "Skipping frame %v because sent too recently", f)
-			continue
-		}
-
-		// if there is no more space in the congestion window, stop
-		// trying to send stuff
-		if spaceInCongestionWindow < frameLength {
+		// Now send the packet if there is anything worth sending.
+		if len(toSend) == 0 {
 			break
 		}
 
-		c.log(logTypeStream, "Sending frame %v, age = %v", f, cAge)
-		f.time = now
-		f.needsTransmit = false
-
-		// if there is no more space for the next frame in the packet,
-		// send it and start forming a new packet
-		if spaceInPacket < frameLength {
-			asent, err := c.sendCombinedPacket(pt, frames, acks, spaceInPacket)
-			if err != nil {
-				return 0, err
-			}
-			sent++
-
-			acks = acks[asent:]
-			frames = make([]frame, 0)
-			spaceInPacket = c.mtu - overhead
-			spaceInCongestionWindow -= overhead
+		acksSent, err := c.sendCombinedPacket(pt, toSend, acks, spaceInPacket)
+		if err != nil {
+			return sent, err
 		}
 
-		// add the frame to the packet
-		frames = append(frames, *f)
-		spaceInPacket -= frameLength
-		spaceInCongestionWindow -= frameLength
-		// Record that we send this chunk in the current packet
-		f.pns = append(f.pns, c.nextSendPacket)
+		// Record what was sent.
+		sent++
+		acks = acks[acksSent:]
+		for _, f := range toSend {
+			f.time = now
+			f.needsTransmit = false
+			f.pns = append(f.pns, c.nextSendPacket-1)
+		}
+		removed += c.maybeRemoveFromQueue(queue, toRemove, removed)
+
+		if congested {
+			break
+		}
 	}
 
-	// Send the remainder, plus any ACKs that are left.
-	// TODO(piet@devae.re) This might push the outstanding data over the congestion window
-	c.log(logTypeConnection, "Remainder to send? sent=%v frames=%v acks=%v bareAcks=%v",
-		sent, len(frames), len(acks), bareAcks)
-	if len(frames) > 0 || (len(acks) > 0 && bareAcks) {
-		// TODO(ekr@rtfm.com): this may skip acks if there isn't
-		// room, but hopefully we eventually catch up.
-		_, err := c.sendCombinedPacket(pt, frames, acks, spaceInPacket)
-		if err != nil {
-			return 0, err
+	// Now send any bare acks that didn't fit in earlier packets.
+	if len(acks) > 0 {
+		if bareAcks {
+			_, err := c.sendCombinedPacket(pt, nil, acks, c.mtu-overhead)
+			if err != nil {
+				return sent, err
+			}
+			sent++
+		} else {
+			c.log(logTypeAck, "Acks to send, but suppressing bare acks")
+			return sent, nil
 		}
-
-		sent++
-	} else if len(acks) > 0 {
-		c.log(logTypeAck, "Acks to send, but suppressing bare acks")
 	}
 
 	return sent, nil
 }
 
 func (c *Connection) handleLostPacket(lostPn uint64) {
-	queues := [...][]frame{c.outputClearQ, c.outputProtectedQ}
+	queues := [][]*frame{c.outputClearQ, c.outputProtectedQ}
 	for _, queue := range queues {
 		for _, frame := range queue {
 			for _, pn := range frame.pns {
@@ -842,7 +903,7 @@ func (c *Connection) outstandingQueuedBytes() (n int) {
 		n += s.outstandingQueuedBytes()
 	})
 
-	cd := func(frames []frame) int {
+	cd := func(frames []*frame) int {
 		ret := 0
 		for _, f := range frames {
 			sf, ok := f.f.(*streamFrame)
@@ -1363,10 +1424,10 @@ func (c *Connection) processStatelessRetry(hdr *packetHeader, payload []byte) er
 
 type frameFilterFunc func(*frame) bool
 
-func filterFrames(in []frame, f frameFilterFunc) []frame {
-	out := make([]frame, 0, len(in))
+func filterFrames(in []*frame, f frameFilterFunc) []*frame {
+	out := make([]*frame, 0, len(in))
 	for _, t := range in {
-		if f(&t) {
+		if f(t) {
 			out = append(out, t)
 		}
 	}
@@ -1601,7 +1662,7 @@ func (c *Connection) processUnprotected(hdr *packetHeader, packetNumber uint64, 
 	return nil
 }
 
-func (c *Connection) removeAckedFrames(pn uint64, qp *[]frame) {
+func (c *Connection) removeAckedFrames(pn uint64, qp *[]*frame) {
 	q := *qp
 
 	c.log(logTypeStream, "Removing ACKed chunks PN=%x, currently %v chunks", pn, len(q))
@@ -1921,7 +1982,7 @@ func (c *Connection) SetHandler(h ConnectionHandler) {
 	c.handler = h
 }
 
-func (c *Connection) close(f frame, savePacket bool) error {
+func (c *Connection) close(f *frame, savePacket bool) error {
 	if c.isClosed() {
 		return nil
 	}
@@ -1931,7 +1992,7 @@ func (c *Connection) close(f frame, savePacket bool) error {
 
 	c.closingEnd = time.Now().Add(3 * c.congestion.rto())
 	c.setState(StateClosing)
-	closePacket, err := c.sendPacketNow([]frame{f}, false)
+	closePacket, err := c.sendPacketNow([]*frame{f}, false)
 	if err != nil {
 		return err
 	}
