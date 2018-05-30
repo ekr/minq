@@ -46,9 +46,9 @@ var (
 	kTransportParameterDefaults = []tpDef{
 		{kTpIdInitialMaxStreamsData, uint32(kInitialMaxStreamData), 4},
 		{kTpIdInitialMaxData, uint32(kInitialMaxData), 4},
-		{kTpIdInitialMaxStreamIdBidi, 0, 4},
+		{kTpIdInitialMaxStreamIdBidi, 0, 2},
 		{kTpIdIdleTimeout, 5, 2},
-		{kTpIdInitialMaxStreamIdUni, 0, 4},
+		{kTpIdInitialMaxStreamIdUni, 0, 2},
 	}
 )
 
@@ -285,7 +285,7 @@ func (h *transportParametersHandler) Receive(hs mint.HandshakeType, el *mint.Ext
 		return err
 	}
 
-	maxStream, err := params.getUintParameter(kTpIdInitialMaxStreamIdBidi, 4)
+	maxStream, err := params.getUintParameter(kTpIdInitialMaxStreamIdBidi, 2)
 	if err == ErrorMissingValue {
 		maxStream = 0
 	} else {
@@ -298,7 +298,7 @@ func (h *transportParametersHandler) Receive(hs mint.HandshakeType, el *mint.Ext
 	}
 
 	tp.maxStreamsBidi = (int(maxStream) >> 2) + 1
-	maxStream, err = params.getUintParameter(kTpIdInitialMaxStreamIdUni, 4)
+	maxStream, err = params.getUintParameter(kTpIdInitialMaxStreamIdUni, 2)
 	if err == ErrorMissingValue {
 		maxStream = 0
 	} else {
