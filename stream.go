@@ -182,6 +182,10 @@ func (s *streamCommon) insertSortedChunk(offset uint64, last bool, payload []byt
 	c := streamChunk{offset, last, dup(payload)}
 	s.log(logTypeStream, "insert %v, current offset=%v", c, s.fc.used)
 	s.log(logTypeTrace, "payload %v", hex.EncodeToString(payload))
+	if len(payload) == 0 && !last && offset != 0 {
+		// Empty frame, ignore
+		return
+	}
 
 	// First check if we can append the new slice at the end
 	if nchunks := len(s.chunks); nchunks == 0 || offset > s.chunks[nchunks-1].offset {
@@ -344,10 +348,6 @@ func (s *recvStreamBase) newFrameData(offset uint64, last bool, payload []byte,
 	s.log(logTypeFlowControl, "new data flow control %v %v", &s.fc, cfc)
 
 	end := offset + uint64(len(payload))
-	if end < s.readOffset {
-		// The application already read this data.
-		return nil
-	}
 	if last {
 		if end < s.fc.used {
 			// The end can't be less than what we've received already.
