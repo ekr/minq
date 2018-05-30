@@ -5,10 +5,6 @@ import (
 	"crypto/cipher"
 )
 
-// Definition for AEAD using 64-bit FNV-1a
-type aeadFNV struct {
-}
-
 // aeadWrapper contains an existing AEAD object and does the
 // QUIC nonce masking.
 type aeadWrapper struct {
