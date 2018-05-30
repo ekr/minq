@@ -459,12 +459,12 @@ func (s *recvStreamBase) handleReset(offset uint64) error {
 		s.fc.used = offset
 	case RecvStreamStateDataRecvd, RecvStreamStateResetRead:
 		panic("we don't use this state")
-	case RecvStreamStateSizeKnown, RecvStreamStateDataRead:
+	case RecvStreamStateSizeKnown, RecvStreamStateDataRead, RecvStreamStateResetRecvd:
 		if offset != s.fc.used {
 			return ErrorProtocolViolation
 		}
 	default:
-		panic("unknown state")
+		panic(fmt.Sprintf("unknown state %v", s.state))
 	}
 
 	s.setRecvState(RecvStreamStateResetRecvd)
@@ -685,7 +685,7 @@ type streamSet struct {
 	t streamType
 	// role is the endpoint's role
 	role Role
-	// max is the maximum number of streams (as opposed to the maximum ID)
+	// nstreams is the maximum number of streams (as opposed to the maximum ID)
 	nstreams int
 	// typeless array of streams because go doesn't have generics
 	streams []hasIdentity

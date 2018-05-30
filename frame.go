@@ -67,8 +67,8 @@ func (f frame) String() string {
 	return f.f.String()
 }
 
-func newFrame(stream uint64, inner innerFrame) frame {
-	return frame{stream, inner, nil, nil, nil, time.Unix(0, 0), true}
+func newFrame(stream uint64, inner innerFrame) *frame {
+	return &frame{stream, inner, nil, nil, nil, time.Unix(0, 0), true}
 }
 
 // Encode internally if not already encoded.
@@ -167,7 +167,7 @@ func (f paddingFrame) getType() frameType {
 	return kFrameTypePadding
 }
 
-func newPaddingFrame(stream uint64) frame {
+func newPaddingFrame(stream uint64) *frame {
 	return newFrame(stream, &paddingFrame{0})
 }
 
@@ -187,7 +187,7 @@ func (f rstStreamFrame) getType() frameType {
 	return kFrameTypeRstStream
 }
 
-func newRstStreamFrame(streamId uint64, errorCode uint16, finalOffset uint64) frame {
+func newRstStreamFrame(streamId uint64, errorCode uint16, finalOffset uint64) *frame {
 	return newFrame(streamId, &rstStreamFrame{
 		kFrameTypeRstStream,
 		uint64(streamId),
@@ -210,7 +210,7 @@ func (f stopSendingFrame) getType() frameType {
 	return kFrameTypeStopSending
 }
 
-func newStopSendingFrame(streamId uint64, errorCode uint16) frame {
+func newStopSendingFrame(streamId uint64, errorCode uint16) *frame {
 	return newFrame(streamId, &stopSendingFrame{
 		kFrameTypeStopSending,
 		uint64(streamId),
@@ -232,7 +232,7 @@ func (f connectionCloseFrame) getType() frameType {
 	return kFrameTypeConnectionClose
 }
 
-func newConnectionCloseFrame(errcode ErrorCode, reason string) frame {
+func newConnectionCloseFrame(errcode ErrorCode, reason string) *frame {
 	return newFrame(0, &connectionCloseFrame{
 		kFrameTypeConnectionClose,
 		uint16(errcode),
@@ -255,7 +255,7 @@ func (f applicationCloseFrame) getType() frameType {
 	return kFrameTypeApplicationClose
 }
 
-func newApplicationCloseFrame(errcode uint16, reason string) frame {
+func newApplicationCloseFrame(errcode uint16, reason string) *frame {
 	return newFrame(0, &applicationCloseFrame{
 		kFrameTypeApplicationClose,
 		uint16(errcode),
@@ -277,7 +277,7 @@ func (f maxDataFrame) getType() frameType {
 	return kFrameTypeMaxData
 }
 
-func newMaxData(m uint64) frame {
+func newMaxData(m uint64) *frame {
 	return newFrame(0, &maxDataFrame{kFrameTypeMaxData, m})
 }
 
@@ -288,7 +288,7 @@ type maxStreamDataFrame struct {
 	MaximumStreamData uint64 `tls:"varint"`
 }
 
-func newMaxStreamData(stream uint64, offset uint64) frame {
+func newMaxStreamData(stream uint64, offset uint64) *frame {
 	return newFrame(stream,
 		&maxStreamDataFrame{
 			kFrameTypeMaxStreamData,
@@ -311,7 +311,7 @@ type maxStreamIdFrame struct {
 	MaximumStreamId uint64 `tls:"varint"`
 }
 
-func newMaxStreamId(id uint64) frame {
+func newMaxStreamId(id uint64) *frame {
 	return newFrame(0,
 		&maxStreamIdFrame{
 			kFrameTypeMaxStreamId,
@@ -354,7 +354,7 @@ func (f blockedFrame) getType() frameType {
 	return kFrameTypeBlocked
 }
 
-func newBlockedFrame(offset uint64) frame {
+func newBlockedFrame(offset uint64) *frame {
 	return newFrame(0, &blockedFrame{kFrameTypeBlocked, offset})
 }
 
@@ -373,7 +373,7 @@ func (f streamBlockedFrame) getType() frameType {
 	return kFrameTypeStreamBlocked
 }
 
-func newStreamBlockedFrame(id uint64, offset uint64) frame {
+func newStreamBlockedFrame(id uint64, offset uint64) *frame {
 	return newFrame(0, &streamBlockedFrame{kFrameTypeStreamBlocked, id, offset})
 }
 
@@ -391,7 +391,7 @@ func (f streamIdBlockedFrame) getType() frameType {
 	return kFrameTypeStreamIdBlocked
 }
 
-func newStreamIdBlockedFrame(id uint64) frame {
+func newStreamIdBlockedFrame(id uint64) *frame {
 	return newFrame(0, &streamIdBlockedFrame{
 		kFrameTypeStreamIdBlocked,
 		id})
@@ -401,16 +401,27 @@ func newStreamIdBlockedFrame(id uint64) frame {
 type newConnectionIdFrame struct {
 	Type         frameType
 	Sequence     uint16 `tls:"varint"`
-	ConnectionId uint64
+	ConnectionId ConnectionId
 	ResetToken   [16]byte
 }
 
 func (f newConnectionIdFrame) String() string {
-	return "NEW_CONNECTION_ID"
+	return fmt.Sprintf("NEW_CONNECTION_ID %d=%x", f.Sequence, f.ConnectionId)
 }
 
 func (f newConnectionIdFrame) getType() frameType {
 	return kFrameTypeNewConnectionId
+}
+
+func newNewConnectionIdFrame(seq uint16, cid ConnectionId, resetToken []byte) *frame {
+	f := &newConnectionIdFrame{
+		Type:         kFrameTypeNewConnectionId,
+		Sequence:     seq,
+		ConnectionId: cid,
+	}
+	assert(len(resetToken) == len(f.ResetToken))
+	copy(f.ResetToken[:], resetToken)
+	return newFrame(0, f)
 }
 
 // ACK
@@ -486,7 +497,8 @@ func newAckFrame(recvd *recvdPackets, rs ackRanges, left int) (*frame, int, erro
 	var f ackFrame
 	f.Type = kFrameTypeAck
 	f.LargestAcknowledged = last
-	f.AckDelay = uint64(time.Since(largestAckData.t).Nanoseconds()) / 1000
+	delay := time.Since(largestAckData.t).Nanoseconds()
+	f.AckDelay = uint64(delay) / 1000 >> kTpDefaultAckDelayExponent
 	f.AckBlockCount = 0
 	f.FirstAckBlock = rs[0].count - 1
 
@@ -513,8 +525,7 @@ func newAckFrame(recvd *recvdPackets, rs ackRanges, left int) (*frame, int, erro
 		left -= kMaxAckBlockEntryLength // Assume worst-case.
 	}
 
-	ret := newFrame(0, &f)
-	return &ret, addedRanges, nil
+	return newFrame(0, &f), addedRanges, nil
 }
 
 // PATH_CHALLENGE
@@ -531,7 +542,7 @@ func (f pathChallengeFrame) getType() frameType {
 	return kFrameTypePathChallenge
 }
 
-func newPathChallengeFrame(data []byte) frame {
+func newPathChallengeFrame(data []byte) *frame {
 	payload := &pathChallengeFrame{Type: kFrameTypePathChallenge}
 	assert(len(data) == len(payload.Data))
 	copy(payload.Data[:], data)
@@ -552,7 +563,7 @@ func (f pathResponseFrame) getType() frameType {
 	return kFrameTypePathResponse
 }
 
-func newPathResponseFrame(data []byte) frame {
+func newPathResponseFrame(data []byte) *frame {
 	payload := &pathResponseFrame{Type: kFrameTypePathResponse}
 	assert(len(data) == len(payload.Data))
 	copy(payload.Data[:], data)
@@ -582,7 +593,7 @@ func (f streamFrame) hasFin() bool {
 	return true
 }
 
-func newStreamFrame(stream uint64, offset uint64, data []byte, last bool) frame {
+func newStreamFrame(stream uint64, offset uint64, data []byte, last bool) *frame {
 	logf(logTypeFrame, "Creating stream frame with data length=%d", len(data))
 	assert(len(data) <= 65535)
 	// TODO(ekr@tfm.com): One might want to allow non
