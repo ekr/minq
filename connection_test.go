@@ -1,6 +1,7 @@
 package minq
 
 import (
+	"errors"
 	"io"
 	"io/ioutil"
 	"testing"
