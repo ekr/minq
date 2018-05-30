@@ -115,6 +115,7 @@ func (tp *TransportParameterList) getUintParameter(id TransportParameterId, size
 	buf := bytes.NewReader(b)
 	tmp, err := uintDecodeInt(buf, size)
 	if err != nil {
+		logf(logTypeHandshake, "Couldn't decode transport parameter id=%v err=%v", id, err)
 		return 0, err
 	}
 
@@ -292,9 +293,6 @@ func (h *transportParametersHandler) Receive(hs mint.HandshakeType, el *mint.Ext
 		if err != nil {
 			return err
 		}
-		if (uint64(maxStream) & 3) != streamTypeBidirectionalLocal.suffix(h.role) {
-			return ErrorInvalidEncoding
-		}
 	}
 
 	tp.maxStreamsBidi = (int(maxStream) >> 2) + 1
@@ -304,9 +302,6 @@ func (h *transportParametersHandler) Receive(hs mint.HandshakeType, el *mint.Ext
 	} else {
 		if err != nil {
 			return err
-		}
-		if (uint64(maxStream) & 3) != streamTypeUnidirectionalLocal.suffix(h.role) {
-			return ErrorInvalidEncoding
 		}
 	}
 
@@ -329,6 +324,8 @@ func (h *transportParametersHandler) Receive(hs mint.HandshakeType, el *mint.Ext
 	}
 
 	h.peerParams = &tp
+
+	h.log(logTypeHandshake, "Completed reading transport parameters")
 
 	return nil
 }
