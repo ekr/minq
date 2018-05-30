@@ -1,6 +1,7 @@
 package minq
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -260,6 +261,53 @@ func TestSendReceiveCISI(t *testing.T) {
 	n, err = server.CheckTimer()
 	assertNotError(t, err, "Couldn't run server timer")
 	assertEquals(t, 0, n)
+}
+
+func makeCompoundPacket(q *[]*testPacket) error {
+	var merged []byte
+	// Iterate through concatenating packets and removing them.  Once
+	// a short header is found, then break and replace that packet
+	// with a single compound packet.
+	for {
+		p := (*q)[0]
+		merged = append(merged, p.b...)
+		if p.b[0]&byte(packetFlagLongHeader) == 0 {
+			break
+		}
+		(*q) = (*q)[1:]
+	}
+	if len(merged) == 0 {
+		return errors.New("can't make compound packet")
+	}
+	(*q)[0] = &testPacket{merged}
+	return nil
+}
+
+func TestCompoundPacket(t *testing.T) {
+	pair := newCsPair(t)
+
+	_, err := pair.client.CheckTimer()
+	assertNotError(t, err, "send Initial")
+	err = inputAll(pair.server)
+	assertNotError(t, err, "Error processing Initial")
+	err = inputAll(pair.client)
+	assertNotError(t, err, "Error processing server Handshake")
+
+	s := pair.client.CreateStream()
+	testString := []byte("abcedef")
+	_, err = s.Write(testString)
+	assertNotError(t, err, "Can't write from client")
+
+	// Now assemble a compound packet.
+	transport := pair.server.transport.(*testTransport)
+	err = makeCompoundPacket(&transport.r.out)
+	assertNotError(t, err, "couldn't make compount packet")
+
+	err = inputAll(pair.server)
+	buf := make([]byte, len(testString))
+	_, err = pair.server.GetStream(s.Id()).Read(buf)
+	assertNotError(t, err, "Can't read data from server")
+	assertByteEquals(t, buf, testString)
 }
 
 func drain(t *testing.T, c *Connection) {
