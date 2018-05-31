@@ -52,7 +52,7 @@ const (
 	RecvStreamStateDataRecvd  = RecvStreamState(2) // Not tracked
 	RecvStreamStateResetRecvd = RecvStreamState(3)
 	RecvStreamStateDataRead   = RecvStreamState(4)
-	RecvStreamStateResetRead  = RecvStreamState(5) // Not tracked
+	RecvStreamStateResetRead  = RecvStreamState(5)
 )
 
 // String produces a nice string from a RecvStreamState.
@@ -391,6 +391,12 @@ func (s *recvStreamBase) newFrameData(offset uint64, last bool, payload []byte,
 func (s *recvStreamBase) read(b []byte) (int, error) {
 	s.log(logTypeStream, "Reading len=%v read offset=%v available chunks=%v",
 		len(b), s.readOffset, len(s.chunks))
+
+	if s.state == RecvStreamStateResetRecvd {
+		s.log(logTypeStream, "Reading stopped for RST_STREAM")
+		s.setRecvState(RecvStreamStateResetRead)
+		return 0, ErrorStreamReset
+	}
 
 	read := 0
 

@@ -405,7 +405,7 @@ func (h *testReceiveHandler) StreamReadable(s RecvStream) {
 			break
 		case ErrorWouldBlock:
 			return
-		case ErrorStreamIsClosed, ErrorConnIsClosed, io.EOF:
+		case ErrorStreamReset, ErrorConnIsClosed, io.EOF:
 			h.done = true
 			return
 		default:
@@ -565,7 +565,7 @@ func TestSendReceiveStreamRst(t *testing.T) {
 	ss := pair.server.GetStream(4)
 	b := make([]byte, 1024)
 	n, err = ss.Read(b)
-	assertEquals(t, err, io.EOF)
+	assertEquals(t, err, ErrorStreamReset)
 	assertEquals(t, 0, n)
 }
 
@@ -783,10 +783,11 @@ func TestUnidirectionalStreamRst(t *testing.T) {
 	err = inputAll(client)
 	assertNotError(t, err, "packets should be OK")
 
-	n, err = cstream.Read(d)
-	assertEquals(t, err, io.EOF)
-	assertEquals(t, n, 0)
 	assertEquals(t, cstream.RecvState(), RecvStreamStateResetRecvd)
+	n, err = cstream.Read(d)
+	assertEquals(t, err, ErrorStreamReset)
+	assertEquals(t, n, 0)
+	assertEquals(t, cstream.RecvState(), RecvStreamStateResetRead)
 }
 
 func TestUnidirectionalStreamRstImmediate(t *testing.T) {
@@ -801,11 +802,12 @@ func TestUnidirectionalStreamRstImmediate(t *testing.T) {
 	assertNotError(t, err, "packets should be OK")
 
 	cstream := pair.client.GetRecvStream(sstream.Id())
+	assertEquals(t, cstream.RecvState(), RecvStreamStateResetRecvd)
 	var d [3]byte
 	n, err := cstream.Read(d[:])
-	assertEquals(t, err, io.EOF)
+	assertEquals(t, err, ErrorStreamReset)
 	assertEquals(t, n, 0)
-	assertEquals(t, cstream.RecvState(), RecvStreamStateResetRecvd)
+	assertEquals(t, cstream.RecvState(), RecvStreamStateResetRead)
 }
 
 func TestUnidirectionalStopSending(t *testing.T) {
@@ -839,10 +841,11 @@ func TestUnidirectionalStopSending(t *testing.T) {
 	err = inputAll(pair.server)
 	assertNotError(t, err, "packets should be OK")
 
-	n, err = sstream.Read(d)
-	assertEquals(t, err, io.EOF)
-	assertEquals(t, n, 0)
 	assertEquals(t, sstream.RecvState(), RecvStreamStateResetRecvd)
+	n, err = sstream.Read(d)
+	assertEquals(t, err, ErrorStreamReset)
+	assertEquals(t, n, 0)
+	assertEquals(t, sstream.RecvState(), RecvStreamStateResetRead)
 }
 
 func TestBidirectionalStopSending(t *testing.T) {
