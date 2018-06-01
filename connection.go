@@ -164,7 +164,7 @@ type Connection struct {
 // Create a new QUIC connection. Should only be used with role=RoleClient,
 // though we use it with RoleServer internally.
 func NewConnection(trans Transport, role Role, tls *TlsConfig, handler ConnectionHandler) *Connection {
-	mint.HkdfLabelPrefix = "quic "
+	// mint.HkdfLabelPrefix = "quic "
 	c := &Connection{
 		handler:            handler,
 		role:               role,

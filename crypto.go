@@ -48,6 +48,7 @@ func generateCleartextKeys(secret []byte, label string, cs *mint.CipherSuitePara
 	logf(logTypeTls, "Cleartext keys: cid=%x", secret)
 	extracted := mint.HkdfExtract(cs.Hash, kQuicVersionSalt, secret)
 	inner := mint.HkdfExpandLabel(cs.Hash, extracted, label, []byte{}, cs.Hash.Size())
+	logf(logTypeAead, "Secret (%s) = %x", label, inner)
 	return newCryptoStateInner(inner, cs)
 }
 
