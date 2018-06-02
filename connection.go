@@ -1293,13 +1293,25 @@ func (c *Connection) issueStreamIdCredit(t streamType) {
 	c.log(logTypeFlowControl, "Issuing more %v stream ID credit: %d", t, max)
 }
 
+func (c *Connection) isFramePermitted(el *encryptionLevel, f frameType) bool {
+	switch f {
+	case kFrameTypeCryptoHs, kFrameTypePadding, kFrameTypePing, kFrameTypeAck:
+		return true
+	case kFrameTypeConnectionClose:
+		// TODO: also crypto_close
+		return el.epoch != mint.EpochEarlyData
+	case kFrameTypeStream:
+		return el.epoch == mint.EpochEarlyData || el.epoch == mint.EpochApplicationData
+	default:
+		return el.epoch == mint.EpochApplicationData
+	}
+}
+
 func (c *Connection) processUnprotected(hdr *packetHeader, el *encryptionLevel, packetNumber uint64, payload []byte, naf *bool) error {
 	c.log(logTypeHandshake, "Reading unprotected data in state %v", c.state)
 	c.log(logTypeConnection, "Received Packet=%v", dumpPacket(payload))
 	*naf = false
 
-	// TODO(ekr@rtfm.com): Filter out illegal frame types in various
-	// epochs.
 	for len(payload) > 0 {
 		c.log(logTypeConnection, "payload bytes left %d", len(payload))
 		n, f, err := decodeFrame(payload)
@@ -1311,6 +1323,11 @@ func (c *Connection) processUnprotected(hdr *packetHeader, el *encryptionLevel, 
 
 		payload = payload[n:]
 		nonAck := true
+
+		if !c.isFramePermitted(el, f.f.getType()) {
+			c.log(logTypeConnection, "Illegal frame [%v] in epoch %v", f, el.epoch)
+			return ErrorProtocolViolation
+		}
 		switch inner := f.f.(type) {
 		case *paddingFrame:
 			// Skip.
