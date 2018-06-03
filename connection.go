@@ -211,10 +211,11 @@ func NewConnection(trans Transport, role Role, tls *TlsConfig, handler Connectio
 
 	for i := int(0); i < 4; i++ {
 		el := encryptionLevel{
-			nextSendPacket:   1,
-			epoch:            mint.Epoch(i),
-			sendCipher:       nil,
-			recvCipher:       nil,
+			nextSendPacket: 1,
+			epoch:          mint.Epoch(i),
+			sendCipher:     nil,
+			recvCipher:     nil,
+			// We are using the streams data structures, but without flow control
 			sendCryptoStream: newSendStream(c, ^uint64(uint64(i)), ^uint64(0)),
 			recvCryptoStream: newRecvStream(c, ^uint64(uint64(i)), ^uint64(0)),
 		}
@@ -605,6 +606,7 @@ func (c *Connection) queueFrame(q *[]*frame, f *frame) {
 	*q = append(*q, f)
 }
 
+// TODO(ekr@rtfm.com): Coalesce the frames, either here or in Mint.
 func (c *Connection) sendCryptoFrames(el *encryptionLevel, bareAcks bool) (int, error) {
 	s := el.sendCryptoStream
 	q := &el.outputQ
@@ -629,7 +631,8 @@ func (c *Connection) enqueueStreamFrames(s sendStreamPrivate, q *[]*frame) {
 	}
 }
 
-// Send all the queued data on a set of streams with packet type |pt|
+// Send all the queued data on a set of streams with the current app data encryption
+// level.
 func (c *Connection) queueStreamFrames() error {
 	c.log(logTypeConnection, "%v: queueStreamFrames", c.role)
 
@@ -1038,8 +1041,6 @@ func (c *Connection) input(payload []byte) error {
 		el.recvd.init(packetNumber)
 	}
 
-	// TODO(ekr@rtfm.com): Reject unprotected packets once we are established.
-	// TODO(ekr@rtfm.com): Check that client initial is the right length.
 	naf := true
 	err = c.processUnprotected(&hdr, el, packetNumber, plaintext, &naf)
 	if err != nil {
@@ -1430,6 +1431,8 @@ func (c *Connection) processUnprotected(hdr *packetHeader, el *encryptionLevel, 
 			}
 
 		case *cryptoHsFrame:
+			// TODO(ekr@rtfm.com): Check for state changes after
+			// processing these framee.
 			c.log(logTypeStream, "Received crypto frame", inner)
 
 			err = el.recvCryptoStream.(*recvStream).

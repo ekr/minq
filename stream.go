@@ -764,6 +764,7 @@ func (fc *flowControl) take(other *flowControl, amount uint64) uint64 {
 	}
 
 	fc.used += taken
+	// TODO(ekr@rtfm.com): Is this still needed.
 	if other != nil {
 		other.used += taken
 	}
