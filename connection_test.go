@@ -674,6 +674,55 @@ func TestSessionResumption(t *testing.T) {
 	pair.handshake(t)
 }
 
+func TestZeroRTT(t *testing.T) {
+	cTrans, sTrans := newTestTransportPair(true)
+
+	cconf := testTlsConfig()
+	client := NewConnection(cTrans, RoleClient, cconf, nil)
+	assertNotNil(t, client, "Couldn't make client")
+
+	sconf := testTlsConfig()
+	server := NewConnection(sTrans, RoleServer, sconf, nil)
+	assertNotNil(t, server, "Couldn't make server")
+
+	pair := csPair{client, server}
+	pair.handshake(t)
+
+	// Consume NST.
+	err := inputAll(pair.client)
+	assertNotError(t, err, "Couldn't read NST")
+
+	logf(logTypeConnection, "Test Set: New Handshake")
+	// Now rehandshake.
+	cTrans, sTrans = newTestTransportPair(true)
+	client = NewConnection(cTrans, RoleClient, cconf, nil)
+	assertNotNil(t, client, "Couldn't make client")
+	server = NewConnection(sTrans, RoleServer, sconf, nil)
+	assertNotNil(t, server, "Couldn't make server")
+	pair = csPair{client, server}
+
+	_, err = client.CheckTimer()
+	assertNotError(t, err, "Couldn't check timer")
+
+	// Send in 0-RTT
+	testString := []byte("abcdef")
+	cs := pair.client.CreateStream()
+	assertEquals(t, uint64(0), cs.Id())
+	assertNotNil(t, cs, "Failed to create a stream")
+	_, err = cs.Write(testString)
+	assertNotError(t, err, "error writing in 0-RTT")
+
+	pair.handshake(t)
+
+	// Now read the 0-RTT data
+	ss := pair.server.GetStream(0)
+	b := make([]byte, 1024)
+	n, err := ss.Read(b)
+	assertNotError(t, err, "Read from client")
+	b = b[:n]
+	assertByteEquals(t, []byte(testString), b)
+}
+
 type streamCatcher struct {
 	lastStream Stream
 	lastRecv   RecvStream

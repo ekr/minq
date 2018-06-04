@@ -290,7 +290,7 @@ func (s *sendStreamBase) flowControl() flowControl {
 
 // Push out all pending frames.  Set the stream state if the end of the stream is available.
 func (s *sendStreamBase) outputWritable() []streamChunk {
-	s.log(logTypeStream, "outputWritable, current max offset=%d)", s.fc.max)
+	s.log(logTypeStream, "outputWritable, chunks=%v current max offset=%d)", len(s.chunks), s.fc.max)
 	for _, ch := range s.chunks {
 		if ch.last {
 			s.setSendState(SendStreamStateDataSent)
@@ -510,6 +510,7 @@ func (s *sendStream) Id() uint64 {
 
 // Write writes data.
 func (s *sendStream) Write(data []byte) (int, error) {
+	s.log(logTypeStream, "Stream %v: writing %v bytes", s.Id(), len(data))
 	if s.c.isClosed() {
 		return 0, ErrorConnIsClosed
 	}

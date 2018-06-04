@@ -557,14 +557,15 @@ func (c *Connection) sendQueued(bareAcks bool) (int, error) {
 	}
 
 	// Send application data
-	if c.state == StateEstablished {
-		err := c.queueStreamFrames()
+	el := c.streamEncryptionLevel()
+	if el != nil {
+		err := c.queueStreamFrames(el)
 		if err != nil {
 			return sent, err
 		}
 
 		// Send enqueued data from protected streams
-		s, err := c.sendQueuedFrames(c.encryptionLevels[mint.EpochApplicationData], bareAcks)
+		s, err := c.sendQueuedFrames(el, bareAcks)
 		if err != nil {
 			return sent, err
 		}
@@ -622,10 +623,12 @@ func (c *Connection) sendCryptoFrames(el *encryptionLevel, bareAcks bool) (int, 
 }
 
 func (c *Connection) enqueueStreamFrames(s sendStreamPrivate, q *[]*frame) {
+	logf(logTypeStream, "Stream %v: enqueueing", s.Id())
 	if s == nil {
 		return
 	}
 	for _, ch := range s.outputWritable() {
+		logf(logTypeStream, "Stream %v is writable", s.Id())
 		f := newStreamFrame(s.Id(), ch.offset, ch.data, ch.last)
 		c.queueFrame(q, f)
 	}
@@ -633,12 +636,12 @@ func (c *Connection) enqueueStreamFrames(s sendStreamPrivate, q *[]*frame) {
 
 // Send all the queued data on a set of streams with the current app data encryption
 // level.
-func (c *Connection) queueStreamFrames() error {
+func (c *Connection) queueStreamFrames(el *encryptionLevel) error {
 	c.log(logTypeConnection, "%v: queueStreamFrames", c.role)
 
 	// Output all the stream frames that are now permitted by stream flow control
 	c.forEachSend(func(s sendStreamPrivate) {
-		c.enqueueStreamFrames(s, &c.encryptionLevels[mint.EpochApplicationData].outputQ)
+		c.enqueueStreamFrames(s, &el.outputQ)
 	})
 	return nil
 }
@@ -1589,11 +1592,18 @@ func (c *Connection) CheckTimer() (int, error) {
 
 	if c.state == StateInit {
 		assert(c.role == RoleClient)
-		c.setState(StateWaitServerInitial)
 
 		err := c.tls.handshake()
 		if err != nil {
 			return 0, err
+		}
+
+		c.setState(StateWaitServerInitial)
+		if c.streamEncryptionLevel() != nil {
+			assert(c.streamEncryptionLevel().epoch == mint.EpochEarlyData)
+			c.log(logTypeConnection, "0-RTT available")
+			c.tpHandler.setDummyPeerParams()
+			c.setTransportParameters()
 		}
 	} else {
 		if c.state == StateClosing {
@@ -1877,4 +1887,16 @@ func (c *Connection) expandPacketNumber(el *encryptionLevel, pn uint64, size int
 		return match
 	}
 	return wrap
+}
+
+func (c *Connection) streamEncryptionLevel() *encryptionLevel {
+	if c.state == StateEstablished {
+		return c.encryptionLevels[mint.EpochApplicationData]
+	}
+
+	if c.encryptionLevels[mint.EpochEarlyData].sendCipher != nil {
+		return c.encryptionLevels[mint.EpochEarlyData]
+	}
+
+	return nil
 }

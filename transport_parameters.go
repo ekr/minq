@@ -169,6 +169,17 @@ func newTransportParametersHandler(log loggingFunction, role Role, version Versi
 	return &transportParametersHandler{log, role, version, nil}
 }
 
+func (h *transportParametersHandler) setDummyPeerParams() {
+	h.peerParams = &transportParameters{
+		uint32(kInitialMaxStreamData),
+		uint32(kInitialMaxData),
+		kConcurrentStreamsBidi,
+		kConcurrentStreamsUni,
+		600,
+		uint8(1),
+	}
+}
+
 func (h *transportParametersHandler) Send(hs mint.HandshakeType, el *mint.ExtensionList) error {
 	if h.role == RoleClient {
 		h.log(logTypeHandshake, "Sending transport parameters")
