@@ -95,7 +95,7 @@ func makeConnection(config *minq.TlsConfig, uaddr *net.UDPAddr) (*net.UDPConn, *
 	conn := minq.NewConnection(utrans, minq.RoleClient,
 		config, &connHandler{})
 
-	log.Printf("Client conn id=%x\n", conn.ClientId())
+	log.Printf("Client conn id=%v\n", conn.ClientId())
 
 	// Start things off.
 	_, err = conn.CheckTimer()
@@ -204,13 +204,6 @@ func inner_main(config *minq.TlsConfig, resuming bool) {
 	}
 	httpLeft = httpCount
 
-	if resuming && zeroRtt {
-		err = completeConnection(usock, conn)
-		if err != nil {
-			return
-		}
-	}
-
 	udpin := make(chan []byte)
 	stdin := make(chan []byte)
 
@@ -238,6 +231,22 @@ func inner_main(config *minq.TlsConfig, resuming bool) {
 		}()
 	}
 
+	if doHttp != "" {
+		req := "GET " + doHttp + "\r\n"
+		for _, str := range streams {
+			str.Write([]byte(req))
+			str.Close()
+		}
+	}
+
+	if resuming && zeroRtt {
+		log.Println("Completing connection after we sent 0-RTT send in 0-RTT")
+		err = completeConnection(usock, conn)
+		if err != nil {
+			return
+		}
+	}
+
 	if doHttp == "" {
 		// Read from stdin.
 		go func() {
@@ -252,14 +261,7 @@ func inner_main(config *minq.TlsConfig, resuming bool) {
 				stdin <- b
 			}
 		}()
-	} else {
-		req := "GET " + doHttp + "\r\n"
-		for _, str := range streams {
-			str.Write([]byte(req))
-			str.Close()
-		}
 	}
-
 	for {
 		select {
 		case u := <-udpin:
