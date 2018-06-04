@@ -17,6 +17,7 @@ var doHttp string
 var httpCount int
 var heartbeat int
 var cpuProfile string
+var resume bool
 
 type connHandler struct {
 	bytesRead int
@@ -78,6 +79,47 @@ func readUDP(s *net.UDPConn) ([]byte, error) {
 	return b, nil
 }
 
+func makeConnection(config *minq.TlsConfig, uaddr *net.UDPAddr) (*net.UDPConn, *minq.Connection) {
+	usock, err := net.ListenUDP("udp", nil)
+	if err != nil {
+		log.Println("Couldn't create connected UDP socket")
+		return nil, nil
+	}
+
+	utrans := minq.NewUdpTransport(usock, uaddr)
+
+	conn := minq.NewConnection(utrans, minq.RoleClient,
+		config, &connHandler{})
+
+	log.Printf("Client conn id=%x\n", conn.ClientId())
+
+	// Start things off.
+	_, err = conn.CheckTimer()
+
+	for conn.GetState() != minq.StateEstablished {
+		b, err := readUDP(usock)
+		if err != nil {
+			if err == minq.ErrorWouldBlock {
+				_, err = conn.CheckTimer()
+				if err != nil {
+					return nil, nil
+				}
+				continue
+			}
+			return nil, nil
+		}
+
+		err = conn.Input(b)
+		if err != nil {
+			log.Println("Error", err)
+			return nil, nil
+		}
+	}
+
+	log.Println("Connection established")
+	return usock, conn
+}
+
 func main() {
 	log.Println("PID=", os.Getpid())
 	flag.StringVar(&addr, "addr", "localhost:4433", "[host:port]")
@@ -86,6 +128,7 @@ func main() {
 	flag.IntVar(&httpCount, "httpCount", 1, "Number of parallel HTTP requests to start")
 	flag.IntVar(&heartbeat, "heartbeat", 0, "heartbeat frequency [ms]")
 	flag.StringVar(&cpuProfile, "cpuprofile", "", "write cpu profile to file")
+	flag.BoolVar(&resume, "resume", false, "Test resumption")
 	flag.Parse()
 
 	if cpuProfile != "" {
@@ -113,44 +156,19 @@ func main() {
 		log.Println("Invalid UDP addr", err)
 		return
 	}
-	usock, err := net.ListenUDP("udp", nil)
-	if err != nil {
-		log.Println("Couldn't create connected UDP socket")
-		return
-	}
-
-	utrans := minq.NewUdpTransport(usock, uaddr)
 
 	config := minq.NewTlsConfig(serverName)
-	conn := minq.NewConnection(utrans, minq.RoleClient,
-		&config, &connHandler{})
 
-	log.Printf("Client conn id=%x\n", conn.ClientId())
-
-	// Start things off.
-	_, err = conn.CheckTimer()
-
-	for conn.GetState() != minq.StateEstablished {
-		b, err := readUDP(usock)
-		if err != nil {
-			if err == minq.ErrorWouldBlock {
-				_, err = conn.CheckTimer()
-				if err != nil {
-					return
-				}
-				continue
-			}
-			return
-		}
-
-		err = conn.Input(b)
-		if err != nil {
-			log.Println("Error", err)
+	usock, conn := makeConnection(&config, uaddr)
+	if conn == nil {
+		return
+	}
+	if resume {
+		usock, conn = makeConnection(&config, uaddr)
+		if conn == nil {
 			return
 		}
 	}
-
-	log.Println("Connection established")
 
 	// Make all the streams we need
 	streams := make([]minq.Stream, httpCount)
