@@ -29,6 +29,7 @@ func (c *TlsConfig) toMint() *mint.Config {
 			NonBlocking:        true,
 			NextProtos:         []string{kQuicALPNToken},
 			SendSessionTickets: true,
+			AllowEarlyData:     true,
 		}
 
 		if c.ForceHrr {

@@ -389,8 +389,6 @@ func (s *recvStreamBase) newFrameData(offset uint64, last bool, payload []byte,
 	return nil
 }
 
-// Read from a stream into a buffer. Up to |len(b)| bytes will be read,
-// and the number of bytes returned is in |n|.
 func (s *recvStreamBase) read(b []byte) (int, error) {
 	s.log(logTypeStream, "Reading len=%v read offset=%v available chunks=%v",
 		len(b), s.readOffset, len(s.chunks))
