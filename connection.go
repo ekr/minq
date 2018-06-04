@@ -511,7 +511,7 @@ func (c *Connection) sendPacket(el *encryptionLevel, pt packetType, tosend []*fr
 	}
 
 	// Pad out client Initial
-	if pt == packetTypeInitial && c.role == RoleClient {
+	if pt == packetTypeInitial && c.role == RoleClient && !containsOnlyAcks {
 		topad := kMinimumClientInitialLength - (len(payload) +
 			c.packetOverhead(el))
 		payload = append(payload, make([]byte, topad)...)
