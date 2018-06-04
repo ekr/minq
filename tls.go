@@ -61,7 +61,7 @@ func (c *TlsConfig) toMint() *mint.Config {
 		config.Init(false)
 		c.mintConfig = &config
 	}
-	return c.mintConfig
+	return c.mintConfig.Clone()
 }
 
 func NewTlsConfig(serverName string) TlsConfig {
@@ -71,11 +71,12 @@ func NewTlsConfig(serverName string) TlsConfig {
 }
 
 type tlsConn struct {
-	config   *TlsConfig
-	conn     *Connection
-	tls      *mint.Conn
-	finished bool
-	cs       *mint.CipherSuiteParams
+	config     *TlsConfig
+	conn       *Connection
+	mintConfig *mint.Config
+	tls        *mint.Conn
+	finished   bool
+	cs         *mint.CipherSuiteParams
 }
 
 func newTlsConn(conn *Connection, conf *TlsConfig, role Role) *tlsConn {
@@ -84,20 +85,20 @@ func newTlsConn(conn *Connection, conf *TlsConfig, role Role) *tlsConn {
 		isClient = false
 	}
 
-	conf2 := *conf
-	mc := conf2.toMint()
+	mc := conf.toMint()
 	mc.RecordLayer = newRecordLayerFactory(conn)
 	return &tlsConn{
-		&conf2,
+		conf,
 		conn,
-		mint.NewConn(nil, conf2.toMint(), isClient),
+		mc,
+		mint.NewConn(nil, mc, isClient),
 		false,
 		nil,
 	}
 }
 
 func (c *tlsConn) setTransportParametersHandler(h *transportParametersHandler) {
-	c.config.mintConfig.ExtensionHandler = h
+	c.mintConfig.ExtensionHandler = h
 }
 
 func (c *tlsConn) handshake() error {

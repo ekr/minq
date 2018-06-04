@@ -664,15 +664,14 @@ func TestSessionResumption(t *testing.T) {
 	err := inputAll(pair.client)
 	assertNotError(t, err, "Couldn't read NST")
 
-	/*
-		// Now rehandshake.
-		client = NewConnection(cTrans, RoleClient, cconf, nil)
-		assertNotNil(t, client, "Couldn't make client")
-		server = NewConnection(sTrans, RoleServer, sconf, nil)
-		assertNotNil(t, server, "Couldn't make server")
-		pair = csPair{client, server}
-		pair.handshake(t)
-	*/
+	// Now rehandshake.
+	cTrans, sTrans = newTestTransportPair(true)
+	client = NewConnection(cTrans, RoleClient, cconf, nil)
+	assertNotNil(t, client, "Couldn't make client")
+	server = NewConnection(sTrans, RoleServer, sconf, nil)
+	assertNotNil(t, server, "Couldn't make server")
+	pair = csPair{client, server}
+	pair.handshake(t)
 }
 
 type streamCatcher struct {
