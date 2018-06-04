@@ -45,9 +45,11 @@ func (h *connHandler) StreamReadable(s minq.RecvStream) {
 			return
 		case minq.ErrorStreamIsClosed, minq.ErrorConnIsClosed:
 			log.Println("<CLOSED>")
+			httpCount--
 			return
 		default:
 			log.Println("Error: ", err)
+			httpCount--
 			return
 		}
 		b = b[:n]
@@ -235,6 +237,9 @@ func main() {
 			}
 			if err != nil {
 				log.Println("Error", err)
+				return
+			}
+			if doHttp != "" && httpCount == 0 {
 				return
 			}
 		case i := <-stdin:
