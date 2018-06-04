@@ -1035,6 +1035,8 @@ func (c *Connection) input(payload []byte) error {
 		return wrapE(ErrorInvalidPacket, err)
 	}
 
+	c.logPacket("Receiving", &hdr, packetNumber, plaintext)
+
 	// Now that we know it's valid, process stateless retry.
 	if typ == packetTypeRetry {
 		return c.processStatelessRetry(&hdr, plaintext)

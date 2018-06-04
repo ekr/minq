@@ -18,6 +18,8 @@ var httpCount int
 var heartbeat int
 var cpuProfile string
 var resume bool
+var httpLeft int
+var zeroRtt bool
 
 type connHandler struct {
 	bytesRead int
@@ -45,11 +47,11 @@ func (h *connHandler) StreamReadable(s minq.RecvStream) {
 			return
 		case minq.ErrorStreamIsClosed, minq.ErrorConnIsClosed:
 			log.Println("<CLOSED>")
-			httpCount--
+			httpLeft--
 			return
 		default:
 			log.Println("Error: ", err)
-			httpCount--
+			httpLeft--
 			return
 		}
 		b = b[:n]
@@ -98,28 +100,32 @@ func makeConnection(config *minq.TlsConfig, uaddr *net.UDPAddr) (*net.UDPConn, *
 	// Start things off.
 	_, err = conn.CheckTimer()
 
+	return usock, conn
+}
+
+func completeConnection(usock *net.UDPConn, conn *minq.Connection) error {
 	for conn.GetState() != minq.StateEstablished {
 		b, err := readUDP(usock)
 		if err != nil {
 			if err == minq.ErrorWouldBlock {
 				_, err = conn.CheckTimer()
 				if err != nil {
-					return nil, nil
+					return err
 				}
 				continue
 			}
-			return nil, nil
+			return err
 		}
 
 		err = conn.Input(b)
 		if err != nil {
 			log.Println("Error", err)
-			return nil, nil
+			return err
 		}
 	}
 
 	log.Println("Connection established")
-	return usock, conn
+	return nil
 }
 
 func main() {
@@ -131,8 +137,16 @@ func main() {
 	flag.IntVar(&heartbeat, "heartbeat", 0, "heartbeat frequency [ms]")
 	flag.StringVar(&cpuProfile, "cpuprofile", "", "write cpu profile to file")
 	flag.BoolVar(&resume, "resume", false, "Test resumption")
+	flag.BoolVar(&zeroRtt, "zerortt", false, "Test 0-RTT")
 	flag.Parse()
 
+	if zeroRtt {
+		resume = true
+		if doHttp == "" {
+			log.Printf("Need HTTP to do 0-RTT")
+			return
+		}
+	}
 	if cpuProfile != "" {
 		f, err := os.Create(cpuProfile)
 		if err != nil {
@@ -152,6 +166,14 @@ func main() {
 		}
 		serverName = host
 	}
+	config := minq.NewTlsConfig(serverName)
+
+	inner_main(&config, false)
+	if resume {
+		inner_main(&config, true)
+	}
+}
+func inner_main(config *minq.TlsConfig, resuming bool) {
 
 	uaddr, err := net.ResolveUDPAddr("udp", addr)
 	if err != nil {
@@ -159,15 +181,14 @@ func main() {
 		return
 	}
 
-	config := minq.NewTlsConfig(serverName)
-
-	usock, conn := makeConnection(&config, uaddr)
+	usock, conn := makeConnection(config, uaddr)
 	if conn == nil {
 		return
 	}
-	if resume {
-		usock, conn = makeConnection(&config, uaddr)
-		if conn == nil {
+
+	if !resuming || !zeroRtt {
+		err = completeConnection(usock, conn)
+		if err != nil {
 			return
 		}
 	}
@@ -176,6 +197,14 @@ func main() {
 	streams := make([]minq.Stream, httpCount)
 	for i := 0; i < httpCount; i++ {
 		streams[i] = conn.CreateStream()
+	}
+	httpLeft = httpCount
+
+	if resuming && zeroRtt {
+		err = completeConnection(usock, conn)
+		if err != nil {
+			return
+		}
 	}
 
 	udpin := make(chan []byte)
@@ -239,7 +268,7 @@ func main() {
 				log.Println("Error", err)
 				return
 			}
-			if doHttp != "" && httpCount == 0 {
+			if doHttp != "" && httpLeft == 0 {
 				return
 			}
 		case i := <-stdin:
