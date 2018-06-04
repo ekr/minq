@@ -124,7 +124,7 @@ func completeConnection(usock *net.UDPConn, conn *minq.Connection) error {
 		}
 	}
 
-	log.Println("Connection established")
+	log.Printf("Connection established server CID = %v\n", conn.ServerId())
 	return nil
 }
 
@@ -192,6 +192,9 @@ func inner_main(config *minq.TlsConfig, resuming bool) {
 			return
 		}
 	}
+
+	// Hopefully reduce the risk of reordering
+	time.Sleep(100 * time.Millisecond)
 
 	// Make all the streams we need
 	streams := make([]minq.Stream, httpCount)
