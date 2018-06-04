@@ -774,7 +774,7 @@ func (c *Connection) sendQueuedFrames(el *encryptionLevel, bareAcks bool) (int, 
 			if f.needsTransmit {
 				c.log(logTypeStream, "Frame %v requires transmission", f)
 			} else if cAge < txAge {
-				c.log(logTypeStream, "Skipping frame %v because sent too recently", f)
+				c.log(logTypeStream, "Skipping frame %v because sent too recently (%v < %v)", f, cAge, txAge)
 				continue
 			}
 
@@ -1672,6 +1672,13 @@ func (c *Connection) setupAeadMasking(cid ConnectionId) (err error) {
 // Called when the handshake is complete.
 func (c *Connection) handshakeComplete() (err error) {
 	c.setState(StateEstablished)
+
+	if c.role == RoleClient && c.encryptionLevels[mint.EpochEarlyData].sendCipher != nil {
+		c.log(logTypeConnection, "Converting outstanding 0-RTT data to 1-RTT data")
+		c.encryptionLevels[mint.EpochApplicationData].outputQ =
+			c.encryptionLevels[mint.EpochEarlyData].outputQ
+		c.encryptionLevels[mint.EpochEarlyData].outputQ = nil
+	}
 
 	return nil
 }

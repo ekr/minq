@@ -50,6 +50,11 @@ func (t *testTransportPipe) Flush() {
 	t.in = make([]*testPacket, 0)
 }
 
+func (t *testTransportPipe) Clear() {
+	t.in = make([]*testPacket, 0)
+	t.out = make([]*testPacket, 0)
+}
+
 type testTransport struct {
 	r *testTransportPipe
 	w *testTransportPipe
@@ -716,6 +721,76 @@ func TestZeroRTT(t *testing.T) {
 
 	// Now read the 0-RTT data
 	ss := pair.server.GetStream(0)
+	b := make([]byte, 1024)
+	n, err := ss.Read(b)
+	assertNotError(t, err, "Read from client")
+	b = b[:n]
+	assertByteEquals(t, []byte(testString), b)
+}
+
+func TestZeroRTT1RTTRetransmit(t *testing.T) {
+	cTrans, sTrans := newTestTransportPair(true)
+
+	cconf := testTlsConfig()
+	client := NewConnection(cTrans, RoleClient, cconf, nil)
+	assertNotNil(t, client, "Couldn't make client")
+
+	sconf := testTlsConfig()
+	server := NewConnection(sTrans, RoleServer, sconf, nil)
+	assertNotNil(t, server, "Couldn't make server")
+
+	pair := csPair{client, server}
+	pair.handshake(t)
+
+	// Consume NST.
+	err := inputAll(pair.client)
+	assertNotError(t, err, "Couldn't read NST")
+
+	logf(logTypeConnection, "Test Set: New Handshake")
+	// Now rehandshake.
+	cTrans, sTrans = newTestTransportPair(true)
+	client = NewConnection(cTrans, RoleClient, cconf, nil)
+	assertNotNil(t, client, "Couldn't make client")
+	server = NewConnection(sTrans, RoleServer, sconf, nil)
+	assertNotNil(t, server, "Couldn't make server")
+	pair = csPair{client, server}
+
+	_, err = client.CheckTimer()
+	assertNotError(t, err, "Couldn't check timer")
+
+	err = inputAll(pair.server)
+	assertNotError(t, err, "Couldn't negotiate")
+
+	// Send in 0-RTT
+	testString := []byte("abcdef")
+	cs := pair.client.CreateStream()
+	assertEquals(t, uint64(0), cs.Id())
+	assertNotNil(t, cs, "Failed to create a stream")
+	_, err = cs.Write(testString)
+	assertNotError(t, err, "error writing in 0-RTT")
+
+	// Now erase the queue
+	cTrans.w.Clear()
+
+	// Now handshake
+	pair.handshake(t)
+
+	// The stream isn't available yet
+	ss := pair.server.GetStream(0)
+	assertEquals(t, nil, ss)
+
+	// The client should retransmit
+	time.Sleep(kDefaultInitialRtt + 10*time.Millisecond)
+	logf(logTypeConnection, "About to check timer. Should retransmit")
+	_, err = pair.client.CheckTimer()
+	assertNotError(t, err, "Error checking timer")
+
+	// Input the 1-RTT data.
+	err = inputAll(pair.server)
+	assertNotError(t, err, "read 1-RTT data")
+
+	// Now read the 1-RTT data
+	ss = pair.server.GetStream(0)
 	b := make([]byte, 1024)
 	n, err := ss.Read(b)
 	assertNotError(t, err, "Read from client")
