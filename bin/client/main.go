@@ -197,6 +197,10 @@ func inner_main(config *minq.TlsConfig, resuming bool) {
 	streams := make([]minq.Stream, httpCount)
 	for i := 0; i < httpCount; i++ {
 		streams[i] = conn.CreateStream()
+		if streams[i] == nil {
+			log.Println("Couldn't create stream")
+			return
+		}
 	}
 	httpLeft = httpCount
 

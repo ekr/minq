@@ -1683,6 +1683,9 @@ func (c *Connection) packetNonce(pn uint64) []byte {
 // CreateStream creates a stream that can send and receive.
 func (c *Connection) CreateStream() Stream {
 	c.log(logTypeStream, "Creating new Stream")
+	if c.tpHandler.peerParams == nil {
+		return nil
+	}
 	s := c.localBidiStreams.create(func(id uint64) hasIdentity {
 		recvMax := uint64(c.tpHandler.peerParams.maxStreamsData)
 		return newStream(c, id, kInitialMaxStreamData, recvMax)
