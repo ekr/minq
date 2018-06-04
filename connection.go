@@ -1900,3 +1900,7 @@ func (c *Connection) streamEncryptionLevel() *encryptionLevel {
 
 	return nil
 }
+
+func (c *Connection) Writable() bool {
+	return c.streamEncryptionLevel() != nil
+}
