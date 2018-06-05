@@ -1529,6 +1529,11 @@ func (c *Connection) issueStreamIdCredit(t streamType) {
 		max = c.remoteBidiStreams.credit(1)
 	case streamTypeUnidirectionalRemote:
 		max = c.remoteUniStreams.credit(1)
+	case streamTypeBidirectionalLocal:
+		// Our stream, don't credit it.
+		return
+	default:
+		panic("shouldn't be crediting stream IDs here")
 	}
 	c.outputProtectedQ = filterFrames(c.outputProtectedQ, func(f *frame) bool {
 		_, ok := f.f.(*maxStreamIdFrame)
