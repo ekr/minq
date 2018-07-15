@@ -1,15 +1,15 @@
 FROM golang
 
 RUN go get github.com/bifurcation/mint
+RUN (cd /go/src/github.com/bifurcation/mint; git remote add ekr https://github.com/ekr/mint; git fetch ekr; git checkout ekr/quic_record_layer)
 RUN go get github.com/cloudflare/cfssl/helpers
 RUN go get github.com/ekr/minq
 RUN go install github.com/ekr/minq/bin/server
 RUN go install github.com/ekr/minq/bin/client
 RUN apt-get update
 RUN apt-get install -y tcpdump
-RUN apt-get install -y node
-RUN apt-get install -y npm
-RUN (cd /go/src/github.com/ekr/minq/deploy/logserver; npm install)
+RUN apt-get install -y nodejs
+#RUN (cd /go/src/github.com/ekr/minq/deploy/logserver; npm install)
 
 ARG SERVERNAME=localhost
 ENV SNAME=$SERVERNAME

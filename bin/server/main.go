@@ -29,6 +29,7 @@ var doHttp bool
 var statelessReset bool
 var cpuProfile string
 var echo bool
+var standalone bool
 
 // Shared data structures.
 type conn struct {
@@ -236,6 +237,7 @@ func main() {
 	flag.BoolVar(&echo, "echo", false, "Run as an echo server")
 	flag.BoolVar(&statelessReset, "stateless-reset", false, "Do stateless reset")
 	flag.StringVar(&cpuProfile, "cpuprofile", "", "write cpu profile to file")
+	flag.BoolVar(&standalone, "standalone", false, "Run standalone")
 	flag.Parse()
 
 	var key crypto.Signer
@@ -321,22 +323,24 @@ func main() {
 	server := minq.NewServer(minq.NewUdpTransportFactory(usock), &config, handler)
 
 	stdin := make(chan []byte)
-	go func() {
-		for {
-			b := make([]byte, 1024)
-			n, err := os.Stdin.Read(b)
-			if err == io.EOF {
-				log.Println("EOF received")
-				close(stdin)
-				return
-			} else if err != nil {
-				log.Println("Error reading from stdin")
-				return
+	if !standalone {
+		go func() {
+			for {
+				b := make([]byte, 1024)
+				n, err := os.Stdin.Read(b)
+				if err == io.EOF {
+					log.Println("EOF received")
+					close(stdin)
+					return
+				} else if err != nil {
+					log.Println("Error reading from stdin")
+					return
+				}
+				b = b[:n]
+				stdin <- b
 			}
-			b = b[:n]
-			stdin <- b
-		}
-	}()
+		}()
+	}
 
 	for {
 
