@@ -3,7 +3,7 @@
 while true; do
     echo -n "Starting server as "
     echo ${SNAME}
-    /go/bin/server -addr 0.0.0.0:4433 -server-name ${SNAME} -log /tmp/minq.log -http
+    /go/bin/server -addr 0.0.0.0:4433 -server-name ${SNAME} -log /tmp/minq.log -http -standalone
     echo "Server crashed"
 done
         
