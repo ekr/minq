@@ -11,7 +11,7 @@ import (
 )
 
 const (
-	kQuicTransportParamtersXtn = mint.ExtensionType(26)
+	kQuicTransportParamtersXtn = mint.ExtensionType(0xffa5)
 )
 
 type TransportParameterId uint16
@@ -21,7 +21,7 @@ const (
 	kTpIdInitialMaxData        = TransportParameterId(0x0001)
 	kTpIdInitialMaxBidiStreams = TransportParameterId(0x0002)
 	kTpIdIdleTimeout           = TransportParameterId(0x0003)
-	kTpIdOmitConnectionId      = TransportParameterId(0x0004)
+	kTpPreferredAddress        = TransportParameterId(0x0004)
 	kTpIdMaxPacketSize         = TransportParameterId(0x0005)
 	kTpIdStatelessResetToken   = TransportParameterId(0x0006)
 	kTpIdAckDelayExponent      = TransportParameterId(0x0007)
@@ -167,6 +167,17 @@ type transportParametersHandler struct {
 
 func newTransportParametersHandler(log loggingFunction, role Role, version VersionNumber) *transportParametersHandler {
 	return &transportParametersHandler{log, role, version, nil}
+}
+
+func (h *transportParametersHandler) setDummyPeerParams() {
+	h.peerParams = &transportParameters{
+		uint32(kInitialMaxStreamData),
+		uint32(kInitialMaxData),
+		kConcurrentStreamsBidi,
+		kConcurrentStreamsUni,
+		600,
+		uint8(1),
+	}
 }
 
 func (h *transportParametersHandler) Send(hs mint.HandshakeType, el *mint.ExtensionList) error {
@@ -315,6 +326,7 @@ func (h *transportParametersHandler) Receive(hs mint.HandshakeType, el *mint.Ext
 
 	h.peerParams = &tp
 
+	h.log(logTypeHandshake, "Finished reading transport parameters")
 	return nil
 }
 

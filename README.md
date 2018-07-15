@@ -37,10 +37,12 @@ certificates.
 
 ## Quick Start (untested but should be rightish)
 
-
     cd ${GOPATH}/src
     go get github.com/ekr/minq
     cd github.com/bifurcation/mint
+    git remote add ekr https://github.com/ekr/mint
+    git fetch ekr
+    git checkout ekr/quic_record_layer
     cd ../../ekr/minq
     go test
 
@@ -101,6 +103,9 @@ Multiple log levels can be separated by commas.
 ## Mint
 
 Minq depends on Mint (https://www.github.com/bifurcation/mint) for TLS.
-Currently Mint master should work, but occasionally I will have to be on
-a branch. Will try to keep this updated.
+Right now we are on the following branch:
+
+https://github.com/ekr/mint/tree/quic_record_layer
+
+This branch is more experimental than usual.
 

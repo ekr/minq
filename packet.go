@@ -2,6 +2,8 @@ package minq
 
 import (
 	"bytes"
+	"crypto/aes"
+	"crypto/cipher"
 	"encoding/hex"
 	"fmt"
 )
@@ -24,6 +26,29 @@ Long header
 |                 Source Connection ID (0/32..144)            ...
 +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 |                       Payload Length (i)                    ...
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                     Packet Number (8/16/32)                   |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                          Payload (*)                        ...
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+
+// Initial Header: same as long header but with Token
++-+-+-+-+-+-+-+-+
+|1|    0x7f     |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                         Version (32)                          |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|DCIL(4)|SCIL(4)|
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|               Destination Connection ID (0/32..144)         ...
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                 Source Connection ID (0/32..144)            ...
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                         Token Length (i)                    ...
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                            Token (*)                        ...
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                           Length (i)                        ...
 +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 |                     Packet Number (8/16/32)                   |
 +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
@@ -59,7 +84,7 @@ const (
 	packetTypeRetry          = packetType(0x7e)
 	packetTypeHandshake      = packetType(0x7d)
 	packetType0RTTProtected  = packetType(0x7c)
-	packetTypeProtectedShort = packetType(0xff) // Not a real type
+	packetTypeProtectedShort = packetType(0x00) // Not a real type
 )
 
 func (pt packetType) isLongHeader() bool {
@@ -76,6 +101,23 @@ func (pt packetType) isProtected() bool {
 		return false
 	}
 	return true
+}
+
+func (pt packetType) String() string {
+	switch pt {
+	case packetTypeInitial:
+		return "Initial"
+	case packetTypeRetry:
+		return "Retry"
+	case packetTypeHandshake:
+		return "Handshake"
+	case packetType0RTTProtected:
+		return "0-RTT"
+	case packetTypeProtectedShort:
+		return "1-RTT"
+	default:
+		return fmt.Sprintf("%x", uint8(pt))
+	}
 }
 
 // kCidDefaultLength is the length of connection ID we generate.
@@ -110,8 +152,9 @@ type packetHeader struct {
 	ConnectionIDLengths     byte
 	DestinationConnectionID ConnectionId
 	SourceConnectionID      ConnectionId
+	TokenLength             uint8
+	Token                   []byte
 	PayloadLength           uint64 `tls:"varint"`
-	PacketNumber            uint64 // Never more than 32 bits on the wire.
 
 	// In order to decode a short header, the length of the connection
 	// ID must be set in |shortCidLength| before decoding.
@@ -123,11 +166,7 @@ func (p packetHeader) String() string {
 	if p.Type.isLongHeader() {
 		ht = "LONG"
 	}
-	prot := "CLEAR"
-	if p.Type.isProtected() {
-		prot = "ENC"
-	}
-	return fmt.Sprintf("%s %s PT=%x PN=%x", ht, prot, p.getHeaderType(), p.PacketNumber)
+	return fmt.Sprintf("%s PT=%v", ht, p.getHeaderType())
 }
 
 func (p *packetHeader) getHeaderType() packetType {
@@ -139,7 +178,8 @@ func (p *packetHeader) getHeaderType() packetType {
 
 type packet struct {
 	packetHeader
-	payload []byte
+	PacketNumber uint64 // Never more than 32 bits on the wire.
+	payload      []byte
 }
 
 // This reads from p.ConnectionIDLengths.
@@ -148,6 +188,22 @@ func (p packetHeader) ConnectionIDLengths__length() uintptr {
 		return 1
 	}
 	return 0
+}
+
+func (p packetHeader) TokenLength__length() uintptr {
+	if p.getHeaderType() != packetTypeInitial {
+		assert(len(p.Token) == 0)
+		return 0
+	}
+	return 1
+}
+
+func (p packetHeader) Token__length() uintptr {
+	if p.getHeaderType() != packetTypeInitial {
+		assert(len(p.Token) == 0)
+		return 0
+	}
+	return uintptr(p.TokenLength)
 }
 
 func (p packetHeader) DestinationConnectionID__length() uintptr {
@@ -179,23 +235,6 @@ func (p packetHeader) PayloadLength__length() uintptr {
 	return 0
 }
 
-func (p packetHeader) PacketNumber__length() uintptr {
-	logf(logTypeTrace, "PacketNumber__length() Type=%v", p.Type)
-	if p.Type.isLongHeader() {
-		return 4
-	}
-
-	switch p.Type & 0x3 {
-	case 0:
-		return 1
-	case 1:
-		return 2
-	case 2:
-		return 4
-	default:
-		return 4 // TODO(ekr@rtfm.com): This is actually currently an error.
-	}
-}
 func (p packetHeader) Version__length() uintptr {
 	if p.Type.isLongHeader() {
 		return 4
@@ -219,10 +258,10 @@ func newPacket(pt packetType, destCid ConnectionId, srcCid ConnectionId, ver Ver
 			DestinationConnectionID: destCid,
 			SourceConnectionID:      srcCid,
 			Version:                 ver,
-			PayloadLength:           uint64(len(payload) + aeadOverhead),
-			PacketNumber:            pn,
+			PayloadLength:           uint64(len(payload) + 4 + aeadOverhead),
 		},
-		payload: payload,
+		PacketNumber: pn,
+		payload:      payload,
 	}
 }
 
@@ -294,6 +333,111 @@ func dumpPacket(payload []byte) string {
 		ret += f.String()
 	}
 	ret += "]"
-
 	return ret
+}
+
+type pneCipherFactory interface {
+	create(sample []byte) cipher.Stream
+}
+
+type pneCipherFactoryAES struct {
+	block cipher.Block
+}
+
+func newPneCipherFactoryAES(key []byte) pneCipherFactory {
+	inner, err := aes.NewCipher(key)
+	assert(err == nil)
+	if err != nil {
+		return nil
+	}
+	return &pneCipherFactoryAES{block: inner}
+}
+
+func (f *pneCipherFactoryAES) create(sample []byte) cipher.Stream {
+	if len(sample) != 16 {
+		return nil
+	}
+	return cipher.NewCTR(f.block, sample)
+}
+
+func xorPacketNumber(hdr *packetHeader, hdrlen int, pnbuf []byte, p []byte, factory pneCipherFactory) error {
+	logf(logTypeTrace, "PNE OP: hdrlen=%v, hdr=%x, payload=%x", hdrlen, p[:hdrlen], p)
+
+	// The packet must be at least long enough to contain
+	// the header, plus a minimum 1-byte PN, plus the sample.
+	sample_length := 16
+	if sample_length > len(p)-(hdrlen+1) {
+		logf(logTypePacket, "Packet too short")
+		return nil
+	}
+
+	// Now compute the offset
+	sample_offset := hdrlen + 4
+	if sample_offset+sample_length > len(p) {
+		sample_offset = len(p) - sample_length
+	}
+
+	sample := p[sample_offset : sample_offset+sample_length]
+	stream := factory.create(sample)
+	stream.XORKeyStream(pnbuf, p[hdrlen:hdrlen+len(pnbuf)])
+
+	return nil
+}
+
+var pnPatterns = []struct {
+	prefix byte
+	mask   byte
+	length int
+}{
+	{
+		0, 0x80, 1,
+	},
+	{
+		0x80, 0xc0, 2,
+	},
+	{
+		0xc0, 0xc0, 4,
+	},
+}
+
+const ()
+
+func encodePacketNumber(pn uint64, l int) []byte {
+	var buf bytes.Buffer
+	i := 0
+
+	for i, _ = range pnPatterns {
+		if pnPatterns[i].length == l {
+			break
+		}
+	}
+
+	uintEncodeInt(&buf, pn, uintptr(l))
+	b := buf.Bytes()
+	b[0] &= ^pnPatterns[i].mask
+	b[0] |= pnPatterns[i].prefix
+
+	return b
+}
+
+func decodePacketNumber(buf []byte) (uint64, int, error) {
+	if len(buf) < 1 {
+		return 0, 0, fmt.Errorf("Zero-length packet number")
+	}
+
+	i := 0
+	for i, _ = range pnPatterns {
+		if pnPatterns[i].mask&buf[0] == pnPatterns[i].prefix {
+			break
+		}
+	}
+
+	pat := &pnPatterns[i]
+	if len(buf) < pat.length {
+		return 0, 0, fmt.Errorf("Buffer too short for packet number (%v < %v)", len(buf), pat.length)
+	}
+	buf = dup(buf[:pat.length])
+	buf[0] &= ^pat.mask
+
+	return uintDecodeIntBuf(buf), pat.length, nil
 }

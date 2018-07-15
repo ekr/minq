@@ -195,6 +195,14 @@ func encode(i interface{}) (ret []byte, err error) {
 	return ret, nil
 }
 
+func uintDecodeIntBuf(val []byte) uint64 {
+	tmp := uint64(0)
+	for b := 0; b < len(val); b++ {
+		tmp = (tmp << 8) + uint64(val[b])
+	}
+	return tmp
+}
+
 func uintDecodeInt(r io.Reader, size uintptr) (uint64, error) {
 	val := make([]byte, size)
 	_, err := io.ReadFull(r, val)
@@ -202,11 +210,7 @@ func uintDecodeInt(r io.Reader, size uintptr) (uint64, error) {
 		return 0, err
 	}
 
-	tmp := uint64(0)
-	for b := uintptr(0); b < size; b++ {
-		tmp = (tmp << 8) + uint64(val[b])
-	}
-	return tmp, nil
+	return uintDecodeIntBuf(val), nil
 }
 
 func uintDecode(r io.Reader, v reflect.Value, encodingSize uintptr) (uintptr, error) {

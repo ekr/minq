@@ -290,7 +290,7 @@ func (s *sendStreamBase) flowControl() flowControl {
 
 // Push out all pending frames.  Set the stream state if the end of the stream is available.
 func (s *sendStreamBase) outputWritable() []streamChunk {
-	s.log(logTypeStream, "outputWritable, current max offset=%d)", s.fc.max)
+	s.log(logTypeStream, "outputWritable, chunks=%v current max offset=%d)", len(s.chunks), s.fc.max)
 	for _, ch := range s.chunks {
 		if ch.last {
 			s.setSendState(SendStreamStateDataSent)
@@ -363,8 +363,11 @@ func (s *recvStreamBase) newFrameData(offset uint64, last bool, payload []byte,
 		}
 
 		increase := end - s.fc.used
-		taken := s.fc.take(cfc, increase)
-		s.log(logTypeFlowControl, "taken flow control %d, now %v %v", taken, &s.fc, cfc)
+		taken := increase
+		if !s.fc.unlimited {
+			taken := s.fc.take(cfc, increase)
+			s.log(logTypeFlowControl, "taken flow control %d, now %v %v", taken, &s.fc, cfc)
+		}
 		if taken < increase {
 			// We didn't have that much available.
 			return ErrorFlowControlError
@@ -386,8 +389,6 @@ func (s *recvStreamBase) newFrameData(offset uint64, last bool, payload []byte,
 	return nil
 }
 
-// Read from a stream into a buffer. Up to |len(b)| bytes will be read,
-// and the number of bytes returned is in |n|.
 func (s *recvStreamBase) read(b []byte) (int, error) {
 	s.log(logTypeStream, "Reading len=%v read offset=%v available chunks=%v",
 		len(b), s.readOffset, len(s.chunks))
@@ -456,6 +457,7 @@ func (s *recvStreamBase) read(b []byte) (int, error) {
 			return 0, ErrorStreamIsClosed
 		}
 	}
+	s.log(logTypeStream, "Returning %v bytes chunks=%v", read, len(s.chunks))
 	return read, nil
 }
 
@@ -494,7 +496,7 @@ func newSendStream(c *Connection, id uint64, initialMax uint64) sendStreamPrivat
 		sendStreamBase: sendStreamBase{
 			streamCommon: streamCommon{
 				log: newStreamLogger(id, "send", c.log),
-				fc:  flowControl{initialMax, 0},
+				fc:  newFlowControl(initialMax),
 			},
 			state: SendStreamStateOpen,
 		},
@@ -508,6 +510,7 @@ func (s *sendStream) Id() uint64 {
 
 // Write writes data.
 func (s *sendStream) Write(data []byte) (int, error) {
+	s.log(logTypeStream, "Stream %v: writing %v bytes", s.Id(), len(data))
 	if s.c.isClosed() {
 		return 0, ErrorConnIsClosed
 	}
@@ -555,7 +558,7 @@ func newRecvStream(c *Connection, id uint64, maxStreamData uint64) recvStreamPri
 		recvStreamBase: recvStreamBase{
 			streamCommon: streamCommon{
 				log: newStreamLogger(id, "recv", c.log),
-				fc:  flowControl{maxStreamData, 0},
+				fc:  newFlowControl(maxStreamData),
 			},
 			state:    RecvStreamStateRecv,
 			readable: false,
@@ -719,11 +722,23 @@ func (ss *streamSet) id(index int) uint64 {
 }
 
 type flowControl struct {
-	max  uint64
-	used uint64
+	unlimited bool
+	max       uint64
+	used      uint64
+}
+
+func newFlowControl(initialMax uint64) flowControl {
+	fc := flowControl{false, initialMax, 0}
+	if initialMax == ^uint64(0) {
+		fc.unlimited = true
+	}
+	return fc
 }
 
 func (fc *flowControl) String() string {
+	if fc.unlimited {
+		return ("Unlimited")
+	}
 	return fmt.Sprintf("%d/%d", fc.used, fc.max)
 }
 
@@ -734,15 +749,24 @@ func (fc *flowControl) update(max uint64) {
 }
 
 func (fc *flowControl) take(other *flowControl, amount uint64) uint64 {
-	taken := fc.remaining()
-	if taken > other.remaining() {
-		taken = other.remaining()
+	taken := uint64(0)
+	if !fc.unlimited {
+		taken = fc.remaining()
+		if taken > other.remaining() {
+			taken = other.remaining()
+		}
+	} else {
+		taken = ^uint64(0)
 	}
 	if taken > amount {
 		taken = amount
 	}
+
 	fc.used += taken
-	other.used += taken
+	// TODO(ekr@rtfm.com): Is this still needed.
+	if other != nil {
+		other.used += taken
+	}
 	return taken
 }
 

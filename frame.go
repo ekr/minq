@@ -32,6 +32,7 @@ const (
 	kFrameTypePathResponse     = frameType(0xf)
 	kFrameTypeStream           = frameType(0x10)
 	kFrameTypeStreamMax        = frameType(0x17)
+	kFrameTypeCryptoHs         = frameType(0x18)
 )
 
 const (
@@ -133,6 +134,8 @@ func decodeFrame(data []byte) (uintptr, *frame, error) {
 		inner = &pathResponseFrame{}
 	case t >= uint8(kFrameTypeStream) && t <= uint8(kFrameTypeStreamMax):
 		inner = &streamFrame{}
+	case t == uint8(kFrameTypeCryptoHs):
+		inner = &cryptoHsFrame{}
 	default:
 		logf(logTypeConnection, "Unknown frame type %v", t)
 		return 0, nil, fmt.Errorf("Received unknown frame type: %v", t)
@@ -673,4 +676,32 @@ func (f *streamFrame) unmarshal(buf []byte) (int, error) {
 	}
 
 	return read, nil
+}
+
+// CRYPTO_HS
+type cryptoHsFrame struct {
+	Typ    frameType
+	Offset uint64 `tls:"varint"`
+	Data   []byte `tls:"head=varint"`
+}
+
+func (f cryptoHsFrame) getType() frameType {
+	return kFrameTypeCryptoHs
+}
+
+func (f cryptoHsFrame) String() string {
+	return fmt.Sprintf("CRYPTO_HS len=%d", len(f.Data))
+}
+
+func newCryptoHsFrame(offset uint64, data []byte) *frame {
+	logf(logTypeFrame, "Creating crypto_hs frame with data length=%d", len(data))
+
+	return newFrame(
+		0,
+		&cryptoHsFrame{
+			kFrameTypeCryptoHs,
+			offset,
+			dup(data),
+		},
+	)
 }
