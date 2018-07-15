@@ -28,7 +28,7 @@ app.get('/:connid', function(request, response) {
 
     connid = connid.toLowerCase();
     
-    var match = 'Conn: ' + connid + ":";
+    var match = 'Conn: ' + connid + "_";
     var data = "<pre>";
     const rl = readline.createInterface({
         input: fs.createReadStream(file),
