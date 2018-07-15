@@ -8,8 +8,9 @@ RUN go install github.com/ekr/minq/bin/server
 RUN go install github.com/ekr/minq/bin/client
 RUN apt-get update
 RUN apt-get install -y tcpdump
+RUN curl -sL https://deb.nodesource.com/setup_6.x | bash -
 RUN apt-get install -y nodejs
-#RUN (cd /go/src/github.com/ekr/minq/deploy/logserver; npm install)
+RUN (cd /go/src/github.com/ekr/minq/deploy/logserver; npm install)
 
 ARG SERVERNAME=localhost
 ENV SNAME=$SERVERNAME
