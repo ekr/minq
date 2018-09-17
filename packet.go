@@ -361,7 +361,7 @@ func (f *pneCipherFactoryAES) create(sample []byte) cipher.Stream {
 }
 
 func xorPacketNumber(hdr *packetHeader, hdrlen int, pnbuf []byte, p []byte, factory pneCipherFactory) error {
-	logf(logTypeTrace, "PNE OP: hdrlen=%v, hdr=%x, payload=%x", hdrlen, p[:hdrlen], p)
+	logf(logTypeTrace, "PNE Operation: hdrlen=%v, hdr=%x, payload=%x", hdrlen, p[:hdrlen], p)
 
 	// The packet must be at least long enough to contain
 	// the header, plus a minimum 1-byte PN, plus the sample.
@@ -378,6 +378,7 @@ func xorPacketNumber(hdr *packetHeader, hdrlen int, pnbuf []byte, p []byte, fact
 	}
 
 	sample := p[sample_offset : sample_offset+sample_length]
+	logf(logTypeTrace, "PNE sample_offset=%d sample=%x", sample_offset, sample)
 	stream := factory.create(sample)
 	stream.XORKeyStream(pnbuf, p[hdrlen:hdrlen+len(pnbuf)])
 

@@ -1007,6 +1007,8 @@ func (c *Connection) input(payload []byte) error {
 		return err
 	}
 
+	c.log(logTypeTrace, "Decoded PN block (unknown length): %x", dpn)
+
 	// Now decode it, which gives us a length
 	pn, pnl, err := decodePacketNumber(dpn)
 	if err != nil {
@@ -1014,6 +1016,7 @@ func (c *Connection) input(payload []byte) error {
 		return wrapE(ErrorInvalidPacket, err)
 	}
 
+	c.log(logTypeTrace, "Packet number: %v length=%v", pn, pnl)
 	// Now break things apart.
 	hdrbytes = append(hdrbytes, dpn[:pnl]...)
 	payload = payload[len(hdrbytes):]

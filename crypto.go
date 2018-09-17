@@ -34,6 +34,7 @@ func newCryptoStateInner(secret []byte, cs *mint.CipherSuiteParams) (*cryptoStat
 	k := mint.HkdfExpandLabel(cs.Hash, secret, "key", []byte{}, cs.KeyLen)
 	iv := mint.HkdfExpandLabel(cs.Hash, secret, "iv", []byte{}, cs.IvLen)
 	pn := mint.HkdfExpandLabel(cs.Hash, secret, "pn", []byte{}, cs.KeyLen)
+	logf(logTypeAead, "key=%x iv=%x pn=%x", k, iv, pn)
 	st.aead, err = newWrappedAESGCM(k, iv)
 	if err != nil {
 		return nil, err
@@ -44,10 +45,10 @@ func newCryptoStateInner(secret []byte, cs *mint.CipherSuiteParams) (*cryptoStat
 }
 
 func generateCleartextKeys(secret []byte, label string, cs *mint.CipherSuiteParams) (*cryptoState, error) {
-	logf(logTypeTls, "Cleartext keys: cid=%x", secret)
+	logf(logTypeTls, "Cleartext keys: cid=%x initial_salt=%x", secret, kQuicVersionSalt)
 	extracted := mint.HkdfExtract(cs.Hash, kQuicVersionSalt, secret)
 	inner := mint.HkdfExpandLabel(cs.Hash, extracted, label, []byte{}, cs.Hash.Size())
-	logf(logTypeAead, "Secret (%s) = %x", label, inner)
+	logf(logTypeAead, "initial_secret (%s) = %x", label, inner)
 	return newCryptoStateInner(inner, cs)
 }
 
