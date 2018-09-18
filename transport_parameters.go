@@ -17,15 +17,18 @@ const (
 type TransportParameterId uint16
 
 const (
-	kTpIdInitialMaxStreamsData = TransportParameterId(0x0000)
-	kTpIdInitialMaxData        = TransportParameterId(0x0001)
-	kTpIdInitialMaxBidiStreams = TransportParameterId(0x0002)
-	kTpIdIdleTimeout           = TransportParameterId(0x0003)
-	kTpPreferredAddress        = TransportParameterId(0x0004)
-	kTpIdMaxPacketSize         = TransportParameterId(0x0005)
-	kTpIdStatelessResetToken   = TransportParameterId(0x0006)
-	kTpIdAckDelayExponent      = TransportParameterId(0x0007)
-	kTpIdInitialMaxUniStreams  = TransportParameterId(0x0008)
+	kTpIdInitialMaxStreamDataBidiLocal  = TransportParameterId(0x0000)
+	kTpIdInitialMaxData                 = TransportParameterId(0x0001)
+	kTpIdInitialMaxBidiStreams          = TransportParameterId(0x0002)
+	kTpIdIdleTimeout                    = TransportParameterId(0x0003)
+	kTpPreferredAddress                 = TransportParameterId(0x0004)
+	kTpIdMaxPacketSize                  = TransportParameterId(0x0005)
+	kTpIdStatelessResetToken            = TransportParameterId(0x0006)
+	kTpIdAckDelayExponent               = TransportParameterId(0x0007)
+	kTpIdInitialMaxUniStreams           = TransportParameterId(0x0008)
+	kTpIdDisableMigration               = TransportParameterId(0x0009)
+	kTpIdInitialMaxStreamDataBidiRemote = TransportParameterId(0x0010)
+	kTpIdInitialMaxStreamDataUni        = TransportParameterId(0x0011)
 )
 
 const (
@@ -44,7 +47,8 @@ var (
 	kConcurrentStreamsBidi      = 16
 	kConcurrentStreamsUni       = 16
 	kTransportParameterDefaults = []tpDef{
-		{kTpIdInitialMaxStreamsData, uint32(kInitialMaxStreamData), 4},
+		{kTpIdInitialMaxStreamDataBidiLocal, uint32(kInitialMaxStreamData), 4},
+		{kTpIdInitialMaxStreamDataBidiRemote, uint32(kInitialMaxStreamData), 4},
 		{kTpIdInitialMaxData, uint32(kInitialMaxData), 4},
 		{kTpIdInitialMaxBidiStreams, uint32(kConcurrentStreamsBidi), 2},
 		{kTpIdIdleTimeout, 5, 2},
@@ -53,12 +57,14 @@ var (
 )
 
 type transportParameters struct {
-	maxStreamsData uint32
-	maxData        uint32
-	maxStreamsBidi int
-	maxStreamsUni  int
-	idleTimeout    uint16
-	ackDelayExp    uint8
+	maxStreamDataUni        uint32
+	maxStreamDataBidiLocal  uint32
+	maxStreamDataBidiRemote uint32
+	maxData                 uint32
+	maxStreamsBidi          int
+	maxStreamsUni           int
+	idleTimeout             uint16
+	ackDelayExp             uint8
 }
 
 type TransportParameterList []transportParameter
@@ -105,6 +111,29 @@ func (tp *TransportParameterList) getUintParameter(id TransportParameterId, size
 	if b == nil {
 		logf(logTypeHandshake, "Missing transport parameter %v", id)
 		return 0, ErrorMissingValue
+	}
+
+	if len(b) != int(size) {
+		logf(logTypeHandshake, "Bogus transport parameter %v", id)
+		return 0, ErrorInvalidEncoding
+	}
+
+	buf := bytes.NewReader(b)
+	tmp, err := uintDecodeInt(buf, size)
+	if err != nil {
+		return 0, err
+	}
+
+	return uint32(tmp), nil
+}
+
+func (tp *TransportParameterList) getUintParameterOrDefault(id TransportParameterId, size uintptr, def uint32) (uint32, error) {
+	assert(size <= 4)
+
+	b := tp.getParameter(id)
+	if b == nil {
+		logf(logTypeHandshake, "Missing transport parameter %v", id)
+		return def, nil
 	}
 
 	if len(b) != int(size) {
@@ -171,6 +200,8 @@ func newTransportParametersHandler(log loggingFunction, role Role, version Versi
 
 func (h *transportParametersHandler) setDummyPeerParams() {
 	h.peerParams = &transportParameters{
+		uint32(kInitialMaxStreamData),
+		uint32(kInitialMaxStreamData),
 		uint32(kInitialMaxStreamData),
 		uint32(kInitialMaxData),
 		kConcurrentStreamsBidi,
@@ -274,53 +305,45 @@ func (h *transportParametersHandler) Receive(hs mint.HandshakeType, el *mint.Ext
 	var tp transportParameters
 	h.log(logTypeHandshake, "Reading transport parameters values")
 
-	tp.maxStreamsData, err = params.getUintParameter(kTpIdInitialMaxStreamsData, 4)
+	tp.maxStreamDataBidiLocal, err = params.getUintParameterOrDefault(kTpIdInitialMaxStreamDataBidiLocal, 4, 0)
 	if err != nil {
 		return err
 	}
 
-	tp.maxData, err = params.getUintParameter(kTpIdInitialMaxData, 4)
+	tp.maxStreamDataBidiRemote, err = params.getUintParameterOrDefault(kTpIdInitialMaxStreamDataBidiRemote, 4, 0)
 	if err != nil {
 		return err
 	}
 
-	maxStream, err := params.getUintParameter(kTpIdInitialMaxBidiStreams, 2)
-	switch err {
-	case nil:
-		tp.maxStreamsBidi = int(maxStream)
-	case ErrorMissingValue:
-		tp.maxStreamsBidi = 0
-	default:
+	tp.maxData, err = params.getUintParameterOrDefault(kTpIdInitialMaxData, 4, 0)
+	if err != nil {
 		return err
 	}
+
+	tmp, err := params.getUintParameterOrDefault(kTpIdInitialMaxBidiStreams, 2, 0)
+	if err != nil {
+		return err
+	}
+	tp.maxStreamsBidi = int(tmp)
+
 	if h.role == RoleClient {
 		tp.maxStreamsBidi++ // Allow for stream 0.
 	}
 
-	maxStream, err = params.getUintParameter(kTpIdInitialMaxUniStreams, 2)
-	switch err {
-	case nil:
-		tp.maxStreamsUni = int(maxStream)
-	case ErrorMissingValue:
-		tp.maxStreamsUni = 0
-	default:
+	tmp, err = params.getUintParameterOrDefault(kTpIdInitialMaxUniStreams, 2, 0)
+	if err != nil {
 		return err
 	}
+	tp.maxStreamsUni = int(tmp)
 
-	var tmp uint32
 	tmp, err = params.getUintParameter(kTpIdIdleTimeout, 2)
 	if err != nil {
 		return err
 	}
 	tp.idleTimeout = uint16(tmp)
 
-	tmp, err = params.getUintParameter(kTpIdAckDelayExponent, 1)
-	switch err {
-	case nil:
-		tp.ackDelayExp = uint8(tmp)
-	case ErrorMissingValue:
-		tp.ackDelayExp = kTpDefaultAckDelayExponent
-	default:
+	tmp, err = params.getUintParameterOrDefault(kTpIdAckDelayExponent, 1, 0)
+	if err != nil {
 		return err
 	}
 

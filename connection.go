@@ -330,7 +330,7 @@ func (c *Connection) ServerId() ConnectionId {
 
 func (c *Connection) ensureRemoteBidi(id uint64) hasIdentity {
 	return c.remoteBidiStreams.ensure(id, func(x uint64) hasIdentity {
-		msd := uint64(c.tpHandler.peerParams.maxStreamsData)
+		msd := uint64(c.tpHandler.peerParams.maxStreamDataBidiRemote)
 		return newStream(c, x, kInitialMaxStreamData, msd)
 	}, func(s hasIdentity) {
 		if c.handler != nil {
@@ -1733,7 +1733,7 @@ func (c *Connection) CreateStream() Stream {
 		return nil
 	}
 	s := c.localBidiStreams.create(func(id uint64) hasIdentity {
-		recvMax := uint64(c.tpHandler.peerParams.maxStreamsData)
+		recvMax := uint64(c.tpHandler.peerParams.maxStreamDataBidiLocal)
 		return newStream(c, id, kInitialMaxStreamData, recvMax)
 	})
 	if s != nil {
@@ -1749,7 +1749,7 @@ func (c *Connection) CreateStream() Stream {
 func (c *Connection) CreateSendStream() SendStream {
 	c.log(logTypeStream, "Creating new SendStream")
 	s := c.localUniStreams.create(func(id uint64) hasIdentity {
-		recvMax := uint64(c.tpHandler.peerParams.maxStreamsData)
+		recvMax := uint64(c.tpHandler.peerParams.maxStreamDataUni)
 		return newSendStream(c, id, recvMax)
 	})
 	if s != nil {
