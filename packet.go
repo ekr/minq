@@ -152,8 +152,6 @@ type packetHeader struct {
 	ConnectionIDLengths     byte
 	DestinationConnectionID ConnectionId
 	SourceConnectionID      ConnectionId
-	TokenLength             uint8
-	Token                   []byte
 	PayloadLength           uint64 `tls:"varint"`
 
 	// In order to decode a short header, the length of the connection
@@ -188,22 +186,6 @@ func (p packetHeader) ConnectionIDLengths__length() uintptr {
 		return 1
 	}
 	return 0
-}
-
-func (p packetHeader) TokenLength__length() uintptr {
-	if p.getHeaderType() != packetTypeInitial {
-		assert(len(p.Token) == 0)
-		return 0
-	}
-	return 1
-}
-
-func (p packetHeader) Token__length() uintptr {
-	if p.getHeaderType() != packetTypeInitial {
-		assert(len(p.Token) == 0)
-		return 0
-	}
-	return uintptr(p.TokenLength)
 }
 
 func (p packetHeader) DestinationConnectionID__length() uintptr {
