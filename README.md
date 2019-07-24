@@ -1,4 +1,12 @@
+# WARNING
+
+**This implementation is not under active development, and has diverged from the QUIC specification.**
+
+The QUIC WG maintains [a list of active implementations](https://github.com/quicwg/base-drafts/wiki/Implementations).
+
 ![A mink forming a Q](/minq.png)
+
+-----
 
 minq -- A minimal QUIC stack
 ============================
